@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Search, Plus, Users, Phone, Mail, MapPin, Heart, AlertTriangle, CalendarDays } from "lucide-react";
 import { format } from "date-fns";
-import type { Patient } from "@shared/schema";
+import type { Patient, User as UserType } from "@shared/schema";
 
 export default function PatientsPage() {
   const { toast } = useToast();
@@ -28,7 +28,18 @@ export default function PatientsPage() {
     nationalId: "", phone: "", email: "", address: "", city: "",
     country: "KE", bloodGroup: "", allergies: "",
     nextOfKinName: "", nextOfKinPhone: "", nextOfKinRelation: "",
+    primaryProviderId: "",
   });
+
+  const { data: users = [] } = useQuery<Omit<UserType, "password">[]>({
+    queryKey: ["/api/users"],
+    queryFn: async () => {
+      const res = await fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+  const clinicians = users.filter((u) => u.role === "clinician");
 
   const { data: patients = [], isLoading } = useQuery<Patient[]>({
     queryKey: ["/api/patients", search ? `?search=${search}` : ""],
@@ -46,7 +57,12 @@ export default function PatientsPage() {
       const res = await fetch("/api/patients", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ ...data, mrn, isActive: true }),
+        body: JSON.stringify({
+        ...data,
+        mrn,
+        isActive: true,
+        primaryProviderId: data.primaryProviderId || undefined,
+      }),
       });
       if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
       return res.json();
@@ -55,7 +71,7 @@ export default function PatientsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
       toast({ title: "Patient registered", description: "New patient record has been created." });
       setOpen(false);
-      setFormData({ firstName: "", lastName: "", dateOfBirth: "", gender: "male", nationalId: "", phone: "", email: "", address: "", city: "", country: "KE", bloodGroup: "", allergies: "", nextOfKinName: "", nextOfKinPhone: "", nextOfKinRelation: "" });
+      setFormData({ firstName: "", lastName: "", dateOfBirth: "", gender: "male", nationalId: "", phone: "", email: "", address: "", city: "", country: "KE", bloodGroup: "", allergies: "", nextOfKinName: "", nextOfKinPhone: "", nextOfKinRelation: "", primaryProviderId: "" });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -157,6 +173,18 @@ export default function PatientsPage() {
               <div className="space-y-2">
                 <Label>Allergies</Label>
                 <Textarea data-testid="input-allergies" value={formData.allergies} onChange={(e) => setFormData({ ...formData, allergies: e.target.value })} placeholder="List known allergies..." className="resize-none" />
+              </div>
+              <div className="space-y-2">
+                <Label>Primary provider</Label>
+                <Select value={formData.primaryProviderId} onValueChange={(v) => setFormData({ ...formData, primaryProviderId: v })}>
+                  <SelectTrigger data-testid="select-primary-provider"><SelectValue placeholder="Select clinician" /></SelectTrigger>
+                  <SelectContent>
+                    {clinicians.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.fullName}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Assigned at registration; shown on patient view.</p>
               </div>
               <div className="border-t pt-4">
                 <h4 className="text-sm font-medium mb-3">Next of Kin</h4>

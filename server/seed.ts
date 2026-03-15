@@ -296,7 +296,7 @@ export async function seedDatabase() {
     orderedBy: drWanjiku.id,
     testName: "Complete Blood Count",
     testCode: "CBC-001",
-    status: "completed",
+    status: "resulted",
     priority: "routine",
     result: "Normal values across all parameters",
     resultValue: "WBC: 7.2, RBC: 4.8, Hgb: 14.2, Hct: 42.1, Plt: 250",

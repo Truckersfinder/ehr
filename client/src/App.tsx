@@ -1,23 +1,27 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, Link, useRoute } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
+import { PatientSearch } from "@/components/patient-search";
+import { PatientDemographicsSidebar } from "@/components/patient-demographics-sidebar";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
-import { Moon, Sun } from "lucide-react";
+import { Moon, Sun, CalendarDays } from "lucide-react";
 
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
+import SchedulePage from "@/pages/schedule";
 import PatientsPage from "@/pages/patients";
 import PatientDetailPage from "@/pages/patient-detail";
 import EncountersPage from "@/pages/encounters";
 import EncounterDetailPage from "@/pages/encounter-detail";
 import AppointmentsPage from "@/pages/appointments";
 import LaboratoryPage from "@/pages/laboratory";
+import UploadResultsPage from "@/pages/upload-results";
 import PharmacyPage from "@/pages/pharmacy";
 import BillingPage from "@/pages/billing";
 import AdminPage from "@/pages/admin";
@@ -32,16 +36,27 @@ function ThemeToggle() {
   );
 }
 
+function LandingByRole() {
+  const { user } = useAuth();
+  const scheduleRoles = ["clinician", "nurse", "reception"];
+  if (user && scheduleRoles.includes(user.role)) {
+    return <SchedulePage />;
+  }
+  return <DashboardPage />;
+}
+
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={DashboardPage} />
+      <Route path="/" component={LandingByRole} />
+      <Route path="/schedule" component={SchedulePage} />
       <Route path="/patients" component={PatientsPage} />
       <Route path="/patients/:id" component={PatientDetailPage} />
       <Route path="/encounters" component={EncountersPage} />
       <Route path="/encounters/:id" component={EncounterDetailPage} />
       <Route path="/appointments" component={AppointmentsPage} />
       <Route path="/laboratory" component={LaboratoryPage} />
+      <Route path="/upload-results" component={UploadResultsPage} />
       <Route path="/pharmacy" component={PharmacyPage} />
       <Route path="/billing" component={BillingPage} />
       <Route path="/admin" component={AdminPage} />
@@ -51,6 +66,8 @@ function Router() {
 }
 
 function AuthenticatedApp() {
+  const [isPatientChart, params] = useRoute("/patients/:id");
+  const patientId = params?.id;
   const style = {
     "--sidebar-width": "16rem",
     "--sidebar-width-icon": "3rem",
@@ -59,11 +76,24 @@ function AuthenticatedApp() {
   return (
     <SidebarProvider style={style as React.CSSProperties}>
       <div className="flex h-screen w-full">
-        <AppSidebar />
+        {isPatientChart && patientId ? (
+          <PatientDemographicsSidebar patientId={patientId} />
+        ) : (
+          <AppSidebar />
+        )}
         <div className="flex flex-col flex-1 min-w-0">
-          <header className="flex items-center justify-between gap-2 p-2 border-b bg-background sticky top-0 z-50">
-            <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
+          <header className="flex items-center gap-3 p-2 border-b bg-background sticky top-0 z-50">
+            {!isPatientChart && <SidebarTrigger data-testid="button-sidebar-toggle" />}
+            <Link href="/schedule">
+              <a className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors" data-testid="toolbar-schedule">
+                <CalendarDays className="w-4 h-4" />
+                Schedule
+              </a>
+            </Link>
+            <div className="ml-auto flex items-center gap-3">
+              <PatientSearch />
+              <ThemeToggle />
+            </div>
           </header>
           <main className="flex-1 overflow-auto">
             <Router />

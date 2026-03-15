@@ -175,7 +175,18 @@ export default function AppointmentsPage() {
               </div>
               <div className="space-y-2">
                 <Label>Reason</Label>
-                <Textarea data-testid="input-appt-reason" value={formData.reason} onChange={(e) => setFormData({ ...formData, reason: e.target.value })} className="resize-none" />
+                <Textarea data-testid="input-appt-reason" value={formData.reason} onChange={(e) => setFormData({ ...formData, reason: e.target.value })} className="resize-none" placeholder="e.g. Follow-up, annual check-up" />
+              </div>
+              <div className="space-y-2">
+                <Label>Appointment note</Label>
+                <Textarea
+                  data-testid="input-appt-notes"
+                  value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  className="resize-none"
+                  placeholder="Note for this appointment (shown on Schedule as APT Note)"
+                  rows={3}
+                />
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>

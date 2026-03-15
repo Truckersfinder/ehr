@@ -13,8 +13,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, FlaskConical, AlertTriangle, Search } from "lucide-react";
+import { Plus, AlertTriangle, Building2, Upload } from "lucide-react";
 import { format } from "date-fns";
+import { DocumentFileUpload } from "@/components/document-file-upload";
 import type { LabOrder, Patient } from "@shared/schema";
 
 export default function LaboratoryPage() {
@@ -23,7 +24,8 @@ export default function LaboratoryPage() {
   const token = localStorage.getItem("ehr_token");
   const [open, setOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState<string | null>(null);
-  const [resultData, setResultData] = useState({ result: "", resultValue: "", referenceRange: "", isCritical: false });
+  const [uploadResultOpen, setUploadResultOpen] = useState<string | null>(null);
+  const [resultData, setResultData] = useState({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" });
   const [formData, setFormData] = useState({ patientId: "", testName: "", testCode: "", priority: "routine" });
 
   const { data: orders = [], isLoading } = useQuery<LabOrder[]>({
@@ -65,19 +67,33 @@ export default function LaboratoryPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
       const res = await fetch(`/api/lab-orders/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
+      const text = await res.text();
+      if (!res.ok) {
+        let message = "Failed to update lab order";
+        try {
+          const json = text ? JSON.parse(text) : {};
+          if (json && typeof json.message === "string") message = json.message;
+        } catch {
+          if (text) message = text.slice(0, 100);
+        }
+        throw new Error(message);
+      }
+      return text ? JSON.parse(text) : {};
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/lab-orders"] });
       toast({ title: "Lab order updated" });
       setResultOpen(null);
+      setUploadResultOpen(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
 
@@ -89,15 +105,27 @@ export default function LaboratoryPage() {
     cancelled: "bg-destructive/10 text-destructive",
   };
 
-  const pending = orders.filter((o) => o.status !== "completed" && o.status !== "cancelled");
-  const completed = orders.filter((o) => o.status === "completed");
+  const getInternalExternal = (o: LabOrder & { internalExternal?: string; internal_external?: string }) => {
+    const v =
+      (o as { internalExternal?: string; internal_external?: string }).internalExternal ??
+      (o as { internalExternal?: string; internal_external?: string }).internal_external ??
+      "internal";
+    return String(v).toLowerCase() === "external" ? "external" : "internal";
+  };
+  const isInternal = (o: LabOrder & { internalExternal?: string; internal_external?: string }) => getInternalExternal(o) !== "external";
+  const internalOrders = orders.filter(isInternal);
+  const externalOrders = orders.filter((o) => getInternalExternal(o) === "external");
+
+  const isResulted = (o: LabOrder) => o.status === "resulted" || o.status === "completed";
+  const internalPending = internalOrders.filter((o) => !isResulted(o) && o.status !== "cancelled");
+  const externalPending = externalOrders.filter((o) => !isResulted(o) && o.status !== "cancelled");
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto" data-testid="laboratory-page">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Laboratory</h1>
-          <p className="text-muted-foreground text-sm mt-1">{pending.length} pending orders</p>
+          <p className="text-muted-foreground text-sm mt-1">Internal labs (collect & result) and external labs (upload results)</p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -147,18 +175,23 @@ export default function LaboratoryPage() {
         </Dialog>
       </div>
 
-      <Tabs defaultValue="pending">
-        <TabsList>
-          <TabsTrigger value="pending">Pending ({pending.length})</TabsTrigger>
-          <TabsTrigger value="completed">Completed ({completed.length})</TabsTrigger>
+      <Tabs defaultValue="internal" className="space-y-4">
+        <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsTrigger value="internal" className="gap-2">
+            <Building2 className="w-4 h-4" /> Internal labs ({internalPending.length} pending)
+          </TabsTrigger>
+          <TabsTrigger value="external" className="gap-2">
+            <Upload className="w-4 h-4" /> External labs ({externalPending.length} pending)
+          </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="pending" className="space-y-3 mt-4">
+        <TabsContent value="internal" className="space-y-6 mt-4">
+          <p className="text-sm text-muted-foreground">Collected and resulted by internal staff. Once resulted, labs leave this list and appear in the patient&apos;s Results section.</p>
           {isLoading ? (
             Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20" />)
-          ) : pending.length === 0 ? (
-            <Card><CardContent className="py-12 text-center text-muted-foreground">No pending orders</CardContent></Card>
-          ) : pending.map((order) => {
+          ) : internalPending.length === 0 ? (
+            <Card><CardContent className="py-8 text-center text-muted-foreground">No pending internal lab orders</CardContent></Card>
+          ) : internalPending.map((order) => {
             const pt = patientMap.get(order.patientId);
             return (
               <Card key={order.id} data-testid={`card-lab-order-${order.id}`}>
@@ -187,7 +220,7 @@ export default function LaboratoryPage() {
                         </Button>
                       )}
                       {order.status === "processing" && (
-                        <Button size="sm" onClick={() => { setResultOpen(order.id); setResultData({ result: "", resultValue: "", referenceRange: "", isCritical: false }); }}>
+                        <Button size="sm" onClick={() => { setResultOpen(order.id); setResultData({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" }); }}>
                           Enter Results
                         </Button>
                       )}
@@ -199,27 +232,32 @@ export default function LaboratoryPage() {
           })}
         </TabsContent>
 
-        <TabsContent value="completed" className="space-y-3 mt-4">
-          {completed.length === 0 ? (
-            <Card><CardContent className="py-12 text-center text-muted-foreground">No completed orders</CardContent></Card>
-          ) : completed.map((order) => {
+        <TabsContent value="external" className="space-y-6 mt-4">
+          <p className="text-sm text-muted-foreground">External lab orders. Upload results to mark complete; once resulted, they leave this list and appear in the patient&apos;s Results section on their chart.</p>
+          {isLoading ? (
+            Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-20" />)
+          ) : externalPending.length === 0 ? (
+            <Card><CardContent className="py-8 text-center text-muted-foreground">No pending external lab orders</CardContent></Card>
+          ) : externalPending.map((order) => {
             const pt = patientMap.get(order.patientId);
             return (
-              <Card key={order.id} data-testid={`card-lab-result-${order.id}`}>
+              <Card key={order.id}>
                 <CardContent className="p-4">
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <div>
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-medium text-sm">{order.testName}</p>
-                        {order.isCritical && <Badge variant="destructive" className="text-[10px]">Critical</Badge>}
+                        {order.priority === "urgent" && <Badge variant="destructive" className="text-[10px]">Urgent</Badge>}
+                        {order.priority === "stat" && <Badge variant="destructive" className="text-[10px]">STAT</Badge>}
                       </div>
-                      <p className="text-xs text-muted-foreground">{pt ? `${pt.firstName} ${pt.lastName}` : "Unknown"}</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {pt ? `${pt.firstName} ${pt.lastName}` : "Unknown"} - {order.testCode || "N/A"}
+                      </p>
                     </div>
-                    <Badge variant="secondary" className="text-[10px] bg-chart-3/10 text-chart-3">Completed</Badge>
+                    <Button size="sm" variant="outline" onClick={() => { setUploadResultOpen(order.id); setResultData({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" }); }}>
+                      <Upload className="w-3.5 h-3.5 mr-1.5" /> Upload result
+                    </Button>
                   </div>
-                  {order.result && <p className="text-sm mt-2">{order.result}</p>}
-                  {order.resultValue && <p className="text-xs text-muted-foreground mt-1">Values: {order.resultValue}</p>}
-                  {order.referenceRange && <p className="text-xs text-muted-foreground">Ref: {order.referenceRange}</p>}
                 </CardContent>
               </Card>
             );
@@ -227,13 +265,27 @@ export default function LaboratoryPage() {
         </TabsContent>
       </Tabs>
 
-      <Dialog open={!!resultOpen} onOpenChange={() => setResultOpen(null)}>
+      <Dialog open={!!resultOpen} onOpenChange={(open) => { if (!open) setResultOpen(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Enter Lab Results</DialogTitle></DialogHeader>
-          <form onSubmit={(e) => {
-            e.preventDefault();
-            if (resultOpen) updateMutation.mutate({ id: resultOpen, data: { ...resultData, status: "completed", completedAt: new Date().toISOString() } });
-          }} className="space-y-4">
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!resultOpen) return;
+              updateMutation.mutate({
+                id: resultOpen,
+                data: {
+                  result: resultData.result,
+                  resultValue: resultData.resultValue || undefined,
+                  referenceRange: resultData.referenceRange || undefined,
+                  isCritical: resultData.isCritical,
+                  status: "resulted",
+                  completedAt: new Date().toISOString(),
+                },
+              });
+            }}
+          >
             <div className="space-y-2">
               <Label>Result Summary</Label>
               <Textarea value={resultData.result} onChange={(e) => setResultData({ ...resultData, result: e.target.value })} className="resize-none" />
@@ -255,6 +307,58 @@ export default function LaboratoryPage() {
             <div className="flex justify-end gap-2">
               <Button type="button" variant="secondary" onClick={() => setResultOpen(null)}>Cancel</Button>
               <Button type="submit" disabled={updateMutation.isPending}>Submit Results</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!uploadResultOpen} onOpenChange={() => setUploadResultOpen(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Upload external lab result</DialogTitle></DialogHeader>
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!uploadResultOpen) return;
+              updateMutation.mutate({
+                id: uploadResultOpen,
+                data: {
+                  result: resultData.result,
+                  resultValue: resultData.resultValue || undefined,
+                  referenceRange: resultData.referenceRange || undefined,
+                  isCritical: resultData.isCritical,
+                  documentUrl: resultData.documentUrl || undefined,
+                  status: "resulted",
+                  completedAt: new Date().toISOString(),
+                },
+              });
+            }}
+          >
+            <div className="space-y-2">
+              <Label>Result summary</Label>
+              <Textarea value={resultData.result} onChange={(e) => setResultData({ ...resultData, result: e.target.value })} className="resize-none" />
+            </div>
+            <div className="space-y-2">
+              <Label>Result values</Label>
+              <Input value={resultData.resultValue} onChange={(e) => setResultData({ ...resultData, resultValue: e.target.value })} placeholder="e.g. WBC: 7.2, RBC: 4.8" />
+            </div>
+            <div className="space-y-2">
+              <Label>Reference range</Label>
+              <Input value={resultData.referenceRange} onChange={(e) => setResultData({ ...resultData, referenceRange: e.target.value })} />
+            </div>
+            <DocumentFileUpload
+              value={resultData.documentUrl}
+              onChange={(url) => setResultData({ ...resultData, documentUrl: url ?? "" })}
+            />
+            <div className="flex items-center gap-2">
+              <input type="checkbox" id="critical-upload" checked={resultData.isCritical} onChange={(e) => setResultData({ ...resultData, isCritical: e.target.checked })} />
+              <Label htmlFor="critical-upload" className="flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5 text-destructive" /> Critical value
+              </Label>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="secondary" onClick={() => setUploadResultOpen(null)}>Cancel</Button>
+              <Button type="submit" disabled={updateMutation.isPending}>Upload & mark complete</Button>
             </div>
           </form>
         </DialogContent>

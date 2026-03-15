@@ -41,11 +41,13 @@ export function authMiddleware(req: AuthRequest, res: Response, next: NextFuncti
 }
 
 export function requireRole(...roles: string[]) {
+  const allowed = roles.map((r) => r.toLowerCase());
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ message: "Authentication required" });
     }
-    if (!roles.includes(req.user.role)) {
+    const userRole = (req.user.role && String(req.user.role).toLowerCase()) || "";
+    if (!allowed.includes(userRole)) {
       return res.status(403).json({ message: "Insufficient permissions" });
     }
     next();
