@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { queryClient } from "@/lib/queryClient";
@@ -9,7 +9,6 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -26,7 +25,7 @@ export default function PatientsPage() {
   const [formData, setFormData] = useState({
     firstName: "", lastName: "", dateOfBirth: "", gender: "male" as const,
     nationalId: "", phone: "", email: "", address: "", city: "",
-    country: "KE", bloodGroup: "", allergies: "",
+    country: "KE", bloodGroup: "",
     nextOfKinName: "", nextOfKinPhone: "", nextOfKinRelation: "",
     primaryProviderId: "",
   });
@@ -71,7 +70,7 @@ export default function PatientsPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
       toast({ title: "Patient registered", description: "New patient record has been created." });
       setOpen(false);
-      setFormData({ firstName: "", lastName: "", dateOfBirth: "", gender: "male", nationalId: "", phone: "", email: "", address: "", city: "", country: "KE", bloodGroup: "", allergies: "", nextOfKinName: "", nextOfKinPhone: "", nextOfKinRelation: "", primaryProviderId: "" });
+      setFormData({ firstName: "", lastName: "", dateOfBirth: "", gender: "male", nationalId: "", phone: "", email: "", address: "", city: "", country: "KE", bloodGroup: "", nextOfKinName: "", nextOfKinPhone: "", nextOfKinRelation: "", primaryProviderId: "" });
     },
     onError: (error: Error) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -83,6 +82,13 @@ export default function PatientsPage() {
     const diff = Date.now() - d.getTime();
     return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
   };
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("openRegister") === "1") {
+      setOpen(true);
+      window.history.replaceState({}, "", "/patients");
+    }
+  }, []);
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto" data-testid="patients-page">
@@ -169,10 +175,6 @@ export default function PatientsPage() {
                   <Label>City</Label>
                   <Input value={formData.city} onChange={(e) => setFormData({ ...formData, city: e.target.value })} />
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Allergies</Label>
-                <Textarea data-testid="input-allergies" value={formData.allergies} onChange={(e) => setFormData({ ...formData, allergies: e.target.value })} placeholder="List known allergies..." className="resize-none" />
               </div>
               <div className="space-y-2">
                 <Label>Primary provider</Label>

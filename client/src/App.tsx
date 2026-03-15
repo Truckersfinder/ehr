@@ -10,7 +10,7 @@ import { PatientDemographicsSidebar } from "@/components/patient-demographics-si
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
-import { Moon, Sun, CalendarDays, FlaskConical, Upload } from "lucide-react";
+import { Moon, Sun, CalendarDays, FlaskConical, Upload, UserPlus } from "lucide-react";
 
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -74,6 +74,7 @@ function AuthenticatedApp() {
     "--sidebar-width-icon": "3rem",
   };
   const showLabAndUpload = user && ["clinician", "nurse"].includes(user.role);
+  const isReception = user && user.role === "reception";
 
   return (
     <SidebarProvider style={style as React.CSSProperties}>
@@ -107,6 +108,14 @@ function AuthenticatedApp() {
                   </a>
                 </Link>
               </>
+            )}
+            {isReception && (
+              <Link href="/patients?openRegister=1">
+                <a className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors" data-testid="toolbar-new-patient">
+                  <UserPlus className="w-4 h-4" />
+                  New Patient
+                </a>
+              </Link>
             )}
             <div className="ml-auto flex items-center gap-3">
               <PatientSearch />
