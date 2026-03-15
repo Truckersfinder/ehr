@@ -20,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid,
+  Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid, User, CalendarDays, Phone, Mail, MapPin, Heart,
 } from "lucide-react";
 import { format } from "date-fns";
 import type { Patient, Encounter, Prescription, LabOrder, PatientProblem, PatientNote, FamilyMember, FamilyMemberCondition, ImagingResult, ImagingOrder, PatientDocument, Vitals, PatientAllergy } from "@shared/schema";
@@ -840,6 +840,65 @@ export default function PatientDetailPage() {
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <div className="flex-1 overflow-auto p-4">
         <TabsContent value="overview" className="space-y-6 mt-0 data-[state=inactive]:hidden">
+          <Card className="border-muted">
+            <CardContent className="p-4">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Patient demographics</h3>
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+                <span className="font-medium">{patient.firstName} {patient.lastName}</span>
+                {patient.mrn && <span className="text-muted-foreground">{patient.mrn}</span>}
+                <span className="flex items-center gap-1.5">
+                  <User className="w-4 h-4 text-muted-foreground shrink-0" />
+                  {patient.gender ? patient.gender.charAt(0).toUpperCase() + patient.gender.slice(1).toLowerCase() : ""} · {Math.floor((Date.now() - new Date(patient.dateOfBirth).getTime()) / (1000 * 60 * 60 * 24 * 365.25))} years
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <CalendarDays className="w-4 h-4 text-muted-foreground shrink-0" />
+                  DOB: {format(new Date(patient.dateOfBirth), "MMM d, yyyy")}
+                </span>
+                {patient.nationalId && <span className="text-muted-foreground">ID: {patient.nationalId}</span>}
+                {patient.phone && (
+                  <span className="flex items-center gap-1.5">
+                    <Phone className="w-4 h-4 text-muted-foreground shrink-0" />
+                    {patient.phone}
+                  </span>
+                )}
+                {patient.email && (
+                  <span className="flex items-center gap-1.5 truncate max-w-[200px]">
+                    <Mail className="w-4 h-4 text-muted-foreground shrink-0" />
+                    {patient.email}
+                  </span>
+                )}
+                {patient.address && (
+                  <span className="flex items-center gap-1.5 text-muted-foreground truncate max-w-[220px]">
+                    <MapPin className="w-4 h-4 shrink-0" />
+                    {patient.address}{patient.city ? `, ${patient.city}` : ""}
+                  </span>
+                )}
+                {patient.bloodGroup && (
+                  <span className="flex items-center gap-1.5">
+                    <Heart className="w-4 h-4 text-destructive shrink-0" />
+                    Blood: {patient.bloodGroup}
+                  </span>
+                )}
+                {vitalsList.length > 0 && (() => {
+                  const v = vitalsList[0];
+                  const parts = [];
+                  if (v.temperature != null) parts.push(`Temp ${v.temperature} °C`);
+                  if (v.bloodPressureSystolic != null || v.bloodPressureDiastolic != null) parts.push(`BP ${v.bloodPressureSystolic ?? "—"}/${v.bloodPressureDiastolic ?? "—"}`);
+                  if (v.heartRate != null) parts.push(`HR ${v.heartRate}`);
+                  if (v.weight != null) parts.push(`${v.weight} kg`);
+                  if (v.height != null) parts.push(`${v.height} cm`);
+                  return parts.length > 0 ? <span className="flex items-center gap-1.5 text-muted-foreground"><Activity className="w-4 h-4 shrink-0" /> {parts.join(" · ")}</span> : null;
+                })()}
+                {patientAllergies.some((a) => a.severity === "HIGH") && (
+                  <span className="flex items-center gap-1.5 text-destructive font-medium">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    Allergies: {patientAllergies.filter((a) => a.severity === "HIGH").map((a) => a.allergen).join(", ")}
+                  </span>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
           <p className="text-sm text-muted-foreground">Snapshot of the patient chart at a glance. Use the section headers to go to the full page.</p>
 
           <Card>

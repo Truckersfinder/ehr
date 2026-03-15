@@ -10,7 +10,7 @@ import { PatientDemographicsSidebar } from "@/components/patient-demographics-si
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
-import { Moon, Sun, CalendarDays } from "lucide-react";
+import { Moon, Sun, CalendarDays, FlaskConical, Upload } from "lucide-react";
 
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -66,12 +66,14 @@ function Router() {
 }
 
 function AuthenticatedApp() {
+  const { user } = useAuth();
   const [isPatientChart, params] = useRoute("/patients/:id");
   const patientId = params?.id;
   const style = {
     "--sidebar-width": "16rem",
     "--sidebar-width-icon": "3rem",
   };
+  const showLabAndUpload = user && ["clinician", "nurse"].includes(user.role);
 
   return (
     <SidebarProvider style={style as React.CSSProperties}>
@@ -90,6 +92,22 @@ function AuthenticatedApp() {
                 Schedule
               </a>
             </Link>
+            {showLabAndUpload && (
+              <>
+                <Link href="/laboratory">
+                  <a className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors" data-testid="toolbar-laboratory">
+                    <FlaskConical className="w-4 h-4" />
+                    Laboratory
+                  </a>
+                </Link>
+                <Link href="/upload-results">
+                  <a className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors" data-testid="toolbar-upload-results">
+                    <Upload className="w-4 h-4" />
+                    Upload Results
+                  </a>
+                </Link>
+              </>
+            )}
             <div className="ml-auto flex items-center gap-3">
               <PatientSearch />
               <ThemeToggle />

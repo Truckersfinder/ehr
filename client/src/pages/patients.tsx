@@ -257,7 +257,7 @@ export default function PatientsPage() {
                     <p className="text-xs text-muted-foreground">{patient.mrn}</p>
                   </div>
                   <Badge variant="secondary" className="text-[10px]">
-                    {patient.gender}
+                    {patient.gender ? patient.gender.charAt(0).toUpperCase() + patient.gender.slice(1).toLowerCase() : ""}
                   </Badge>
                 </div>
                 <div className="space-y-1.5 text-xs text-muted-foreground">

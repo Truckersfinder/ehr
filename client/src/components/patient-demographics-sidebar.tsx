@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   ArrowLeft, User, Phone, Mail, MapPin, Heart, AlertTriangle,
@@ -108,7 +107,7 @@ export function PatientDemographicsSidebar({ patientId }: { patientId: string })
           <div className="space-y-2 text-sm">
             <div className="flex items-center gap-2">
               <User className="w-4 h-4 text-muted-foreground shrink-0" />
-              <span>{patient.gender} · {getAge(patient.dateOfBirth)} years</span>
+              <span>{patient.gender ? patient.gender.charAt(0).toUpperCase() + patient.gender.slice(1).toLowerCase() : ""} · {getAge(patient.dateOfBirth)} years</span>
             </div>
             <div className="flex items-center gap-2">
               <CalendarDays className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -148,15 +147,6 @@ export function PatientDemographicsSidebar({ patientId }: { patientId: string })
               </div>
             ) : (
               <p className="text-muted-foreground text-xs">No known allergies</p>
-            )}
-            {patient.nextOfKinName && (
-              <>
-                <Separator className="my-2" />
-                <p className="text-xs font-medium text-muted-foreground">Next of Kin</p>
-                <p className="text-sm">{patient.nextOfKinName}</p>
-                {patient.nextOfKinRelation && <p className="text-xs text-muted-foreground">{patient.nextOfKinRelation}</p>}
-                {patient.nextOfKinPhone && <p className="text-xs text-muted-foreground">{patient.nextOfKinPhone}</p>}
-              </>
             )}
           </div>
         </div>
