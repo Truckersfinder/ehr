@@ -20,9 +20,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid, User, CalendarDays, Phone, Mail, MapPin, Heart,
+  Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid, User, CalendarDays, Phone, Mail, MapPin, Heart, ChevronLeft, ChevronRight, Trash2,
 } from "lucide-react";
 import { format } from "date-fns";
+import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from "recharts";
+import { ChartContainer } from "@/components/ui/chart";
 import type { Patient, Encounter, Prescription, LabOrder, PatientProblem, PatientNote, FamilyMember, FamilyMemberCondition, ImagingResult, ImagingOrder, PatientDocument, Vitals, PatientAllergy } from "@shared/schema";
 import { FAMILY_RELATIONSHIPS, COMMON_INHERITED_CONDITIONS_AFRICA } from "@/lib/family-history-constants";
 import { DOSE_OPTIONS, FREQUENCY_OPTIONS, DURATION_OPTIONS } from "@/lib/medication-order-options";
@@ -86,7 +88,17 @@ export default function PatientDetailPage() {
   const [editNoteOpen, setEditNoteOpen] = useState(false);
   const [editNoteId, setEditNoteId] = useState<string | null>(null);
   const [editNoteContent, setEditNoteContent] = useState("");
+  const [notePanelMode, setNotePanelMode] = useState<"new" | "edit" | null>(null);
+  const [leaveNotePromptOpen, setLeaveNotePromptOpen] = useState(false);
+  const [pendingLeavePath, setPendingLeavePath] = useState<string | null>(null);
+  const [viewNoteOpen, setViewNoteOpen] = useState(false);
+  const [viewNote, setViewNote] = useState<PatientNote | null>(null);
   const [noteListening, setNoteListening] = useState(false);
+  const [notePanelCollapsed, setNotePanelCollapsed] = useState(false);
+  const hasOpenNotePanel = newNoteOpen || editNoteOpen;
+  const hasMinNoteContent = (text: string) => String(text ?? "").trim().length > 0;
+  const newNoteHasMinContent = hasMinNoteContent(newNoteContent);
+  const editNoteHasMinContent = hasMinNoteContent(editNoteContent);
   const [vitalsForm, setVitalsForm] = useState({
     temperature: "", bloodPressureSystolic: "", bloodPressureDiastolic: "",
     heartRate: "", respiratoryRate: "", oxygenSaturation: "", weight: "", height: "",
@@ -115,6 +127,9 @@ export default function PatientDetailPage() {
     medicationName: "", dosage: "", frequency: "once daily", duration: "", instructions: "",
     patientProblemId: "",
   });
+  const [discontinueRxOpen, setDiscontinueRxOpen] = useState(false);
+  const [discontinuePrescription, setDiscontinuePrescription] = useState<Prescription | null>(null);
+  const [discontinueReason, setDiscontinueReason] = useState("");
   const [mainTab, setMainTab] = useState("overview");
 
   const { data: patient, isLoading } = useQuery<Patient>({
@@ -198,6 +213,17 @@ export default function PatientDetailPage() {
   });
   const familyMembersList = familyHistory?.members ?? [];
   const familyConditionsList = familyHistory?.conditions ?? [];
+
+  const { data: users = [] } = useQuery<{ id: string; fullName: string; username?: string }[]>({
+    queryKey: ["/api/users"],
+    queryFn: async () => {
+      const res = await fetch("/api/users", { headers: { Authorization: `Bearer ${authToken}` } });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!authToken,
+  });
+  const prescriberNameById = new Map(users.map((u) => [u.id, u.fullName || u.username || "Unknown user"]));
 
   const { data: labOrders = [] } = useQuery<LabOrder[]>({
     queryKey: ["/api/lab-orders", `?patientId=${id}`],
@@ -451,6 +477,32 @@ export default function PatientDetailPage() {
     };
   }, [newNoteOpen]);
 
+  useEffect(() => {
+    const onLeaveRequest = (event: Event) => {
+      const detail = event as CustomEvent<string>;
+      const nextPath = detail.detail;
+      if (!hasOpenNotePanel) {
+        navigate(nextPath);
+        return;
+      }
+      setPendingLeavePath(nextPath);
+      setLeaveNotePromptOpen(true);
+    };
+
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!hasOpenNotePanel) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+
+    window.addEventListener("ehr-request-leave", onLeaveRequest as EventListener);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("ehr-request-leave", onLeaveRequest as EventListener);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [hasOpenNotePanel, navigate]);
+
   const toggleNoteDictation = () => {
     if (noteListening) {
       noteRecognitionRef.current?.stop();
@@ -462,6 +514,52 @@ export default function PatientDetailPage() {
       noteRecognitionRef.current.start();
       toast({ title: "Listening...", description: "Speak into the microphone. Click the mic again to stop." });
     }
+  };
+
+  const openNewNotePanel = () => {
+    setNewNoteOpen(true);
+    setEditNoteOpen(false);
+    setEditNoteId(null);
+    setEditNoteContent("");
+    setNotePanelMode("new");
+  };
+
+  const openEditNotePanel = (noteId: string, content: string) => {
+    setEditNoteId(noteId);
+    setEditNoteContent(content);
+    setNewNoteOpen(false);
+    setNotePanelMode("edit");
+    setEditNoteOpen(true);
+  };
+
+  const closeNotePanel = () => {
+    setNewNoteOpen(false);
+    setEditNoteOpen(false);
+    setEditNoteId(null);
+    setEditNoteContent("");
+    setNewNoteType("Progress Note");
+    setNotePanelMode(null);
+    setNoteListening(false);
+    setNotePanelCollapsed(false);
+  };
+
+  const signAndLeavePending = () => {
+    if (newNoteOpen) {
+      addNoteMutation.mutate({ content: newNoteContent, noteKind: newNoteType });
+      return;
+    }
+    if (editNoteOpen && editNoteId) {
+      updateNoteMutation.mutate({ noteId: editNoteId, content: editNoteContent });
+    }
+  };
+
+  const promptLeaveIfNoteOpen = (nextPath: string) => {
+    if (!hasOpenNotePanel) {
+      navigate(nextPath);
+      return;
+    }
+    setPendingLeavePath(nextPath);
+    setLeaveNotePromptOpen(true);
   };
 
   const handleAiSuggestNote = async () => {
@@ -485,40 +583,68 @@ export default function PatientDetailPage() {
 
   const addNoteMutation = useMutation({
     mutationFn: async (payload: { content: string; noteKind: string }) => {
-      const res = await fetch(`/api/patients/${id}/notes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ content: payload.content, noteKind: payload.noteKind }),
-      });
+      let res: Response;
+      try {
+        res = await fetch(`/api/patients/${id}/notes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ content: payload.content, noteKind: payload.noteKind }),
+        });
+      } catch (e) {
+        const msg = e instanceof Error && e.message === "Failed to fetch"
+          ? "Cannot reach the server. Make sure the app is running (npm run dev) and you're using the same URL (e.g. http://localhost:3000 or the port shown in the terminal)."
+          : (e instanceof Error ? e.message : "Network error");
+        throw new Error(msg);
+      }
       const text = await res.text();
       let data: { message?: string } | unknown;
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(res.ok ? "Invalid response" : `Server error (${res.status}). Open the app at http://localhost:5000.`);
+        throw new Error(res.ok ? "Invalid response" : `Server error (${res.status}).`);
       }
-      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed");
+      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed to sign note");
       return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "notes"] });
       toast({ title: "Note signed and saved" });
-      setNewNoteOpen(false);
-      setNewNoteContent("");
-      setNewNoteType("Progress Note");
+      closeNotePanel();
+      if (pendingLeavePath) {
+        const next = pendingLeavePath;
+        setPendingLeavePath(null);
+        navigate(next);
+      }
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
   const updateNoteMutation = useMutation({
-    mutationFn: async (payload: { noteId: string; content: string }) => {
-      const res = await fetch(`/api/patients/${id}/notes/${payload.noteId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ content: payload.content }),
-      });
+    mutationFn: async (payload: { noteId: string; content: string; signAndSave?: boolean; saveAsIncomplete?: boolean }) => {
+      let res: Response;
+      try {
+        res = await fetch(`/api/patients/${id}/notes/${payload.noteId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({
+            content: payload.content,
+            ...(payload.signAndSave && { signAndSave: true }),
+            ...(payload.saveAsIncomplete && { saveAsIncomplete: true }),
+          }),
+        });
+      } catch (e) {
+        const msg = e instanceof Error && e.message === "Failed to fetch"
+          ? "Cannot reach the server. Make sure the app is running (npm run dev) and you're using the same URL."
+          : (e instanceof Error ? e.message : "Network error");
+        throw new Error(msg);
+      }
       if (!res.ok) {
-        const data = await res.json();
+        let data: { message?: string };
+        try {
+          data = await res.json();
+        } catch {
+          throw new Error(`Server error (${res.status})`);
+        }
         throw new Error(data.message || "Failed to update note");
       }
       return res.json();
@@ -526,9 +652,70 @@ export default function PatientDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "notes"] });
       toast({ title: "Note updated" });
-      setEditNoteOpen(false);
-      setEditNoteId(null);
-      setEditNoteContent("");
+      closeNotePanel();
+      if (pendingLeavePath) {
+        const next = pendingLeavePath;
+        setPendingLeavePath(null);
+        navigate(next);
+      }
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const saveIncompleteNoteMutation = useMutation({
+    mutationFn: async (payload: { content: string; noteKind: string } | { noteId: string; content: string }) => {
+      const networkErrorMsg = "Cannot reach the server. Make sure the app is running (npm run dev) and you're using the same URL.";
+      if ("noteId" in payload) {
+        let res: Response;
+        try {
+          res = await fetch(`/api/patients/${id}/notes/${payload.noteId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+            body: JSON.stringify({ content: payload.content, saveAsIncomplete: true }),
+          });
+        } catch (e) {
+          throw new Error(e instanceof Error && e.message === "Failed to fetch" ? networkErrorMsg : (e instanceof Error ? e.message : "Network error"));
+        }
+        if (!res.ok) {
+          let data: { message?: string };
+          try {
+            data = await res.json();
+          } catch {
+            throw new Error("Server error");
+          }
+          throw new Error(data.message || "Failed to save note");
+        }
+        return res.json();
+      }
+      let res: Response;
+      try {
+        res = await fetch(`/api/patients/${id}/notes`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ content: payload.content || "(Draft)", noteKind: payload.noteKind, saveAsIncomplete: true }),
+        });
+      } catch (e) {
+        throw new Error(e instanceof Error && e.message === "Failed to fetch" ? networkErrorMsg : (e instanceof Error ? e.message : "Network error"));
+      }
+      const text = await res.text();
+      let data: { message?: string } | unknown;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        throw new Error(res.ok ? "Invalid response" : "Server error");
+      }
+      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed to save note");
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "notes"] });
+      toast({ title: "Note saved as incomplete" });
+      closeNotePanel();
+      if (pendingLeavePath) {
+        const next = pendingLeavePath;
+        setPendingLeavePath(null);
+        navigate(next);
+      }
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -752,6 +939,90 @@ export default function PatientDetailPage() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const discontinuePrescriptionMutation = useMutation({
+    mutationFn: async ({ prescriptionId, reason }: { prescriptionId: string; reason: string }) => {
+      const prescription = prescriptions.find((rx) => rx.id === prescriptionId);
+      const res = await fetch(`/api/prescriptions/${prescriptionId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          status: "cancelled",
+          instructions: [prescription?.instructions, `Discontinued reason: ${reason}`].filter(Boolean).join("\n"),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "Failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/prescriptions", `?patientId=${id}`] });
+      toast({ title: "Medication discontinued" });
+      setDiscontinueRxOpen(false);
+      setDiscontinuePrescription(null);
+      setDiscontinueReason("");
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deletePrescriptionMutation = useMutation({
+    mutationFn: async (prescriptionId: string) => {
+      const res = await fetch(`/api/prescriptions/${prescriptionId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || "Failed to delete medication");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/prescriptions", `?patientId=${id}`] });
+      toast({ title: "Medication deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteLabOrderMutation = useMutation({
+    mutationFn: async (orderId: string) => {
+      const res = await fetch(`/api/lab-orders/${orderId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || "Failed to delete lab order");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/lab-orders", `?patientId=${id}`] });
+      toast({ title: "Order deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const deleteImagingOrderMutation = useMutation({
+    mutationFn: async (orderId: string) => {
+      const res = await fetch(`/api/imaging-orders/${orderId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || "Failed to delete imaging order");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/imaging-orders", `?patientId=${id}`] });
+      toast({ title: "Order deleted" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const role = user?.role?.toLowerCase?.() ?? "";
   const isClinician = role === "clinician";
   const canOrder = role === "clinician" || role === "nurse";
@@ -790,9 +1061,10 @@ export default function PatientDetailPage() {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden" data-testid="patient-detail-page">
-      <Tabs value={mainTab} onValueChange={setMainTab} className="flex flex-1 min-w-0 overflow-hidden">
-        <nav className="w-52 flex-shrink-0 border border-border rounded-lg bg-muted/30 flex flex-col overflow-y-auto py-4">
+    <div className="flex h-screen min-h-0 flex-1 overflow-hidden" data-testid="patient-detail-page">
+      <div className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
+        <Tabs value={mainTab} onValueChange={setMainTab} className="flex flex-1 min-w-0 overflow-hidden">
+          <nav className="w-52 flex-shrink-0 border border-border rounded-lg bg-muted/30 flex flex-col overflow-y-auto py-4">
           <div className="px-3 space-y-6">
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Review</p>
@@ -839,165 +1111,182 @@ export default function PatientDetailPage() {
 
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <div className="flex-1 overflow-auto p-4">
-        <TabsContent value="overview" className="space-y-6 mt-0 data-[state=inactive]:hidden">
-          <Card className="border-muted">
-            <CardContent className="p-4">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Patient demographics</h3>
-              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-                <span className="font-medium">{patient.firstName} {patient.lastName}</span>
-                {patient.mrn && <span className="text-muted-foreground">{patient.mrn}</span>}
-                <span className="flex items-center gap-1.5">
-                  <User className="w-4 h-4 text-muted-foreground shrink-0" />
-                  {patient.gender ? patient.gender.charAt(0).toUpperCase() + patient.gender.slice(1).toLowerCase() : ""} · {Math.floor((Date.now() - new Date(patient.dateOfBirth).getTime()) / (1000 * 60 * 60 * 24 * 365.25))} years
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <CalendarDays className="w-4 h-4 text-muted-foreground shrink-0" />
-                  DOB: {format(new Date(patient.dateOfBirth), "MMM d, yyyy")}
-                </span>
-                {patient.nationalId && <span className="text-muted-foreground">ID: {patient.nationalId}</span>}
-                {patient.phone && (
-                  <span className="flex items-center gap-1.5">
-                    <Phone className="w-4 h-4 text-muted-foreground shrink-0" />
-                    {patient.phone}
-                  </span>
-                )}
-                {patient.email && (
-                  <span className="flex items-center gap-1.5 truncate max-w-[200px]">
-                    <Mail className="w-4 h-4 text-muted-foreground shrink-0" />
-                    {patient.email}
-                  </span>
-                )}
-                {patient.address && (
-                  <span className="flex items-center gap-1.5 text-muted-foreground truncate max-w-[220px]">
-                    <MapPin className="w-4 h-4 shrink-0" />
-                    {patient.address}{patient.city ? `, ${patient.city}` : ""}
-                  </span>
-                )}
-                {patient.bloodGroup && (
-                  <span className="flex items-center gap-1.5">
-                    <Heart className="w-4 h-4 text-destructive shrink-0" />
-                    Blood: {patient.bloodGroup}
-                  </span>
-                )}
-                {vitalsList.length > 0 && (() => {
-                  const v = vitalsList[0];
-                  const parts = [];
-                  if (v.temperature != null) parts.push(`Temp ${v.temperature} °C`);
-                  if (v.bloodPressureSystolic != null || v.bloodPressureDiastolic != null) parts.push(`BP ${v.bloodPressureSystolic ?? "—"}/${v.bloodPressureDiastolic ?? "—"}`);
-                  if (v.heartRate != null) parts.push(`HR ${v.heartRate}`);
-                  if (v.weight != null) parts.push(`${v.weight} kg`);
-                  if (v.height != null) parts.push(`${v.height} cm`);
-                  return parts.length > 0 ? <span className="flex items-center gap-1.5 text-muted-foreground"><Activity className="w-4 h-4 shrink-0" /> {parts.join(" · ")}</span> : null;
-                })()}
-                {patientAllergies.some((a) => a.severity === "HIGH") && (
-                  <span className="flex items-center gap-1.5 text-destructive font-medium">
-                    <AlertTriangle className="w-4 h-4 shrink-0" />
-                    Allergies: {patientAllergies.filter((a) => a.severity === "HIGH").map((a) => a.allergen).join(", ")}
-                  </span>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+        <TabsContent value="overview" className="mt-0 data-[state=inactive]:hidden">
+          <div className="p-4 space-y-6 max-w-6xl">
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight">Chart overview</h2>
+              <p className="text-sm text-muted-foreground">Snapshot at a glance. Click a section header to open the full page.</p>
+            </div>
 
-          <p className="text-sm text-muted-foreground">Snapshot of the patient chart at a glance. Use the section headers to go to the full page.</p>
-
-          <Card>
-            <CardContent className="p-4">
-              <button
-                type="button"
-                onClick={() => setMainTab("history")}
-                className="text-base font-semibold text-primary underline underline-offset-2 hover:no-underline flex items-center gap-2 mb-2"
-              >
-                <History className="w-4 h-4 shrink-0" /> History
-              </button>
-              <div className="text-sm text-muted-foreground space-y-1">
-                {(() => {
-                  const current = problems.filter((p) => p.status !== "past");
-                  const past = problems.filter((p) => p.status === "past");
-                  return (
-                    <>
-                      {current.length > 0 && (
-                        <p>Current problems: {current.map((p) => p.problem).join(", ")}</p>
-                      )}
-                      {past.length > 0 && <p>Past problems: {past.length} recorded</p>}
-                      {familyMembersList.length > 0 && <p>Family history: {familyMembersList.length} member(s)</p>}
-                      {current.length === 0 && past.length === 0 && familyMembersList.length === 0 && (
-                        <p>No history recorded.</p>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <button
-                type="button"
-                onClick={() => setMainTab("immunization")}
-                className="text-base font-semibold text-primary underline underline-offset-2 hover:no-underline flex items-center gap-2 mb-2"
-              >
-                <ShieldCheck className="w-4 h-4 shrink-0" /> Immunization
-              </button>
-              <p className="text-sm text-muted-foreground">Immunization history. Records can be added when immunization tracking is enabled.</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <button
-                type="button"
-                onClick={() => setMainTab("results")}
-                className="text-base font-semibold text-primary underline underline-offset-2 hover:no-underline flex items-center gap-2 mb-2"
-              >
-                <FileCheck className="w-4 h-4 shrink-0" /> Results
-              </button>
-              <div className="text-sm text-muted-foreground space-y-1">
-                {(() => {
-                  const labResulted = labOrders.filter((o) => o.status === "resulted" || o.status === "completed");
-                  const labDocs = patientDocuments.filter((d) => d.documentType === "lab_result");
-                  const hasLabs = labResulted.length > 0 || labDocs.length > 0;
-                  return (
-                    <>
-                      {hasLabs && (
-                        <p>Labs: {labResulted.length + labDocs.length} result(s)</p>
-                      )}
-                      {imagingResults.length > 0 && <p>Imaging: {imagingResults.length} result(s)</p>}
-                      {!hasLabs && imagingResults.length === 0 && <p>No results yet.</p>}
-                    </>
-                  );
-                })()}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-4">
-              <button
-                type="button"
-                onClick={() => setMainTab("allergy")}
-                className="text-base font-semibold text-primary underline underline-offset-2 hover:no-underline flex items-center gap-2 mb-2"
-              >
-                <AlertTriangle className="w-4 h-4 shrink-0" /> Allergy
-              </button>
-              <div className="text-sm text-muted-foreground">
-                {patientAllergies.length > 0 ? (
-                  <ul className="space-y-1">
-                    {patientAllergies.map((a) => (
-                      <li key={a.id} className={a.severity === "HIGH" ? "text-destructive font-medium" : ""}>
-                        {a.allergen} {a.severity && <span className="text-muted-foreground">({a.severity})</span>}
-                      </li>
-                    ))}
-                  </ul>
-                ) : patient?.allergies ? (
-                  <p className="whitespace-pre-wrap">{patient.allergies}</p>
+            <Card className="hover:border-primary/50 transition-colors">
+              <CardContent className="p-4">
+                <button
+                  type="button"
+                  onClick={() => setMainTab("vitals")}
+                  className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
+                >
+                  <Activity className="w-4 h-4 shrink-0" />
+                  Vitals
+                </button>
+                {vitalsList.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No vitals recorded. Record vitals in the Vitals section.</p>
                 ) : (
-                  <p>No allergies documented.</p>
+                  <>
+                    <div className="mb-4">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Last 3 recorded</p>
+                      <ul className="space-y-2">
+                        {vitalsList.slice(0, 3).map((v) => (
+                          <li key={v.id} className="text-sm flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                            <span className="text-muted-foreground shrink-0">{v.recordedAt ? format(new Date(v.recordedAt), "MMM d, HH:mm") : "—"}</span>
+                            {v.temperature != null && <span>Temp {v.temperature} °C</span>}
+                            {(v.bloodPressureSystolic != null || v.bloodPressureDiastolic != null) && (
+                              <span>BP {v.bloodPressureSystolic ?? "—"}/{v.bloodPressureDiastolic ?? "—"}</span>
+                            )}
+                            {v.heartRate != null && <span>HR {v.heartRate}</span>}
+                            {v.weight != null && <span>{v.weight} kg</span>}
+                            {v.height != null && <span>{v.height} cm</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    {vitalsList.length >= 2 && (() => {
+                      const chartData = [...vitalsList.slice(0, 3)].reverse().map((v) => ({
+                        date: v.recordedAt ? format(new Date(v.recordedAt), "MMM d") : "",
+                        temp: v.temperature != null ? Number(v.temperature) : null,
+                        systolic: v.bloodPressureSystolic != null ? Number(v.bloodPressureSystolic) : null,
+                        diastolic: v.bloodPressureDiastolic != null ? Number(v.bloodPressureDiastolic) : null,
+                        heartRate: v.heartRate != null ? Number(v.heartRate) : null,
+                      }));
+                      const hasTemp = chartData.some((d) => d.temp != null);
+                      const hasBp = chartData.some((d) => d.systolic != null || d.diastolic != null);
+                      const hasHr = chartData.some((d) => d.heartRate != null);
+                      return (
+                        <div className="h-[220px] w-full">
+                          <ChartContainer config={{ temp: { label: "Temp °C", color: "hsl(var(--chart-1))" }, systolic: { label: "BP Sys", color: "hsl(var(--chart-2))" }, diastolic: { label: "BP Dias", color: "hsl(var(--chart-3))" }, heartRate: { label: "HR", color: "hsl(var(--chart-4))" } }} className="h-full w-full">
+                            <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                              <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                              <YAxis tick={{ fontSize: 10 }} width={28} />
+                              <Tooltip contentStyle={{ fontSize: 12 }} formatter={(value: number) => [value, ""]} />
+                              <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: 11 }} iconType="line" iconSize={8} />
+                              {hasTemp && <Line type="monotone" dataKey="temp" name="Temp °C" stroke="var(--color-temp)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasBp && <Line type="monotone" dataKey="systolic" name="BP Sys" stroke="var(--color-systolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasBp && <Line type="monotone" dataKey="diastolic" name="BP Dias" stroke="var(--color-diastolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasHr && <Line type="monotone" dataKey="heartRate" name="HR" stroke="var(--color-heartRate)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                            </LineChart>
+                          </ChartContainer>
+                        </div>
+                      );
+                    })()}
+                  </>
                 )}
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <Card className="hover:border-primary/50 transition-colors">
+                <CardContent className="p-4">
+                  <button
+                    type="button"
+                    onClick={() => setMainTab("history")}
+                    className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
+                  >
+                    <History className="w-4 h-4 shrink-0" />
+                    History
+                  </button>
+                  <div className="text-sm text-muted-foreground space-y-1">
+                    {(() => {
+                      const current = problems.filter((p) => p.status !== "past");
+                      const past = problems.filter((p) => p.status === "past");
+                      return (
+                        <>
+                          {current.length > 0 && (
+                            <p>Current problems: {current.map((p) => p.problem).join(", ")}</p>
+                          )}
+                          {past.length > 0 && <p>Past problems: {past.length} recorded</p>}
+                          {familyMembersList.length > 0 && <p>Family history: {familyMembersList.length} member(s)</p>}
+                          {current.length === 0 && past.length === 0 && familyMembersList.length === 0 && (
+                            <p>No history recorded.</p>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="hover:border-primary/50 transition-colors">
+                <CardContent className="p-4">
+                  <button
+                    type="button"
+                    onClick={() => setMainTab("allergy")}
+                    className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
+                  >
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    Allergy
+                  </button>
+                  <div className="text-sm text-muted-foreground">
+                    {patientAllergies.length > 0 ? (
+                      <ul className="space-y-1">
+                        {patientAllergies.map((a) => (
+                          <li key={a.id} className={a.severity === "HIGH" ? "text-destructive font-medium" : ""}>
+                            {a.allergen} {a.severity && <span className="text-muted-foreground">({a.severity})</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : patient?.allergies ? (
+                      <p className="whitespace-pre-wrap">{patient.allergies}</p>
+                    ) : (
+                      <p>No allergies documented.</p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="hover:border-primary/50 transition-colors">
+                <CardContent className="p-4">
+                  <button
+                    type="button"
+                    onClick={() => setMainTab("results")}
+                    className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
+                  >
+                    <FileCheck className="w-4 h-4 shrink-0" />
+                    Results
+                  </button>
+                  <div className="text-sm text-muted-foreground space-y-1">
+                    {(() => {
+                      const labResulted = labOrders.filter((o) => o.status === "resulted" || o.status === "completed");
+                      const labDocs = patientDocuments.filter((d) => d.documentType === "lab_result");
+                      const hasLabs = labResulted.length > 0 || labDocs.length > 0;
+                      return (
+                        <>
+                          {hasLabs && (
+                            <p>Labs: {labResulted.length + labDocs.length} result(s)</p>
+                          )}
+                          {imagingResults.length > 0 && <p>Imaging: {imagingResults.length} result(s)</p>}
+                          {!hasLabs && imagingResults.length === 0 && <p>No results yet.</p>}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="hover:border-primary/50 transition-colors">
+                <CardContent className="p-4">
+                  <button
+                    type="button"
+                    onClick={() => setMainTab("immunization")}
+                    className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
+                  >
+                    <ShieldCheck className="w-4 h-4 shrink-0" />
+                    Immunization
+                  </button>
+                  <p className="text-sm text-muted-foreground">Immunization history. Records can be added when immunization tracking is enabled.</p>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
         </TabsContent>
 
         <TabsContent value="problems" className="space-y-3 mt-0 data-[state=inactive]:hidden">
@@ -1080,50 +1369,50 @@ export default function PatientDetailPage() {
           </div>
           {canAddNote && (
             <Card>
-              <CardContent className="p-5">
-                <h4 className="text-sm font-medium mb-4">Record vitals</h4>
+              <CardContent className="p-2.5">
+                <h4 className="text-sm font-medium mb-2">Record vitals</h4>
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
                     recordVitalsMutation.mutate(vitalsForm);
                   }}
-                  className="space-y-4"
+                  className="space-y-2"
                 >
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                    <div className="space-y-2">
-                      <Label className="text-xs">Temp (°C)</Label>
-                      <Input type="number" step="0.1" value={vitalsForm.temperature} onChange={(e) => setVitalsForm((f) => ({ ...f, temperature: e.target.value }))} />
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                    <div className="space-y-1 max-w-[11.5rem]">
+                      <Label className="text-[11px]">Temp (°C)</Label>
+                      <Input type="number" step="0.1" className="h-7 px-2 text-xs" value={vitalsForm.temperature} onChange={(e) => setVitalsForm((f) => ({ ...f, temperature: e.target.value }))} />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">BP Systolic</Label>
-                      <Input type="number" value={vitalsForm.bloodPressureSystolic} onChange={(e) => setVitalsForm((f) => ({ ...f, bloodPressureSystolic: e.target.value }))} />
+                    <div className="space-y-1 max-w-[11.5rem]">
+                      <Label className="text-[11px]">BP Systolic</Label>
+                      <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.bloodPressureSystolic} onChange={(e) => setVitalsForm((f) => ({ ...f, bloodPressureSystolic: e.target.value }))} />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">BP Diastolic</Label>
-                      <Input type="number" value={vitalsForm.bloodPressureDiastolic} onChange={(e) => setVitalsForm((f) => ({ ...f, bloodPressureDiastolic: e.target.value }))} />
+                    <div className="space-y-1 max-w-[11.5rem]">
+                      <Label className="text-[11px]">BP Diastolic</Label>
+                      <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.bloodPressureDiastolic} onChange={(e) => setVitalsForm((f) => ({ ...f, bloodPressureDiastolic: e.target.value }))} />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Heart rate</Label>
-                      <Input type="number" value={vitalsForm.heartRate} onChange={(e) => setVitalsForm((f) => ({ ...f, heartRate: e.target.value }))} />
+                    <div className="space-y-1 max-w-[11.5rem]">
+                      <Label className="text-[11px]">Heart rate</Label>
+                      <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.heartRate} onChange={(e) => setVitalsForm((f) => ({ ...f, heartRate: e.target.value }))} />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Resp rate</Label>
-                      <Input type="number" value={vitalsForm.respiratoryRate} onChange={(e) => setVitalsForm((f) => ({ ...f, respiratoryRate: e.target.value }))} />
+                    <div className="space-y-1 max-w-[11.5rem]">
+                      <Label className="text-[11px]">Resp rate</Label>
+                      <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.respiratoryRate} onChange={(e) => setVitalsForm((f) => ({ ...f, respiratoryRate: e.target.value }))} />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">SpO2 (%)</Label>
-                      <Input type="number" value={vitalsForm.oxygenSaturation} onChange={(e) => setVitalsForm((f) => ({ ...f, oxygenSaturation: e.target.value }))} />
+                    <div className="space-y-1 max-w-[11.5rem]">
+                      <Label className="text-[11px]">SpO2 (%)</Label>
+                      <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.oxygenSaturation} onChange={(e) => setVitalsForm((f) => ({ ...f, oxygenSaturation: e.target.value }))} />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Weight (kg)</Label>
-                      <Input type="number" step="0.1" value={vitalsForm.weight} onChange={(e) => setVitalsForm((f) => ({ ...f, weight: e.target.value }))} />
+                    <div className="space-y-1 max-w-[11.5rem]">
+                      <Label className="text-[11px]">Weight (kg)</Label>
+                      <Input type="number" step="0.1" className="h-7 px-2 text-xs" value={vitalsForm.weight} onChange={(e) => setVitalsForm((f) => ({ ...f, weight: e.target.value }))} />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Height (cm)</Label>
-                      <Input type="number" step="0.1" value={vitalsForm.height} onChange={(e) => setVitalsForm((f) => ({ ...f, height: e.target.value }))} />
+                    <div className="space-y-1 max-w-[11.5rem]">
+                      <Label className="text-[11px]">Height (cm)</Label>
+                      <Input type="number" step="0.1" className="h-7 px-2 text-xs" value={vitalsForm.height} onChange={(e) => setVitalsForm((f) => ({ ...f, height: e.target.value }))} />
                     </div>
                   </div>
-                  <Button type="submit" disabled={recordVitalsMutation.isPending}>
+                  <Button type="submit" size="sm" className="h-8 px-3 text-xs" disabled={recordVitalsMutation.isPending}>
                     {recordVitalsMutation.isPending ? "Recording..." : "Record vitals"}
                   </Button>
                 </form>
@@ -1191,48 +1480,49 @@ export default function PatientDetailPage() {
                   e.preventDefault();
                   if (editVitals) updateVitalsMutation.mutate({ vitalId: editVitals.id, data: editVitalsForm });
                 }}
-                className="space-y-4 py-2"
+                className="space-y-3 py-2"
               >
                 <div className="space-y-2">
-                  <Label>Date & time</Label>
+                  <Label className="text-xs">Date & time</Label>
                   <Input
                     type="datetime-local"
                     value={editVitalsForm.recordedAt}
                     onChange={(e) => setEditVitalsForm((f) => ({ ...f, recordedAt: e.target.value }))}
+                    className="h-8 text-sm"
                   />
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                  <div className="space-y-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="space-y-1.5">
                     <Label className="text-xs">Temp (°C)</Label>
-                    <Input type="number" step="0.1" value={editVitalsForm.temperature} onChange={(e) => setEditVitalsForm((f) => ({ ...f, temperature: e.target.value }))} />
+                    <Input type="number" step="0.1" className="h-8 text-sm" value={editVitalsForm.temperature} onChange={(e) => setEditVitalsForm((f) => ({ ...f, temperature: e.target.value }))} />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label className="text-xs">BP Systolic</Label>
-                    <Input type="number" value={editVitalsForm.bloodPressureSystolic} onChange={(e) => setEditVitalsForm((f) => ({ ...f, bloodPressureSystolic: e.target.value }))} />
+                    <Input type="number" className="h-8 text-sm" value={editVitalsForm.bloodPressureSystolic} onChange={(e) => setEditVitalsForm((f) => ({ ...f, bloodPressureSystolic: e.target.value }))} />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label className="text-xs">BP Diastolic</Label>
-                    <Input type="number" value={editVitalsForm.bloodPressureDiastolic} onChange={(e) => setEditVitalsForm((f) => ({ ...f, bloodPressureDiastolic: e.target.value }))} />
+                    <Input type="number" className="h-8 text-sm" value={editVitalsForm.bloodPressureDiastolic} onChange={(e) => setEditVitalsForm((f) => ({ ...f, bloodPressureDiastolic: e.target.value }))} />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label className="text-xs">Heart rate</Label>
-                    <Input type="number" value={editVitalsForm.heartRate} onChange={(e) => setEditVitalsForm((f) => ({ ...f, heartRate: e.target.value }))} />
+                    <Input type="number" className="h-8 text-sm" value={editVitalsForm.heartRate} onChange={(e) => setEditVitalsForm((f) => ({ ...f, heartRate: e.target.value }))} />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label className="text-xs">Resp rate</Label>
-                    <Input type="number" value={editVitalsForm.respiratoryRate} onChange={(e) => setEditVitalsForm((f) => ({ ...f, respiratoryRate: e.target.value }))} />
+                    <Input type="number" className="h-8 text-sm" value={editVitalsForm.respiratoryRate} onChange={(e) => setEditVitalsForm((f) => ({ ...f, respiratoryRate: e.target.value }))} />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label className="text-xs">SpO2 (%)</Label>
-                    <Input type="number" value={editVitalsForm.oxygenSaturation} onChange={(e) => setEditVitalsForm((f) => ({ ...f, oxygenSaturation: e.target.value }))} />
+                    <Input type="number" className="h-8 text-sm" value={editVitalsForm.oxygenSaturation} onChange={(e) => setEditVitalsForm((f) => ({ ...f, oxygenSaturation: e.target.value }))} />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label className="text-xs">Weight (kg)</Label>
-                    <Input type="number" step="0.1" value={editVitalsForm.weight} onChange={(e) => setEditVitalsForm((f) => ({ ...f, weight: e.target.value }))} />
+                    <Input type="number" step="0.1" className="h-8 text-sm" value={editVitalsForm.weight} onChange={(e) => setEditVitalsForm((f) => ({ ...f, weight: e.target.value }))} />
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <Label className="text-xs">Height (cm)</Label>
-                    <Input type="number" step="0.1" value={editVitalsForm.height} onChange={(e) => setEditVitalsForm((f) => ({ ...f, height: e.target.value }))} />
+                    <Input type="number" step="0.1" className="h-8 text-sm" value={editVitalsForm.height} onChange={(e) => setEditVitalsForm((f) => ({ ...f, height: e.target.value }))} />
                   </div>
                 </div>
                 <DialogFooter>
@@ -1263,23 +1553,125 @@ export default function PatientDetailPage() {
               : null;
             return (
             <Card key={rx.id} data-testid={`card-rx-${rx.id}`}>
-              <CardContent className="p-5">
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <div>
-                    <p className="font-medium">{rx.medicationName} {rx.dosage}</p>
-                    <p className="text-xs text-muted-foreground">{rx.frequency}{rx.duration ? ` · ${rx.duration}` : ""}</p>
-                    {linkedProblem && (
-                      <p className="text-xs text-muted-foreground mt-1">For: {linkedProblem.problem}</p>
-                    )}
-                  </div>
-                  <Badge variant="secondary" className={`text-[10px] ${statusColors[rx.status] || ""}`}>{rx.status}</Badge>
+              <CardContent className="py-3 px-4">
+                <div className={`flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm ${rx.status === "cancelled" ? "line-through opacity-60" : ""}`}>
+                  <a href="/pharmacy" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
+                    {rx.medicationName}
+                  </a>
+                  <span className="shrink-0">{rx.dosage}</span>
+                  <span className="text-muted-foreground shrink-0">{rx.frequency}</span>
+                  {rx.duration && <span className="text-muted-foreground shrink-0">· {rx.duration}</span>}
+                  {linkedProblem && <span className="text-muted-foreground shrink-0">· For: {linkedProblem.problem}</span>}
+                  {rx.instructions && <span className="text-muted-foreground shrink-0">· {rx.instructions}</span>}
+                  <Badge variant="secondary" className={`text-[10px] ${statusColors[rx.status] || ""} shrink-0`}>
+                    {rx.status === "cancelled" ? "discontinued" : rx.status}
+                  </Badge>
+                  {canOrder && (
+                    <div className="ml-auto flex items-center gap-2 shrink-0">
+                      {rx.status !== "cancelled" && (
+                        <>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-2.5 text-xs"
+                            onClick={() => {
+                              setNewMedOrderForm({
+                                medicationName: rx.medicationName,
+                                dosage: rx.dosage,
+                                frequency: rx.frequency,
+                                duration: rx.duration ?? "",
+                                instructions: rx.instructions ?? "",
+                                patientProblemId: rx.patientProblemId ?? "",
+                              });
+                              setOrderComposerType("medication");
+                              setNewOrderOpen(true);
+                              setNewMedOrderOpen(true);
+                            }}
+                          >
+                            Reorder
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            className="h-8 px-2.5 text-xs"
+                            onClick={() => {
+                              setDiscontinuePrescription(rx);
+                              setDiscontinueReason("");
+                              setDiscontinueRxOpen(true);
+                            }}
+                          >
+                            Discontinue
+                          </Button>
+                        </>
+                      )}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                        title="Do NOT delete unless documentation was completed in error"
+                        onClick={() => {
+                          const ok = window.confirm("Do NOT delete unless documentation was completed in error.\n\nDelete this medication?");
+                          if (!ok) return;
+                          deletePrescriptionMutation.mutate(rx.id);
+                        }}
+                        disabled={deletePrescriptionMutation.isPending}
+                        data-testid={`button-delete-medication-${rx.id}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
-                {rx.instructions && <p className="text-sm text-muted-foreground">{rx.instructions}</p>}
+                <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                  Ordered {rx.createdAt ? format(new Date(rx.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                  {" · "}
+                  By {prescriberNameById.get(rx.prescribedBy) ?? rx.prescribedBy ?? "Unknown user"}
+                </div>
               </CardContent>
             </Card>
             );
           })}
         </TabsContent>
+
+        <Dialog open={discontinueRxOpen} onOpenChange={(open) => { setDiscontinueRxOpen(open); if (!open) { setDiscontinuePrescription(null); setDiscontinueReason(""); } }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Discontinue medication</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <p className="text-sm text-muted-foreground">
+                {discontinuePrescription ? `Please provide a reason to discontinue ${discontinuePrescription.medicationName}.` : "Please provide a reason to discontinue this medication."}
+              </p>
+              <Label htmlFor="discontinue-reason">Reason</Label>
+              <Textarea
+                id="discontinue-reason"
+                value={discontinueReason}
+                onChange={(e) => setDiscontinueReason(e.target.value)}
+                placeholder="Enter reason for discontinuation"
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDiscontinueRxOpen(false)}>Cancel</Button>
+              <Button
+                variant="destructive"
+                disabled={!discontinuePrescription || !discontinueReason.trim() || discontinuePrescriptionMutation.isPending}
+                onClick={() => {
+                  if (discontinuePrescription) {
+                    discontinuePrescriptionMutation.mutate({
+                      prescriptionId: discontinuePrescription.id,
+                      reason: discontinueReason.trim(),
+                    });
+                  }
+                }}
+              >
+                {discontinuePrescriptionMutation.isPending ? "Saving..." : "Discontinue"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <TabsContent value="orders" className="space-y-3 mt-4">
           <div className="flex items-center justify-between gap-2">
@@ -1296,27 +1688,80 @@ export default function PatientDetailPage() {
             <div className="space-y-3">
               {labOrders.map((order) => (
                 <Card key={order.id}>
-                  <CardContent className="p-5">
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div>
-                        <p className="font-medium">{order.testName}</p>
-                        <p className="text-xs text-muted-foreground">{order.testCode || ""} · {order.priority}{(order as LabOrder & { internalExternal?: string }).internalExternal === "external" ? " · External" : ""}</p>
-                      </div>
-                      <Badge variant="secondary" className={`text-[10px] ${statusColors[order.status] || ""}`}>{order.status}</Badge>
+                  <CardContent className="py-3 px-4">
+                    <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
+                      <a href="/laboratory" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
+                        {order.testName}
+                      </a>
+                      {order.testCode && <span className="text-muted-foreground shrink-0">{order.testCode}</span>}
+                      <span className="text-muted-foreground shrink-0">{order.priority}</span>
+                      {(order as LabOrder & { internalExternal?: string }).internalExternal === "external" && (
+                        <span className="text-muted-foreground shrink-0">External</span>
+                      )}
+                      {order.result && <span className="text-muted-foreground shrink-0">{order.result}</span>}
+                      <Badge variant="secondary" className={`text-[10px] ${statusColors[order.status] || ""} shrink-0`}>{order.status}</Badge>
+                      {canOrder && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="ml-auto h-8 w-8 p-0 text-destructive hover:text-destructive shrink-0"
+                          title="Do NOT delete unless documentation was completed in error"
+                          onClick={() => {
+                            const ok = window.confirm("Do NOT delete unless documentation was completed in error.\n\nDelete this order?");
+                            if (!ok) return;
+                            deleteLabOrderMutation.mutate(order.id);
+                          }}
+                          disabled={deleteLabOrderMutation.isPending}
+                          data-testid={`button-delete-lab-order-${order.id}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      )}
                     </div>
-                    {order.result && <p className="text-sm mt-1">{order.result}</p>}
+                    <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                      Ordered {order.createdAt ? format(new Date(order.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                      {" · "}
+                      By {prescriberNameById.get(order.orderedBy) ?? order.orderedBy ?? "Unknown user"}
+                    </div>
                   </CardContent>
                 </Card>
               ))}
               {imagingOrders.map((order) => (
                 <Card key={order.id}>
-                  <CardContent className="p-5">
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div>
-                        <p className="font-medium">{order.title}</p>
-                        <p className="text-xs text-muted-foreground">{order.modality}{order.internalExternal === "external" ? " · External" : ""}</p>
-                      </div>
-                      <Badge variant="secondary" className={`text-[10px] ${order.status === "resulted" || order.status === "completed" ? "bg-chart-3/10 text-chart-3" : ""}`}>{order.status === "completed" ? "resulted" : order.status}</Badge>
+                  <CardContent className="py-3 px-4">
+                    <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
+                      <a href="/upload-results" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
+                        {order.title}
+                      </a>
+                      <span className="text-muted-foreground shrink-0">{order.modality}</span>
+                      {order.internalExternal === "external" && <span className="text-muted-foreground shrink-0">External</span>}
+                      <Badge variant="secondary" className={`text-[10px] ${order.status === "completed" ? "bg-chart-3/10 text-chart-3" : ""} shrink-0`}>
+                        {order.status === "completed" ? "resulted" : order.status}
+                      </Badge>
+                      {canOrder && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="ml-auto h-8 w-8 p-0 text-destructive hover:text-destructive shrink-0"
+                          title="Do NOT delete unless documentation was completed in error"
+                          onClick={() => {
+                            const ok = window.confirm("Do NOT delete unless documentation was completed in error.\n\nDelete this order?");
+                            if (!ok) return;
+                            deleteImagingOrderMutation.mutate(order.id);
+                          }}
+                          disabled={deleteImagingOrderMutation.isPending}
+                          data-testid={`button-delete-imaging-order-${order.id}`}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                      Ordered {order.createdAt ? format(new Date(order.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                      {" · "}
+                      By {prescriberNameById.get(order.orderedBy) ?? order.orderedBy ?? "Unknown user"}
                     </div>
                   </CardContent>
                 </Card>
@@ -1327,61 +1772,99 @@ export default function PatientDetailPage() {
 
         <TabsContent value="notes" className="space-y-3 mt-4">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-muted-foreground">Signed clinical notes</span>
+            <span className="text-sm text-muted-foreground">Clinical notes</span>
             {canAddNote && (
-              <Button size="sm" onClick={() => setNewNoteOpen(true)} data-testid="button-new-note">
+              <Button size="sm" onClick={openNewNotePanel} data-testid="button-new-note">
                 <Plus className="w-3.5 h-3.5 mr-1.5" /> New Note
               </Button>
             )}
           </div>
-          {notes.length === 0 ? (
-            <Card><CardContent className="p-8 text-center text-muted-foreground">No notes. {canAddNote ? "Use New Note to add a signed note." : ""}</CardContent></Card>
-          ) : (
-            <div className="space-y-3">
-              {notes.map((note) => (
-                <Card key={note.id}>
-                  <CardContent className="p-5">
-                    <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge variant="secondary" className="text-[10px]">
-                          {(note as PatientNote & { noteKind?: string }).noteKind ?? "Progress Note"}
-                        </Badge>
-                        <Badge variant="outline" className="text-[10px]">
-                          {note.authorRole === "nursing" ? "Nursing" : "Clinician"}
-                        </Badge>
-                        {(note as PatientNote & { status?: string }).status === "edited" && (
-                          <Badge variant="secondary" className="text-[10px] bg-amber-500/20 text-amber-700 dark:text-amber-400">Edited</Badge>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">
-                          {note.signedAt ? format(new Date(note.signedAt), "MMM d, yyyy HH:mm") : ""}
-                        </span>
-                        {canAddNote && (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 w-8 p-0"
-                            onClick={() => {
-                              setEditNoteId(note.id);
-                              setEditNoteContent(note.content);
-                              setEditNoteOpen(true);
-                            }}
-                            title="Edit note"
-                            data-testid={`button-edit-note-${note.id}`}
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </Button>
-                        )}
-                      </div>
+          {(() => {
+            const incompleteNotes = notes.filter((n) => (n as PatientNote & { status?: string }).status === "incomplete");
+            const signedNotes = notes.filter((n) => (n as PatientNote & { status?: string }).status !== "incomplete");
+            const visibleSignedNotes = hasOpenNotePanel ? signedNotes.slice(0, 4) : signedNotes;
+            const renderNoteCard = (note: PatientNote) => (
+              <Card key={note.id}>
+                <CardContent className="p-5">
+                  <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant="secondary" className="text-[10px]">
+                        {(note as PatientNote & { noteKind?: string }).noteKind ?? "Progress Note"}
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px]">
+                        {note.authorRole === "nursing" ? "Nursing" : "Clinician"}
+                      </Badge>
+                      {(note as PatientNote & { status?: string }).status === "incomplete" && (
+                        <Badge variant="secondary" className="text-[10px] bg-amber-500/20 text-amber-700 dark:text-amber-400">Incomplete</Badge>
+                      )}
+                      {(note as PatientNote & { status?: string }).status === "signed" && (
+                        <Badge variant="secondary" className="text-[10px] bg-emerald-500/15 text-emerald-800 dark:text-emerald-300">Signed</Badge>
+                      )}
+                      {(note as PatientNote & { status?: string }).status === "edited" && (
+                        <Badge variant="secondary" className="text-[10px] bg-amber-500/20 text-amber-700 dark:text-amber-400">Edited</Badge>
+                      )}
                     </div>
-                    <p className="text-sm whitespace-pre-wrap">{note.content}</p>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {(note as PatientNote & { status?: string }).status === "incomplete"
+                          ? `Saved ${note.createdAt ? format(new Date(note.createdAt), "MMM d, yyyy · HH:mm") : "—"} · By ${note.authorId ? (prescriberNameById.get(note.authorId) ?? note.authorId) : "Unknown user"}`
+                          : `Signed ${note.signedAt ? format(new Date(note.signedAt), "MMM d, yyyy · HH:mm") : "—"} · By ${note.authorId ? (prescriberNameById.get(note.authorId) ?? note.authorId) : "Unknown user"}`}
+                      </span>
+                      {canAddNote && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => openEditNotePanel(note.id, note.content)}
+                          title="Edit note"
+                          data-testid={`button-edit-note-${note.id}`}
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-left w-full text-sm whitespace-pre-wrap text-muted-foreground line-clamp-2 underline-offset-2 hover:underline"
+                    onClick={() => {
+                      (note as PatientNote & { status?: string }).status === "incomplete"
+                        ? openEditNotePanel(note.id, note.content)
+                        : (setViewNote(note), setViewNoteOpen(true));
+                    }}
+                    title={(note as PatientNote & { status?: string }).status === "incomplete" ? "Open to continue editing" : "Open full note"}
+                    data-testid={`button-view-note-${note.id}`}
+                  >
+                    {note.content.length > 180 ? `${note.content.slice(0, 180)}...` : note.content}
+                  </button>
+                </CardContent>
+              </Card>
+            );
+            return (
+              <div className="space-y-6">
+                {incompleteNotes.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">Incomplete notes</p>
+                    <div className="space-y-3">
+                      {incompleteNotes.map((note) => renderNoteCard(note))}
+                    </div>
+                  </div>
+                )}
+                {signedNotes.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">Signed notes</p>
+                    <div className="space-y-3">
+                      {visibleSignedNotes.map((note) => renderNoteCard(note))}
+                    </div>
+                  </div>
+                )}
+                {notes.length === 0 && (
+                  <Card><CardContent className="p-8 text-center text-muted-foreground">No notes. {canAddNote ? "Use New Note to add a note, or Save to keep a draft." : ""}</CardContent></Card>
+                )}
+              </div>
+            );
+          })()}
         </TabsContent>
 
         <TabsContent value="history" className="space-y-4 mt-4">
@@ -1659,18 +2142,25 @@ export default function PatientDetailPage() {
               <ul className="space-y-2">
                 {patientAllergies.map((a) => (
                   <Card key={a.id} className={a.severity === "HIGH" ? "border-destructive/50" : ""}>
-                    <CardContent className="py-3 px-4 flex items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        {a.severity === "HIGH" && <AlertTriangle className="w-4 h-4 text-destructive shrink-0" />}
-                        <span className={a.severity === "HIGH" ? "text-destructive font-medium" : ""}>{a.allergen}</span>
-                        <Badge variant={a.severity === "HIGH" ? "destructive" : "secondary"} className="text-[10px]">{a.severity}</Badge>
-                        {a.reactionType && (
-                          <span className="text-xs text-muted-foreground">{a.reactionType}</span>
+                    <CardContent className="py-3 px-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {a.severity === "HIGH" && <AlertTriangle className="w-4 h-4 text-destructive shrink-0" />}
+                          <span className={a.severity === "HIGH" ? "text-destructive font-medium" : ""}>{a.allergen}</span>
+                          <Badge variant={a.severity === "HIGH" ? "destructive" : "secondary"} className="text-[10px]">{a.severity}</Badge>
+                          {a.reactionType && (
+                            <span className="text-xs text-muted-foreground">{a.reactionType}</span>
+                          )}
+                        </div>
+                        {canAddNote && (
+                          <Button size="sm" variant="ghost" onClick={() => deleteAllergyMutation.mutate(a.id)} disabled={deleteAllergyMutation.isPending}>Remove</Button>
                         )}
                       </div>
-                      {canAddNote && (
-                        <Button size="sm" variant="ghost" onClick={() => deleteAllergyMutation.mutate(a.id)} disabled={deleteAllergyMutation.isPending}>Remove</Button>
-                      )}
+                      <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                        Documented {a.createdAt ? format(new Date(a.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                        {" · "}
+                        By {a.addedBy ? (prescriberNameById.get(a.addedBy) ?? a.addedBy) : "Unknown user"}
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
@@ -1705,17 +2195,23 @@ export default function PatientDetailPage() {
                 <div className="space-y-3">
                   {labOrders.filter((o) => o.status === "resulted" || o.status === "completed").map((order) => (
                     <Card key={order.id}>
-                      <CardContent className="p-5">
-                        <div className="flex items-start justify-between gap-2 mb-2">
-                          <div>
-                            <p className="font-medium">{order.testName}</p>
-                            <p className="text-xs text-muted-foreground">{order.testCode || ""} · Resulted {order.completedAt ? format(new Date(order.completedAt), "MMM d, yyyy") : ""}</p>
-                          </div>
-                          {order.isCritical && <Badge variant="destructive" className="text-[10px]">Critical</Badge>}
+                      <CardContent className="py-3 px-4">
+                        <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
+                          <a href="/laboratory" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
+                            {order.testName}
+                          </a>
+                          {order.testCode && <span className="text-muted-foreground shrink-0">{order.testCode}</span>}
+                          <span className="text-muted-foreground shrink-0">Resulted</span>
+                          {order.result && <span className="text-muted-foreground shrink-0">{order.result}</span>}
+                          {order.isCritical && <Badge variant="destructive" className="text-[10px] shrink-0">Critical</Badge>}
                         </div>
-                        {order.result && <p className="text-sm mt-1">{order.result}</p>}
-                        {order.resultValue && <p className="text-xs text-muted-foreground mt-1">Values: {order.resultValue}</p>}
-                        {order.referenceRange && <p className="text-xs text-muted-foreground">Ref: {order.referenceRange}</p>}
+                        <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                          Resulted {order.completedAt ? format(new Date(order.completedAt), "MMM d, yyyy · HH:mm") : "—"}
+                          {" · "}
+                          By {prescriberNameById.get(order.orderedBy) ?? order.orderedBy ?? "Unknown user"}
+                          {order.resultValue ? ` · Values: ${order.resultValue}` : ""}
+                          {order.referenceRange ? ` · Ref: ${order.referenceRange}` : ""}
+                        </div>
                         {(order as LabOrder & { documentUrl?: string }).documentUrl && (
                           <a href={(order as LabOrder & { documentUrl?: string }).documentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 inline-block">View document</a>
                         )}
@@ -1724,9 +2220,18 @@ export default function PatientDetailPage() {
                   ))}
                   {patientDocuments.filter((d) => d.documentType === "lab_result").map((doc) => (
                     <Card key={doc.id}>
-                      <CardContent className="p-5">
-                        <p className="font-medium">{doc.title}</p>
-                        <p className="text-xs text-muted-foreground">Uploaded lab result</p>
+                      <CardContent className="py-3 px-4">
+                        <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
+                          <a href="/upload-results" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
+                            {doc.title}
+                          </a>
+                          <span className="text-muted-foreground shrink-0">Uploaded lab result</span>
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                          Uploaded {doc.createdAt ? format(new Date(doc.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                          {" · "}
+                          By {doc.uploadedBy ? (prescriberNameById.get(doc.uploadedBy) ?? doc.uploadedBy) : "Unknown user"}
+                        </div>
                         {doc.documentUrl && (
                           <a href={doc.documentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 inline-block">View document</a>
                         )}
@@ -1751,13 +2256,19 @@ export default function PatientDetailPage() {
                 <div className="space-y-3">
                   {imagingResults.map((img) => (
                     <Card key={img.id}>
-                      <CardContent className="p-5">
-                        <div className="flex items-start justify-between gap-2 mb-2">
-                          <p className="font-medium">{img.title}</p>
-                          <Badge variant="secondary" className="text-[10px]">{img.modality}</Badge>
+                      <CardContent className="py-3 px-4">
+                        <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
+                          <a href="/upload-results" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
+                            {img.title}
+                          </a>
+                          <span className="text-muted-foreground shrink-0">{img.modality}</span>
+                          {img.description && <span className="text-muted-foreground shrink-0">{img.description}</span>}
                         </div>
-                        <p className="text-xs text-muted-foreground">{img.performedAt ? format(new Date(img.performedAt), "MMM d, yyyy") : ""}</p>
-                        {img.description && <p className="text-sm mt-2">{img.description}</p>}
+                        <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                          Performed {img.performedAt ? format(new Date(img.performedAt), "MMM d, yyyy · HH:mm") : "—"}
+                          {" · "}
+                          By {img.uploadedBy ? (prescriberNameById.get(img.uploadedBy) ?? img.uploadedBy) : "Unknown user"}
+                        </div>
                         {img.documentUrl && (
                           <a href={img.documentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 inline-block">View document</a>
                         )}
@@ -1772,6 +2283,7 @@ export default function PatientDetailPage() {
           </div>
         </div>
       </Tabs>
+      </div>
 
       <Dialog open={addProblemOpen} onOpenChange={(open) => { if (!open) { setNewProblemStartDate(""); setNewProblemSymptoms(""); } setAddProblemOpen(open); }}>
         <DialogContent>
@@ -2039,96 +2551,178 @@ export default function PatientDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={newNoteOpen} onOpenChange={(open) => { setNewNoteOpen(open); if (!open) setNewNoteType("Progress Note"); }}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>New Note</DialogTitle></DialogHeader>
-          <p className="text-xs text-muted-foreground">This will be saved and signed as {user?.role === "nurse" ? "Nursing note" : "Clinician note"}.</p>
-          <div className="space-y-2">
-            <Label>Note type</Label>
-            <div className="flex flex-wrap gap-2">
-              {NOTE_TYPES.map((type) => (
-                <Button
-                  key={type}
-                  type="button"
-                  variant={newNoteType === type ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setNewNoteType(type)}
-                  data-testid={`note-type-${type.replace(/\s+/g, "-").toLowerCase()}`}
-                >
-                  {type}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <Label>Note content</Label>
+      {(newNoteOpen || editNoteOpen) && (
+        <aside className={`flex-shrink-0 h-full border-l border-border bg-background flex overflow-hidden transition-[width] ${notePanelCollapsed ? "w-7" : "w-[min(28rem,90vw)]"}`}>
+          {notePanelCollapsed ? (
+            <div className="relative w-full h-full">
               <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={noteAiLoading}
-                onClick={handleAiSuggestNote}
-                className="gap-1.5"
-              >
-                <Sparkles className="w-4 h-4" />
-                {noteAiLoading ? "Improving..." : "Improve with AI"}
-              </Button>
-            </div>
-            <div className="relative w-full rounded-md border border-input bg-background ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2">
-              <Textarea
-                value={newNoteContent}
-                onChange={(e) => setNewNoteContent(e.target.value)}
-                placeholder="Enter note content... Use the microphone to dictate."
-                rows={6}
-                className="resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 pr-12 pb-12 min-h-0"
-                data-testid="input-note-content"
-              />
-              <Button
-                type="button"
-                variant={noteListening ? "default" : "outline"}
+                variant="ghost"
                 size="icon"
-                className="absolute bottom-2 right-2 h-9 w-9 rounded-full shrink-0"
-                onClick={toggleNoteDictation}
-                title={noteListening ? "Stop dictation" : "Start dictation"}
-                data-testid="button-note-dictation"
+                onClick={() => setNotePanelCollapsed(false)}
+                title="Expand note panel"
+                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-5 w-5 rounded-full p-0 border border-border/60 bg-muted/40 hover:bg-muted/70"
+                data-testid="button-expand-note"
               >
-                <Mic className="w-4 h-4" />
+                <ChevronLeft className="w-3 h-3" />
               </Button>
             </div>
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setNewNoteOpen(false)}>Cancel</Button>
-            <Button onClick={() => addNoteMutation.mutate({ content: newNoteContent, noteKind: newNoteType })} disabled={!newNoteContent.trim() || addNoteMutation.isPending} data-testid="button-sign-note">
-              {addNoteMutation.isPending ? "Signing..." : "Sign & Save Note"}
+          ) : (
+            <>
+          <div className="relative shrink-0 w-6 h-full border-r border-border bg-muted/30">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setNotePanelCollapsed(true)}
+              title="Collapse note panel"
+              className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-5 w-5 rounded-full p-0 border border-border/60 bg-background hover:bg-muted/50"
+              data-testid="button-collapse-note"
+            >
+              <ChevronRight className="w-3 h-3" />
             </Button>
-          </DialogFooter>
+          </div>
+          <div className="flex flex-1 flex-col min-w-0">
+          <div className="border-b px-6 py-4">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-lg font-semibold truncate">{newNoteOpen ? "New Note" : "Edit note"}</h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {newNoteOpen
+                    ? `Save as draft or sign when ready.`
+                    : "Save as incomplete or sign to finalize."}
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3 min-h-0">
+            {newNoteOpen ? (
+              <>
+                <div className="space-y-2">
+                  <Label>Note type</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {NOTE_TYPES.map((type) => (
+                      <Button key={type} type="button" variant={newNoteType === type ? "default" : "outline"} size="sm" onClick={() => setNewNoteType(type)} data-testid={`note-type-${type.replace(/\s+/g, "-").toLowerCase()}`}>
+                        {type}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2 flex flex-col flex-1 min-h-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label>Note content</Label>
+                    <Button type="button" variant="outline" size="sm" disabled={noteAiLoading} onClick={handleAiSuggestNote} className="gap-1.5">
+                      <Sparkles className="w-4 h-4" />
+                      {noteAiLoading ? "Improving..." : "Improve with AI"}
+                    </Button>
+                  </div>
+                  <div className="relative w-full rounded-md border border-input bg-background ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 flex flex-col flex-1 min-h-0">
+                    <Textarea
+                      value={newNoteContent}
+                      onChange={(e) => setNewNoteContent(e.target.value)}
+                      placeholder="Enter note content... Use the microphone to dictate."
+                      className="resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 pr-14 pb-14 block w-full flex-1 min-h-0"
+                      data-testid="input-note-content"
+                    />
+                    <div className="absolute inset-0 pointer-events-none flex items-end justify-end p-3">
+                      <Button type="button" variant={noteListening ? "default" : "outline"} size="icon" className="pointer-events-auto h-9 w-9 rounded-full shrink-0 z-10" onClick={toggleNoteDictation} title={noteListening ? "Stop dictation" : "Start dictation"} data-testid="button-note-dictation">
+                        <Mic className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-2 flex flex-col min-h-0">
+                <Label>Note content</Label>
+                <Textarea value={editNoteContent} onChange={(e) => setEditNoteContent(e.target.value)} placeholder="Enter note content..." className="resize-none flex-1 min-h-0" data-testid="input-edit-note-content" />
+              </div>
+            )}
+          </div>
+          <div className="border-t px-3 py-1.5">
+            <DialogFooter className="flex-wrap gap-1">
+              <Button variant="secondary" size="sm" className="h-8 px-2.5 text-xs" onClick={closeNotePanel}>Exit</Button>
+              <Button
+                variant="outline"
+                onClick={() => newNoteOpen ? saveIncompleteNoteMutation.mutate({ content: newNoteContent, noteKind: newNoteType }) : editNoteId && saveIncompleteNoteMutation.mutate({ noteId: editNoteId, content: editNoteContent })}
+                disabled={saveIncompleteNoteMutation.isPending || (newNoteOpen ? false : !editNoteId)}
+                data-testid="button-save-incomplete-note"
+                size="sm"
+                className="h-8 px-2.5 text-xs"
+              >
+                {saveIncompleteNoteMutation.isPending ? "Saving..." : "Save"}
+              </Button>
+              {newNoteOpen ? (
+                <Button size="sm" className="h-8 px-2.5 text-xs" onClick={() => addNoteMutation.mutate({ content: newNoteContent, noteKind: newNoteType })} disabled={!newNoteHasMinContent || addNoteMutation.isPending} data-testid="button-sign-note">
+                  {addNoteMutation.isPending ? "Signing..." : "Sign Note"}
+                </Button>
+              ) : (() => {
+                const editingNote = notes.find((n) => n.id === editNoteId);
+                const isIncomplete = (editingNote as PatientNote & { status?: string })?.status === "incomplete";
+                return isIncomplete ? (
+                  <Button size="sm" className="h-8 px-2.5 text-xs" onClick={() => editNoteId && updateNoteMutation.mutate({ noteId: editNoteId, content: editNoteContent, signAndSave: true })} disabled={!editNoteHasMinContent || updateNoteMutation.isPending || !editNoteId} data-testid="button-sign-note">
+                    {updateNoteMutation.isPending ? "Signing..." : "Sign Note"}
+                  </Button>
+                ) : (
+                  <Button size="sm" className="h-8 px-2.5 text-xs" onClick={() => editNoteId && updateNoteMutation.mutate({ noteId: editNoteId, content: editNoteContent })} disabled={!editNoteHasMinContent || updateNoteMutation.isPending || !editNoteId} data-testid="button-save-edited-note">
+                    {updateNoteMutation.isPending ? "Saving..." : "Save changes"}
+                  </Button>
+                );
+              })()}
+            </DialogFooter>
+          </div>
+          </div>
+            </>
+          )}
+        </aside>
+      )}
+
+      <Dialog open={viewNoteOpen} onOpenChange={(open) => { setViewNoteOpen(open); if (!open) setViewNote(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Review note</DialogTitle>
+          </DialogHeader>
+          {viewNote && (
+            <div className="space-y-3 py-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge variant="secondary" className="text-[10px]">
+                  {(viewNote as PatientNote & { noteKind?: string }).noteKind ?? "Progress Note"}
+                </Badge>
+                <Badge variant="outline" className="text-[10px]">
+                  {viewNote.authorRole === "nursing" ? "Nursing" : "Clinician"}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  Signed {viewNote.signedAt ? format(new Date(viewNote.signedAt), "MMM d, yyyy · HH:mm") : "—"}
+                  {" · "}
+                  By {viewNote.authorId ? (prescriberNameById.get(viewNote.authorId) ?? viewNote.authorId) : "Unknown user"}
+                </span>
+              </div>
+              <div className="rounded-md border bg-muted/30 p-3">
+                <p className="text-sm whitespace-pre-wrap">{viewNote.content}</p>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editNoteOpen} onOpenChange={(open) => { setEditNoteOpen(open); if (!open) { setEditNoteId(null); setEditNoteContent(""); } }}>
+      <Dialog open={leaveNotePromptOpen} onOpenChange={setLeaveNotePromptOpen}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Edit note</DialogTitle></DialogHeader>
-          <p className="text-xs text-muted-foreground">Changes will be saved and the note status will be set to Edited.</p>
-          <div className="space-y-2">
-            <Label>Note content</Label>
-            <Textarea
-              value={editNoteContent}
-              onChange={(e) => setEditNoteContent(e.target.value)}
-              placeholder="Enter note content..."
-              rows={6}
-              className="resize-none"
-              data-testid="input-edit-note-content"
-            />
-          </div>
+          <DialogHeader>
+            <DialogTitle>Finish the open note</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            You have an open note. Sign it before leaving the appointment, or stay here and continue editing.
+          </p>
           <DialogFooter>
-            <Button variant="secondary" onClick={() => { setEditNoteOpen(false); setEditNoteId(null); setEditNoteContent(""); }}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setLeaveNotePromptOpen(false); setPendingLeavePath(null); }}>
+              Stay here
+            </Button>
             <Button
-              onClick={() => editNoteId && updateNoteMutation.mutate({ noteId: editNoteId, content: editNoteContent })}
-              disabled={!editNoteContent.trim() || updateNoteMutation.isPending || !editNoteId}
-              data-testid="button-save-edited-note"
+              onClick={() => {
+                setLeaveNotePromptOpen(false);
+                signAndLeavePending();
+              }}
+              disabled={addNoteMutation.isPending || updateNoteMutation.isPending}
             >
-              {updateNoteMutation.isPending ? "Saving..." : "Save changes"}
+              Sign note
             </Button>
           </DialogFooter>
         </DialogContent>

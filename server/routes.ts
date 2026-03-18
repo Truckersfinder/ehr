@@ -341,7 +341,7 @@ export async function registerRoutes(
       const severity = body.severity && ["LOW", "MEDIUM", "HIGH"].includes(String(body.severity)) ? String(body.severity) : "LOW";
       const reactionType = body.reactionType && typeof body.reactionType === "string" ? String(body.reactionType).trim() || null : null;
       if (!allergen) return res.status(400).json({ message: "Allergen is required" });
-      const created = await storage.createPatientAllergy({ patientId, allergen, severity: severity as "LOW" | "MEDIUM" | "HIGH", reactionType });
+      const created = await storage.createPatientAllergy({ patientId, allergen, severity: severity as "LOW" | "MEDIUM" | "HIGH", reactionType, addedBy: req.user.id });
       await storage.createAuditLog({ userId: req.user.id, action: "ADD_PATIENT_ALLERGY", resource: "patient_allergy", resourceId: created.id });
       return res.status(201).json(created);
     } catch (error: any) {
@@ -375,7 +375,9 @@ export async function registerRoutes(
       const patientId = req.params.id;
       const body = req.body && typeof req.body === "object" ? req.body : {};
       const content = body.content;
-      if (!content || typeof content !== "string" || !String(content).trim()) {
+      const saveAsIncomplete = body.saveAsIncomplete === true;
+      const trimmed = typeof content === "string" ? String(content).trim() : "";
+      if (!saveAsIncomplete && (!content || !trimmed)) {
         res.status(400).json({ message: "Note content is required" });
         return;
       }
@@ -386,8 +388,9 @@ export async function registerRoutes(
         authorId: req.user.id,
         authorRole: authorRole as "nursing" | "clinician",
         noteKind: noteKind || "Progress Note",
-        content: String(content).trim(),
-      });
+        content: saveAsIncomplete ? (trimmed || "(Draft)") : trimmed,
+        ...(saveAsIncomplete ? { status: "incomplete" as const } : {}),
+      } as any);
       await storage.createAuditLog({ userId: req.user.id, action: "ADD_PATIENT_NOTE", resource: "patient_note", resourceId: created.id });
       res.status(201).json(created);
     };
@@ -406,10 +409,15 @@ export async function registerRoutes(
       if (!note) return res.status(404).json({ message: "Note not found" });
       const body = req.body && typeof req.body === "object" ? req.body : {};
       const content = body.content;
+      const saveAsIncomplete = body.saveAsIncomplete === true;
+      const signAndSave = body.signAndSave === true;
       if (content !== undefined && (typeof content !== "string" || !String(content).trim())) {
         return res.status(400).json({ message: "Note content cannot be empty" });
       }
-      const updates: { content?: string; status: string } = { status: "edited" };
+      const updates: { content?: string; status: string; signedAt?: Date | null } = {
+        status: signAndSave ? "signed" : saveAsIncomplete ? "incomplete" : "edited",
+      };
+      if (signAndSave) updates.signedAt = new Date();
       if (content !== undefined) updates.content = String(content).trim();
       const updated = await storage.updatePatientNote(noteId, updates);
       if (!updated) return res.status(404).json({ message: "Note not found" });
@@ -733,6 +741,16 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/lab-orders/:id", authMiddleware as any, requireRole("nurse", "clinician") as any, async (req: any, res) => {
+    try {
+      await storage.deleteLabOrder(req.params.id);
+      await storage.createAuditLog({ userId: req.user.id, action: "DELETE_LAB_ORDER", resource: "lab_order", resourceId: req.params.id });
+      return res.json({ ok: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/imaging-results", authMiddleware as any, async (req: any, res) => {
     try {
       const patientId = req.query.patientId as string;
@@ -789,6 +807,16 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/imaging-orders/:id", authMiddleware as any, requireRole("nurse", "clinician") as any, async (req: any, res) => {
+    try {
+      await storage.deleteImagingOrder(req.params.id);
+      await storage.createAuditLog({ userId: req.user.id, action: "DELETE_IMAGING_ORDER", resource: "imaging_order", resourceId: req.params.id });
+      return res.json({ ok: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/patient-documents", authMiddleware as any, async (req: any, res) => {
     try {
       const patientId = req.query.patientId as string;
@@ -840,6 +868,16 @@ export async function registerRoutes(
       if (!updated) return res.status(404).json({ message: "Prescription not found" });
       await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_PRESCRIPTION", resource: "prescription", resourceId: req.params.id });
       return res.json(updated);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/prescriptions/:id", authMiddleware as any, requireRole("nurse", "clinician") as any, async (req: any, res) => {
+    try {
+      await storage.deletePrescription(req.params.id);
+      await storage.createAuditLog({ userId: req.user.id, action: "DELETE_PRESCRIPTION", resource: "prescription", resourceId: req.params.id });
+      return res.json({ ok: true });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }

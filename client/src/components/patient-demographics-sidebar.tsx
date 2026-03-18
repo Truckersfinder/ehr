@@ -13,7 +13,7 @@ function getAge(dob: string) {
   return Math.floor((Date.now() - new Date(dob).getTime()) / (1000 * 60 * 60 * 24 * 365.25));
 }
 
-export function PatientDemographicsSidebar({ patientId }: { patientId: string }) {
+export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { patientId: string; onRequestLeave?: (path: string) => void }) {
   const [, navigate] = useLocation();
   const token = typeof localStorage !== "undefined" ? localStorage.getItem("ehr_token") : null;
 
@@ -26,6 +26,17 @@ export function PatientDemographicsSidebar({ patientId }: { patientId: string })
     },
     enabled: !!patientId && !!token,
   });
+
+  const { data: users = [] } = useQuery<Omit<UserType, "password">[]>({
+    queryKey: ["/api/users"],
+    queryFn: async () => {
+      const res = await fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!token,
+  });
+  const userNameById = new Map(users.map((u) => [u.id, u.fullName || u.username || "Unknown user"]));
 
   const { data: primaryProvider } = useQuery<Omit<UserType, "password"> | null>({
     queryKey: ["/api/users", "provider", patient?.primaryProviderId],
@@ -93,7 +104,7 @@ export function PatientDemographicsSidebar({ patientId }: { patientId: string })
     >
       <div className="p-4 space-y-4">
         <div className="flex items-center gap-2">
-          <Button size="icon" variant="ghost" onClick={() => navigate("/schedule")} data-testid="button-back">
+          <Button size="icon" variant="ghost" onClick={() => (onRequestLeave ? onRequestLeave("/schedule") : navigate("/schedule"))} data-testid="button-back">
             <ArrowLeft className="w-4 h-4" />
           </Button>
           <div className="min-w-0">
@@ -140,11 +151,30 @@ export function PatientDemographicsSidebar({ patientId }: { patientId: string })
                 <span>Blood: {patient.bloodGroup}</span>
               </div>
             )}
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-background/50 p-3">
+          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Allergies</h3>
+          <div className="space-y-1.5 text-sm">
             {showInRed ? (
               <div className="flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
-                <span className="text-destructive text-sm">{showInRed}</span>
+                <span className="text-destructive">{showInRed}</span>
               </div>
+            ) : patientAllergies.length > 0 ? (
+              <ul className="space-y-1">
+                {patientAllergies.map((a) => (
+                  <li key={a.id} className={a.severity === "HIGH" ? "text-destructive font-medium" : "text-muted-foreground"}>
+                    <span>{a.allergen} {a.severity && <span className="text-muted-foreground">({a.severity})</span>}</span>
+                    <span className="block text-xs text-muted-foreground font-normal">
+                      Documented {a.createdAt ? format(new Date(a.createdAt), "MMM d, yyyy · HH:mm") : "—"} · By {a.addedBy ? (userNameById.get(a.addedBy) ?? a.addedBy) : "Unknown user"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : hasLegacyAllergies ? (
+              <p className="text-muted-foreground text-sm whitespace-pre-wrap">{patient!.allergies}</p>
             ) : (
               <p className="text-muted-foreground text-xs">No known allergies</p>
             )}
@@ -156,6 +186,7 @@ export function PatientDemographicsSidebar({ patientId }: { patientId: string })
           <div className="space-y-1.5 text-sm">
             {latestVitals ? (
               <>
+                <p className="text-xs text-muted-foreground mb-1.5">Last recorded {latestVitals.recordedAt ? format(new Date(latestVitals.recordedAt), "MMM d, yyyy · HH:mm") : ""}</p>
                 {latestVitals.height != null && (
                   <div className="flex items-center gap-2">
                     <Activity className="w-4 h-4 text-muted-foreground shrink-0" />
@@ -174,7 +205,19 @@ export function PatientDemographicsSidebar({ patientId }: { patientId: string })
                     <span>BP: {latestVitals.bloodPressureSystolic ?? "—"} / {latestVitals.bloodPressureDiastolic ?? "—"} mmHg</span>
                   </div>
                 )}
-                {!latestVitals.height && !latestVitals.weight && latestVitals.bloodPressureSystolic == null && latestVitals.bloodPressureDiastolic == null && (
+                {latestVitals.temperature != null && (
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <span>Temp: {latestVitals.temperature} °C</span>
+                  </div>
+                )}
+                {latestVitals.heartRate != null && (
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <span>HR: {latestVitals.heartRate} bpm</span>
+                  </div>
+                )}
+                {!latestVitals.height && !latestVitals.weight && latestVitals.bloodPressureSystolic == null && latestVitals.bloodPressureDiastolic == null && latestVitals.temperature == null && latestVitals.heartRate == null && (
                   <p className="text-muted-foreground text-xs">No vitals recorded</p>
                 )}
               </>

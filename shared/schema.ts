@@ -63,7 +63,7 @@ export const patientProblems = pgTable("patient_problems", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   patientId: varchar("patient_id").notNull(),
   problem: text("problem").notNull(),
-  addedBy: varchar("added_by").notNull(),
+  addedBy: varchar("added_by"),
   status: text("status").notNull().default("active"),
   problemStartDate: date("problem_start_date"),
   symptoms: text("symptoms"),
@@ -79,6 +79,7 @@ export const patientAllergies = pgTable("patient_allergies", {
   allergen: text("allergen").notNull(),
   severity: allergySeverityEnum("severity").notNull().default("HIGH"),
   reactionType: text("reaction_type"),
+  addedBy: varchar("added_by").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

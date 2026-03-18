@@ -80,7 +80,7 @@ function AuthenticatedApp() {
     <SidebarProvider style={style as React.CSSProperties}>
       <div className="flex h-screen w-full">
         {isPatientChart && patientId ? (
-          <PatientDemographicsSidebar patientId={patientId} />
+          <PatientDemographicsSidebar patientId={patientId} onRequestLeave={(path) => window.dispatchEvent(new CustomEvent("ehr-request-leave", { detail: path }))} />
         ) : (
           <AppSidebar />
         )}

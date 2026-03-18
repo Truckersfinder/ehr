@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, like, or, desc, and, sql, count, inArray } from "drizzle-orm";
+import { eq, like, ilike, or, desc, and, sql, count, inArray } from "drizzle-orm";
 import {
   users, facilities, patients, patientProblems, patientAllergies, patientNotes, familyMembers, familyMemberConditions,
   encounters, vitals, appointments, labOrders, imagingOrders, prescriptions, invoices, imagingResults, patientDocuments, auditLogs,
@@ -39,7 +39,7 @@ export interface IStorage {
 
   getPatientNotes(patientId: string): Promise<PatientNote[]>;
   createPatientNote(n: InsertPatientNote): Promise<PatientNote>;
-  updatePatientNote(id: string, data: Partial<Pick<InsertPatientNote, "content" | "status">>): Promise<PatientNote | undefined>;
+  updatePatientNote(id: string, data: Partial<Pick<InsertPatientNote, "content" | "status">> & { signedAt?: Date | null }): Promise<PatientNote | undefined>;
 
   getFamilyMembers(patientId: string): Promise<FamilyMember[]>;
   createFamilyMember(f: InsertFamilyMember): Promise<FamilyMember>;
@@ -66,6 +66,7 @@ export interface IStorage {
   getLabOrders(patientId?: string): Promise<LabOrder[]>;
   createLabOrder(l: InsertLabOrder): Promise<LabOrder>;
   updateLabOrder(id: string, data: Partial<InsertLabOrder>): Promise<LabOrder | undefined>;
+  deleteLabOrder(id: string): Promise<void>;
 
   getImagingResults(patientId: string): Promise<ImagingResult[]>;
   createImagingResult(r: InsertImagingResult): Promise<ImagingResult>;
@@ -73,6 +74,7 @@ export interface IStorage {
   getImagingOrders(patientId?: string): Promise<ImagingOrder[]>;
   createImagingOrder(o: InsertImagingOrder): Promise<ImagingOrder>;
   updateImagingOrder(id: string, data: Partial<InsertImagingOrder>): Promise<ImagingOrder | undefined>;
+  deleteImagingOrder(id: string): Promise<void>;
 
   getPatientDocuments(patientId: string): Promise<PatientDocument[]>;
   createPatientDocument(d: InsertPatientDocument): Promise<PatientDocument>;
@@ -80,6 +82,7 @@ export interface IStorage {
   getPrescriptions(patientId?: string): Promise<Prescription[]>;
   createPrescription(p: InsertPrescription): Promise<Prescription>;
   updatePrescription(id: string, data: Partial<InsertPrescription>): Promise<Prescription | undefined>;
+  deletePrescription(id: string): Promise<void>;
 
   getInvoices(patientId?: string): Promise<Invoice[]>;
   createInvoice(i: InsertInvoice): Promise<Invoice>;
@@ -141,16 +144,21 @@ export class DatabaseStorage implements IStorage {
   }
 
   async searchPatients(query: string): Promise<Patient[]> {
-    const pattern = `%${query}%`;
-    return db.select().from(patients).where(
-      or(
-        like(patients.firstName, pattern),
-        like(patients.lastName, pattern),
-        like(patients.mrn, pattern),
-        like(patients.nationalId, pattern),
-        like(patients.phone, pattern),
-      )
-    );
+    const tokens = String(query ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 5);
+    if (tokens.length === 0) return [];
+
+    const tokenFilters = tokens.map((t) => {
+      const pattern = `%${t}%`;
+      return or(
+        ilike(patients.firstName, pattern),
+        ilike(patients.lastName, pattern),
+        ilike(patients.mrn, pattern),
+        ilike(patients.nationalId, pattern),
+        ilike(patients.phone, pattern),
+      );
+    });
+
+    return db.select().from(patients).where(and(...tokenFilters));
   }
 
   async createPatient(p: InsertPatient): Promise<Patient> {
@@ -191,15 +199,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getPatientNotes(patientId: string): Promise<PatientNote[]> {
-    return db.select().from(patientNotes).where(eq(patientNotes.patientId, patientId)).orderBy(desc(patientNotes.signedAt));
+    return db.select().from(patientNotes).where(eq(patientNotes.patientId, patientId)).orderBy(desc(sql`coalesce(${patientNotes.signedAt}, ${patientNotes.createdAt})`));
   }
 
   async createPatientNote(n: InsertPatientNote): Promise<PatientNote> {
-    const [created] = await db.insert(patientNotes).values({ ...n, signedAt: new Date() }).returning();
+    const status = (n as { status?: string }).status ?? "signed";
+    const signedAt = status === "incomplete" ? null : new Date();
+    const [created] = await db.insert(patientNotes).values({ ...n, status, signedAt: signedAt as any }).returning();
     return created;
   }
 
-  async updatePatientNote(id: string, data: Partial<Pick<InsertPatientNote, "content" | "status">>): Promise<PatientNote | undefined> {
+  async updatePatientNote(id: string, data: Partial<Pick<InsertPatientNote, "content" | "status">> & { signedAt?: Date | null }): Promise<PatientNote | undefined> {
     const [updated] = await db.update(patientNotes).set(data).where(eq(patientNotes.id, id)).returning();
     return updated;
   }
@@ -337,6 +347,10 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async deleteLabOrder(id: string): Promise<void> {
+    await db.delete(labOrders).where(eq(labOrders.id, id));
+  }
+
   async getImagingResults(patientId: string): Promise<ImagingResult[]> {
     return db.select().from(imagingResults).where(eq(imagingResults.patientId, patientId)).orderBy(desc(imagingResults.performedAt));
   }
@@ -363,6 +377,10 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async deleteImagingOrder(id: string): Promise<void> {
+    await db.delete(imagingOrders).where(eq(imagingOrders.id, id));
+  }
+
   async getPatientDocuments(patientId: string): Promise<PatientDocument[]> {
     return db.select().from(patientDocuments).where(eq(patientDocuments.patientId, patientId)).orderBy(desc(patientDocuments.createdAt));
   }
@@ -387,6 +405,10 @@ export class DatabaseStorage implements IStorage {
   async updatePrescription(id: string, data: Partial<InsertPrescription>): Promise<Prescription | undefined> {
     const [updated] = await db.update(prescriptions).set(data).where(eq(prescriptions.id, id)).returning();
     return updated;
+  }
+
+  async deletePrescription(id: string): Promise<void> {
+    await db.delete(prescriptions).where(eq(prescriptions.id, id));
   }
 
   async getInvoices(patientId?: string): Promise<Invoice[]> {
