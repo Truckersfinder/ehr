@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation, useSearch } from "wouter";
 import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,12 +17,16 @@ import { useToast } from "@/hooks/use-toast";
 import { Plus, AlertTriangle, Building2, Upload } from "lucide-react";
 import { format } from "date-fns";
 import { DocumentFileUpload } from "@/components/document-file-upload";
+import { labOrderStatusBadgeClass } from "@/lib/lab-order-status";
 import type { LabOrder, Patient } from "@shared/schema";
 
 export default function LaboratoryPage() {
-  const { user } = useAuth();
+  const [, navigate] = useLocation();
+  const search = useSearch();
+  const patientIdFromUrl = useMemo(() => new URLSearchParams(search).get("patientId"), [search]);
+
+  const { user, token } = useAuth();
   const { toast } = useToast();
-  const token = localStorage.getItem("ehr_token");
   const [open, setOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState<string | null>(null);
   const [uploadResultOpen, setUploadResultOpen] = useState<string | null>(null);
@@ -47,6 +52,17 @@ export default function LaboratoryPage() {
   });
 
   const patientMap = new Map(patients.map((p) => [p.id, p]));
+
+  const ordersForView = useMemo(() => {
+    if (!patientIdFromUrl) return orders;
+    return orders.filter((o) => o.patientId === patientIdFromUrl);
+  }, [orders, patientIdFromUrl]);
+
+  useEffect(() => {
+    if (patientIdFromUrl) {
+      setFormData((f) => ({ ...f, patientId: patientIdFromUrl }));
+    }
+  }, [patientIdFromUrl]);
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
@@ -97,14 +113,6 @@ export default function LaboratoryPage() {
     },
   });
 
-  const statusColors: Record<string, string> = {
-    ordered: "bg-chart-4/10 text-chart-4",
-    collected: "bg-chart-5/10 text-chart-5",
-    processing: "bg-chart-2/10 text-chart-2",
-    completed: "bg-chart-3/10 text-chart-3",
-    cancelled: "bg-destructive/10 text-destructive",
-  };
-
   const getInternalExternal = (o: LabOrder & { internalExternal?: string; internal_external?: string }) => {
     const v =
       (o as { internalExternal?: string; internal_external?: string }).internalExternal ??
@@ -112,16 +120,38 @@ export default function LaboratoryPage() {
       "internal";
     return String(v).toLowerCase() === "external" ? "external" : "internal";
   };
-  const isInternal = (o: LabOrder & { internalExternal?: string; internal_external?: string }) => getInternalExternal(o) !== "external";
-  const internalOrders = orders.filter(isInternal);
-  const externalOrders = orders.filter((o) => getInternalExternal(o) === "external");
+  const isInternal = (o: LabOrder & { internalExternal?: string | null; internal_external?: string | null }) =>
+    getInternalExternal(o as LabOrder & { internalExternal?: string; internal_external?: string }) !== "external";
+  const internalOrders = ordersForView.filter(isInternal);
+  const externalOrders = ordersForView.filter(
+    (o) => getInternalExternal(o as LabOrder & { internalExternal?: string; internal_external?: string }) === "external"
+  );
 
   const isResulted = (o: LabOrder) => o.status === "resulted" || o.status === "completed";
   const internalPending = internalOrders.filter((o) => !isResulted(o) && o.status !== "cancelled");
   const externalPending = externalOrders.filter((o) => !isResulted(o) && o.status !== "cancelled");
 
+  const filterPatient = patientIdFromUrl ? patientMap.get(patientIdFromUrl) : null;
+
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto" data-testid="laboratory-page">
+      {patientIdFromUrl && (
+        <div
+          className="rounded-md border border-primary/25 bg-primary/5 px-3 py-2 text-sm flex flex-wrap items-center justify-between gap-2"
+          data-testid="laboratory-patient-filter-banner"
+        >
+          <span>
+            Showing lab orders for{" "}
+            <strong>
+              {filterPatient ? `${filterPatient.firstName} ${filterPatient.lastName}` : "selected patient"}
+            </strong>
+            {filterPatient && <span className="text-muted-foreground font-mono text-xs ml-1">({filterPatient.mrn})</span>}
+          </span>
+          <Button type="button" variant="outline" size="sm" onClick={() => navigate("/laboratory")}>
+            Show all patients
+          </Button>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Laboratory</h1>
@@ -208,7 +238,7 @@ export default function LaboratoryPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="secondary" className={`text-[10px] ${statusColors[order.status]}`}>{order.status}</Badge>
+                      <Badge variant="secondary" className={`text-[10px] ${labOrderStatusBadgeClass(order.status)}`}>{order.status}</Badge>
                       {order.status === "ordered" && (
                         <Button size="sm" variant="secondary" onClick={() => updateMutation.mutate({ id: order.id, data: { status: "collected" } })}>
                           Mark Collected

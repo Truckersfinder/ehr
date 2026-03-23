@@ -32,6 +32,12 @@ export async function setupVite(server: Server, app: Express) {
   app.use(vite.middlewares);
 
   app.use("/{*path}", async (req, res, next) => {
+    // Never serve SPA HTML for /api — unmatched API routes used to fall through here with 200 + HTML,
+    // which broke clients expecting JSON (e.g. profile photo upload).
+    if (req.path.startsWith("/api")) {
+      return res.status(404).json({ message: "Not found" });
+    }
+
     const url = req.originalUrl;
 
     try {

@@ -22,10 +22,9 @@ import type { Encounter, Patient, Vitals } from "@shared/schema";
 export default function EncounterDetailPage() {
   const [, params] = useRoute("/encounters/:id");
   const [, navigate] = useLocation();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const { toast } = useToast();
   const id = params?.id;
-  const token = localStorage.getItem("ehr_token");
 
   const { data: encounter, isLoading } = useQuery<Encounter>({
     queryKey: ["/api/encounters", id],

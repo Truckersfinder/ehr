@@ -1,8 +1,10 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useRoute, useLocation } from "wouter";
+import { useRoute, useLocation, useSearch, Link } from "wouter";
 import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
+import { getStoredAuthToken } from "@/lib/auth-storage";
+import { LAB_ORDER_STATUS_BADGE_CLASSES } from "@/lib/lab-order-status";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,17 +17,33 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid, User, CalendarDays, Phone, Mail, MapPin, Heart, ChevronLeft, ChevronRight, Trash2,
+  Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid, User, CalendarDays, Phone, Mail, MapPin, Heart, ChevronLeft, ChevronRight, Trash2, ScrollText,
 } from "lucide-react";
 import { format } from "date-fns";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from "recharts";
 import { ChartContainer } from "@/components/ui/chart";
-import type { Patient, Encounter, Prescription, LabOrder, PatientProblem, PatientNote, FamilyMember, FamilyMemberCondition, ImagingResult, ImagingOrder, PatientDocument, Vitals, PatientAllergy } from "@shared/schema";
+import type { Patient, Encounter, Prescription, LabOrder, PatientProblem, PatientNote, FamilyMember, FamilyMemberCondition, ImagingResult, ImagingOrder, PatientDocument, Vitals, PatientAllergy, Appointment } from "@shared/schema";
+import { normalizePatientRow } from "@/lib/patient-photo";
+import {
+  mergeLatestStoryboardVitals,
+  storyboardVitalsHasAnyValue,
+  storyboardVitalsLatestTimestamp,
+} from "@/lib/storyboard-vitals";
 import { FAMILY_RELATIONSHIPS, COMMON_INHERITED_CONDITIONS_AFRICA } from "@/lib/family-history-constants";
 import { DOSE_OPTIONS, FREQUENCY_OPTIONS, DURATION_OPTIONS } from "@/lib/medication-order-options";
 import { COMMON_LAB_TESTS_AFRICA } from "@/lib/common-lab-tests-africa";
@@ -38,8 +56,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DocumentFileUpload } from "@/components/document-file-upload";
+import { VisitSummaryTab } from "@/components/visit-summary-tab";
+import {
+  setClinicianVisitDocumentationSession,
+  clearClinicianVisitDocumentationSession,
+  readClinicianVisitDocumentationSession,
+} from "@/lib/clinician-visit-doc-session";
+import { cn } from "@/lib/utils";
 
 const ALLERGY_REACTION_TYPES = [
   "Anaphylaxis",
@@ -55,13 +79,29 @@ const ALLERGY_REACTION_TYPES = [
   "Not specified",
 ];
 
+function safeFormatDateTime(value: unknown): string {
+  if (value == null || value === "") return "—";
+  const d = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(d.getTime()) ? "—" : format(d, "MMM d, yyyy · HH:mm");
+}
+
+/** Active schedule encounter for this chart (from session). Use at save time — not React state — so documentation links before visitSummaryMeta finishes loading. */
+function readScheduleEncounterIdForPatient(patientId: string | undefined): string | null {
+  if (typeof window === "undefined" || !patientId) return null;
+  const eid = sessionStorage.getItem("ehr_active_encounter_id");
+  const pid = sessionStorage.getItem("ehr_active_encounter_patient_id");
+  if (!eid || pid !== patientId) return null;
+  return eid;
+}
+
 export default function PatientDetailPage() {
   const [, params] = useRoute("/patients/:id");
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
+  const urlSearch = useSearch();
   const { user, token } = useAuth();
   const { toast } = useToast();
   const id = params?.id;
-  const authToken = token ?? (typeof localStorage !== "undefined" ? localStorage.getItem("ehr_token") : null);
+  const authToken = token ?? getStoredAuthToken();
 
   const [addProblemOpen, setAddProblemOpen] = useState(false);
   const [newProblem, setNewProblem] = useState("");
@@ -116,6 +156,7 @@ export default function PatientDetailPage() {
   const [allergenSuggestLoading, setAllergenSuggestLoading] = useState(false);
   const [allergenSuggestOpen, setAllergenSuggestOpen] = useState(false);
   const allergenSuggestDebounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const allergenSuggestContainerRef = useRef<HTMLDivElement>(null);
   const [noteAiLoading, setNoteAiLoading] = useState(false);
   const noteRecognitionRef = useRef<{ start: () => void; stop: () => void } | null>(null);
   const [newOrderOpen, setNewOrderOpen] = useState(false);
@@ -131,15 +172,325 @@ export default function PatientDetailPage() {
   const [discontinuePrescription, setDiscontinuePrescription] = useState<Prescription | null>(null);
   const [discontinueReason, setDiscontinueReason] = useState("");
   const [mainTab, setMainTab] = useState("overview");
+  const isClinicianOrNurse = user?.role === "clinician" || user?.role === "nurse";
+  /** Full navigator only after starting a visit from Schedule (session flag). Browse/search entry = Review only. */
+  const [clinVisitDocUnlocked, setClinVisitDocUnlocked] = useState(false);
+  const showVisitDocumentation = isClinicianOrNurse && clinVisitDocUnlocked && user?.role !== "reception";
+  const reviewSectionTabs = new Set(["overview", "history", "immunization", "results"]);
+  const [visitSummaryMeta, setVisitSummaryMeta] = useState<{ encounterId: string } | null>(null);
+  const [encSessionTick, setEncSessionTick] = useState(0);
+  /** Signed visit reopened from schedule — ask clinician/nurse before resuming documentation */
+  const [reopenVisitPrompt, setReopenVisitPrompt] = useState<{ appointmentId: string } | null>(null);
+  const [reopenVisitLoading, setReopenVisitLoading] = useState(false);
+
+  const documentationTabs = useMemo(() => {
+    const s = new Set(["allergy", "problems", "vitals", "medication", "orders", "notes"]);
+    if (visitSummaryMeta) s.add("visit-summary");
+    return s;
+  }, [visitSummaryMeta]);
+
+  const invalidateVisitSummaryForScheduleSession = useCallback(() => {
+    const encId = readScheduleEncounterIdForPatient(id);
+    if (encId) {
+      void queryClient.invalidateQueries({ queryKey: ["/api/encounters", encId, "visit-summary"] });
+    }
+  }, [id]);
+
+  const syncTabToUrl = useCallback(
+    (tab: string) => {
+      if (!id) return;
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", tab);
+      window.history.replaceState({}, "", url.pathname + url.search);
+    },
+    [id]
+  );
+
+  const handleMainTabChange = (nextTab: string) => {
+    if (nextTab === "visit-summary" && !visitSummaryMeta) {
+      setMainTab("overview");
+      syncTabToUrl("overview");
+      return;
+    }
+    if (!showVisitDocumentation && documentationTabs.has(nextTab)) {
+      setMainTab("overview");
+      syncTabToUrl("overview");
+      return;
+    }
+    setMainTab(nextTab);
+    syncTabToUrl(nextTab);
+  };
+
+  /** Sync tab from URL (?tab=) when opening chart or using embedded navigator links */
+  useEffect(() => {
+    if (!id) return;
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (!t) return;
+    const allowed = showVisitDocumentation
+      ? reviewSectionTabs.has(t) || documentationTabs.has(t)
+      : reviewSectionTabs.has(t);
+    if (allowed) {
+      setMainTab(t);
+    } else {
+      setMainTab("overview");
+      syncTabToUrl("overview");
+    }
+  }, [id, showVisitDocumentation, syncTabToUrl, documentationTabs]);
+
+  /** Visit Summary tab: schedule-started encounter only (appointment linked), clinician/nurse */
+  useEffect(() => {
+    const fn = () => setEncSessionTick((t) => t + 1);
+    window.addEventListener("ehr-encounter-session", fn);
+    return () => window.removeEventListener("ehr-encounter-session", fn);
+  }, []);
+
+  /** Keep UI in sync with session flag (schedule-started visit unlocks full navigator). */
+  useEffect(() => {
+    if (!isClinicianOrNurse) {
+      setClinVisitDocUnlocked(false);
+      return;
+    }
+    setClinVisitDocUnlocked(readClinicianVisitDocumentationSession());
+  }, [id, isClinicianOrNurse, encSessionTick]);
+
+  /** Patient search / browse entry: Review-only until user starts a visit from Schedule again. */
+  useEffect(() => {
+    if (!id) return;
+    const sp = new URLSearchParams(urlSearch || "");
+    const fromSearch = sp.get("fromSearch") === "1";
+    const chartBrowse = sp.get("chartEntry") === "browse";
+    if (!fromSearch && !chartBrowse) return;
+    clearClinicianVisitDocumentationSession();
+    setClinVisitDocUnlocked(false);
+    const url = new URL(window.location.href);
+    let changed = false;
+    if (url.searchParams.has("fromSearch")) {
+      url.searchParams.delete("fromSearch");
+      changed = true;
+    }
+    if (url.searchParams.has("chartEntry")) {
+      url.searchParams.delete("chartEntry");
+      changed = true;
+    }
+    if (changed) {
+      const q = url.searchParams.toString();
+      window.history.replaceState({}, "", url.pathname + (q ? `?${q}` : ""));
+    }
+  }, [id, urlSearch]);
+
+  useEffect(() => {
+    if (!id || !authToken || !showVisitDocumentation) {
+      setVisitSummaryMeta(null);
+      return;
+    }
+    const eid = sessionStorage.getItem("ehr_active_encounter_id");
+    const pid = sessionStorage.getItem("ehr_active_encounter_patient_id");
+    if (!eid || pid !== id) {
+      setVisitSummaryMeta(null);
+      return;
+    }
+    const ac = new AbortController();
+    fetch(`/api/encounters/${eid}`, { headers: { Authorization: `Bearer ${authToken}` }, signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((enc: { appointmentId?: string | null } | null) => {
+        if (enc?.appointmentId) setVisitSummaryMeta({ encounterId: eid });
+        else setVisitSummaryMeta(null);
+      })
+      .catch(() => setVisitSummaryMeta(null));
+    return () => ac.abort();
+  }, [id, authToken, showVisitDocumentation, location, encSessionTick]);
+
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    if (t === "visit-summary" && !visitSummaryMeta) {
+      setMainTab("overview");
+      syncTabToUrl("overview");
+    }
+  }, [visitSummaryMeta, syncTabToUrl]);
+
+  /** Clear schedule-encounter session when switching to a different patient */
+  useEffect(() => {
+    if (!id) return;
+    const storedPid = sessionStorage.getItem("ehr_active_encounter_patient_id");
+    if (storedPid && storedPid !== id) {
+      sessionStorage.removeItem("ehr_active_encounter_id");
+      sessionStorage.removeItem("ehr_active_encounter_patient_id");
+      sessionStorage.removeItem("ehr_schedule_appointment_id");
+      clearClinicianVisitDocumentationSession();
+      window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
+    }
+  }, [id]);
+
+  useEffect(() => {
+    setReopenVisitPrompt(null);
+    setReopenVisitLoading(false);
+  }, [id]);
+
+  /** Opening chart from Schedule (?fromSchedule=1&appointmentId=) starts or resumes an encounter */
+  useEffect(() => {
+    if (!id || !authToken) return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("fromSchedule") !== "1") return;
+    const appointmentId = sp.get("appointmentId");
+    if (!appointmentId) return;
+
+    const existingPid = sessionStorage.getItem("ehr_active_encounter_patient_id");
+    const existingEid = sessionStorage.getItem("ehr_active_encounter_id");
+    if (existingPid === id && existingEid) {
+      setClinicianVisitDocumentationSession();
+      setClinVisitDocUnlocked(true);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("fromSchedule");
+      url.searchParams.delete("appointmentId");
+      window.history.replaceState({}, "", url.pathname + (url.search ? url.search : ""));
+      window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
+      return;
+    }
+
+    const stripScheduleQueryParams = () => {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("fromSchedule");
+      url.searchParams.delete("appointmentId");
+      const q = url.searchParams.toString();
+      window.history.replaceState({}, "", url.pathname + (q ? `?${q}` : ""));
+    };
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const apptRes = await fetch(`/api/appointments/${appointmentId}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        if (!apptRes.ok) {
+          if (!cancelled) {
+            toast({ title: "Could not load appointment", description: apptRes.statusText, variant: "destructive" });
+            stripScheduleQueryParams();
+          }
+          return;
+        }
+        const appt = (await apptRes.json()) as Appointment;
+        if (cancelled) return;
+        if (appt.patientId !== id) {
+          toast({ title: "Invalid link", description: "This appointment is not for this patient.", variant: "destructive" });
+          stripScheduleQueryParams();
+          return;
+        }
+
+        if (appt.status === "completed") {
+          stripScheduleQueryParams();
+          if (isClinicianOrNurse) {
+            if (!cancelled) setReopenVisitPrompt({ appointmentId });
+          } else {
+            toast({
+              title: "Visit already signed",
+              description: "Opening the chart in review mode.",
+            });
+            clearClinicianVisitDocumentationSession();
+            setClinVisitDocUnlocked(false);
+            navigate(`/patients/${id}?chartEntry=browse`);
+          }
+          return;
+        }
+
+        const res = await fetch(`/api/patients/${id}/start-from-schedule`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ appointmentId }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          if (!cancelled) {
+            toast({
+              title: "Could not start encounter",
+              description: (err as { message?: string }).message || res.statusText,
+              variant: "destructive",
+            });
+            stripScheduleQueryParams();
+          }
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        sessionStorage.setItem("ehr_active_encounter_id", data.encounter.id);
+        sessionStorage.setItem("ehr_active_encounter_patient_id", id);
+        sessionStorage.setItem("ehr_schedule_appointment_id", data.appointmentId);
+        setClinicianVisitDocumentationSession();
+        setClinVisitDocUnlocked(true);
+        window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
+        queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+        toast({ title: "Encounter started", description: "Visit is in progress." });
+        stripScheduleQueryParams();
+      } catch (e: unknown) {
+        if (!cancelled) {
+          const message = e instanceof Error ? e.message : "Failed to start encounter";
+          toast({ title: "Error", description: message, variant: "destructive" });
+          const url = new URL(window.location.href);
+          url.searchParams.delete("fromSchedule");
+          url.searchParams.delete("appointmentId");
+          const q = url.searchParams.toString();
+          window.history.replaceState({}, "", url.pathname + (q ? `?${q}` : ""));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, authToken, toast, isClinicianOrNurse, navigate]);
+
+  const skipReopenDeclineRef = useRef(false);
+
+  const declineReopenVisit = useCallback(() => {
+    setReopenVisitPrompt(null);
+    clearClinicianVisitDocumentationSession();
+    setClinVisitDocUnlocked(false);
+    navigate("/schedule");
+  }, [navigate]);
+
+  const confirmReopenVisit = useCallback(async () => {
+    if (!id || !authToken || !reopenVisitPrompt) return;
+    setReopenVisitLoading(true);
+    try {
+      const res = await fetch(`/api/patients/${id}/reopen-from-schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ appointmentId: reopenVisitPrompt.appointmentId }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || res.statusText);
+      }
+      const data = await res.json();
+      sessionStorage.setItem("ehr_active_encounter_id", data.encounter.id);
+      sessionStorage.setItem("ehr_active_encounter_patient_id", id);
+      sessionStorage.setItem("ehr_schedule_appointment_id", data.appointmentId);
+      setClinicianVisitDocumentationSession();
+      setClinVisitDocUnlocked(true);
+      window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
+      queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+      skipReopenDeclineRef.current = true;
+      setReopenVisitPrompt(null);
+      window.setTimeout(() => {
+        skipReopenDeclineRef.current = false;
+      }, 0);
+      toast({ title: "Visit reopened", description: "You can edit visit documentation again." });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Could not reopen visit";
+      toast({ title: "Error", description: message, variant: "destructive" });
+    } finally {
+      setReopenVisitLoading(false);
+    }
+  }, [id, authToken, reopenVisitPrompt, toast]);
 
   const { data: patient, isLoading } = useQuery<Patient>({
     queryKey: ["/api/patients", id],
     queryFn: async () => {
       const res = await fetch(`/api/patients/${id}`, { headers: { Authorization: `Bearer ${authToken}` } });
       if (!res.ok) throw new Error("Failed");
-      return res.json();
+      return normalizePatientRow(await res.json());
     },
-    enabled: !!id,
+    enabled: !!id && !!authToken,
   });
 
   const { data: encounters = [] } = useQuery<Encounter[]>({
@@ -191,6 +542,8 @@ export default function PatientDetailPage() {
     },
     enabled: !!id,
   });
+
+  const storyboardVitals = useMemo(() => mergeLatestStoryboardVitals(vitalsList), [vitalsList]);
 
   const { data: patientAllergies = [] } = useQuery<PatientAllergy[]>({
     queryKey: ["/api/patients", id, "allergies"],
@@ -280,6 +633,7 @@ export default function PatientDetailPage() {
           description: data.description.trim() || undefined,
           documentUrl: data.documentUrl.trim() || undefined,
           uploadedBy: user?.id,
+          ...(readScheduleEncounterIdForPatient(id) ? { encounterId: readScheduleEncounterIdForPatient(id)! } : {}),
         }),
       });
       if (!res.ok) {
@@ -290,6 +644,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/imaging-results", `?patientId=${id}`] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Imaging result added" });
       setNewImagingOpen(false);
       setNewImagingForm({ modality: "X-Ray", title: "", description: "", documentUrl: "" });
@@ -317,7 +672,7 @@ export default function PatientDetailPage() {
           queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "problems"] });
           return { id: "", problem: payload.problem, status: payload.status ?? "active", createdAt: new Date().toISOString() };
         }
-        throw new Error(`Server error (${res.status}). Open the app at http://localhost:5000 so API and UI use the same origin.`);
+        throw new Error(`Server error (${res.status}). Open the app at http://localhost:3000 so API and UI use the same origin.`);
       }
       if (!res.ok) throw new Error((data as { message?: string }).message || "Failed");
       return data as { id: string; problem: string; status: string; createdAt: string };
@@ -402,7 +757,7 @@ export default function PatientDetailPage() {
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(res.ok ? "Invalid response from server" : `Server error (${res.status}). Ensure the app is running on the same origin (e.g. http://localhost:5000).`);
+        throw new Error(res.ok ? "Invalid response from server" : `Server error (${res.status}). Ensure the app is running on the same origin (e.g. http://localhost:3000).`);
       }
       if (!res.ok) throw new Error((data as { message?: string }).message || "Failed");
       return data as { id: string; patientId: string; relationship: string; createdAt: string };
@@ -430,7 +785,7 @@ export default function PatientDetailPage() {
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(res.ok ? "Invalid response" : `Server error (${res.status}). Open the app at http://localhost:5000.`);
+        throw new Error(res.ok ? "Invalid response" : `Server error (${res.status}). Open the app at http://localhost:3000.`);
       }
       if (!res.ok) throw new Error((data as { message?: string }).message || "Failed");
       return data;
@@ -588,7 +943,11 @@ export default function PatientDetailPage() {
         res = await fetch(`/api/patients/${id}/notes`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ content: payload.content, noteKind: payload.noteKind }),
+          body: JSON.stringify({
+            content: payload.content,
+            noteKind: payload.noteKind,
+            ...(readScheduleEncounterIdForPatient(id) ? { encounterId: readScheduleEncounterIdForPatient(id)! } : {}),
+          }),
         });
       } catch (e) {
         const msg = e instanceof Error && e.message === "Failed to fetch"
@@ -608,6 +967,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "notes"] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Note signed and saved" });
       closeNotePanel();
       if (pendingLeavePath) {
@@ -630,6 +990,9 @@ export default function PatientDetailPage() {
             content: payload.content,
             ...(payload.signAndSave && { signAndSave: true }),
             ...(payload.saveAsIncomplete && { saveAsIncomplete: true }),
+            ...(payload.signAndSave && readScheduleEncounterIdForPatient(id)
+              ? { encounterId: readScheduleEncounterIdForPatient(id)! }
+              : {}),
           }),
         });
       } catch (e) {
@@ -651,6 +1014,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "notes"] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Note updated" });
       closeNotePanel();
       if (pendingLeavePath) {
@@ -692,7 +1056,12 @@ export default function PatientDetailPage() {
         res = await fetch(`/api/patients/${id}/notes`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ content: payload.content || "(Draft)", noteKind: payload.noteKind, saveAsIncomplete: true }),
+          body: JSON.stringify({
+            content: payload.content || "(Draft)",
+            noteKind: payload.noteKind,
+            saveAsIncomplete: true,
+            ...(readScheduleEncounterIdForPatient(id) ? { encounterId: readScheduleEncounterIdForPatient(id)! } : {}),
+          }),
         });
       } catch (e) {
         throw new Error(e instanceof Error && e.message === "Failed to fetch" ? networkErrorMsg : (e instanceof Error ? e.message : "Network error"));
@@ -709,6 +1078,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "notes"] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Note saved as incomplete" });
       closeNotePanel();
       if (pendingLeavePath) {
@@ -734,6 +1104,7 @@ export default function PatientDetailPage() {
           oxygenSaturation: data.oxygenSaturation || undefined,
           weight: data.weight || undefined,
           height: data.height || undefined,
+          ...(readScheduleEncounterIdForPatient(id) ? { encounterId: readScheduleEncounterIdForPatient(id)! } : {}),
         }),
       });
       if (!res.ok) {
@@ -745,6 +1116,7 @@ export default function PatientDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "vitals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "latest-vitals"] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Vitals recorded" });
       setVitalsForm({ temperature: "", bloodPressureSystolic: "", bloodPressureDiastolic: "", heartRate: "", respiratoryRate: "", oxygenSaturation: "", weight: "", height: "" });
     },
@@ -777,6 +1149,7 @@ export default function PatientDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "vitals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "latest-vitals"] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Vitals updated" });
       setEditVitalsOpen(false);
       setEditVitals(null);
@@ -792,13 +1165,24 @@ export default function PatientDetailPage() {
         body: JSON.stringify({ ...payload, reactionType: payload.reactionType === "Not specified" ? undefined : payload.reactionType }),
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Failed to add allergy");
+        let message = "Failed to add allergy";
+        try {
+          const err = await res.json();
+          if (err && typeof err.message === "string" && err.message) message = err.message;
+        } catch {
+          /* non-JSON error body */
+        }
+        throw new Error(message);
       }
-      return res.json();
+      try {
+        return await res.json();
+      } catch {
+        throw new Error("Invalid response from server");
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "allergies"] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Allergy added" });
       setNewAllergyOpen(false);
       setNewAllergyForm({ allergen: "", severity: "LOW", reactionType: "Not specified", reactionTypeOther: "" });
@@ -813,6 +1197,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "allergies"] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Allergy removed" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -821,6 +1206,7 @@ export default function PatientDetailPage() {
   useEffect(() => {
     if (!newAllergyOpen) {
       setAllergenSuggestions([]);
+      setAllergenSuggestOpen(false);
       return;
     }
     const q = newAllergyForm.allergen.trim();
@@ -843,6 +1229,16 @@ export default function PatientDetailPage() {
     };
   }, [newAllergyOpen, newAllergyForm.allergen, authToken]);
 
+  useEffect(() => {
+    if (!allergenSuggestOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const el = allergenSuggestContainerRef.current;
+      if (el && !el.contains(e.target as Node)) setAllergenSuggestOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [allergenSuggestOpen]);
+
   const addOrderMutation = useMutation({
     mutationFn: async (data: { testName: string; testCode: string; priority: string; internalExternal: "internal" | "external" }) => {
       const res = await fetch("/api/lab-orders", {
@@ -856,6 +1252,7 @@ export default function PatientDetailPage() {
           priority: data.priority,
           internalExternal: data.internalExternal || "internal",
           status: "ordered",
+          ...(readScheduleEncounterIdForPatient(id) ? { encounterId: readScheduleEncounterIdForPatient(id)! } : {}),
         }),
       });
       if (!res.ok) {
@@ -866,6 +1263,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/lab-orders", `?patientId=${id}`] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Lab order created" });
       setNewOrderOpen(false);
       setOrderComposerType(null);
@@ -887,6 +1285,7 @@ export default function PatientDetailPage() {
           internalExternal: data.internalExternal || "internal",
           patientProblemId: data.patientProblemId?.trim() || undefined,
           status: "ordered",
+          ...(readScheduleEncounterIdForPatient(id) ? { encounterId: readScheduleEncounterIdForPatient(id)! } : {}),
         }),
       });
       if (!res.ok) {
@@ -897,6 +1296,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/imaging-orders", `?patientId=${id}`] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Imaging order created" });
       setNewOrderOpen(false);
       setOrderComposerType(null);
@@ -920,6 +1320,7 @@ export default function PatientDetailPage() {
           duration: data.duration.trim() || undefined,
           instructions: data.instructions.trim() || undefined,
           status: "active",
+          ...(readScheduleEncounterIdForPatient(id) ? { encounterId: readScheduleEncounterIdForPatient(id)! } : {}),
         }),
       });
       if (!res.ok) {
@@ -930,6 +1331,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/prescriptions", `?patientId=${id}`] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Medication order created" });
       setNewMedOrderOpen(false);
       setNewOrderOpen(false);
@@ -958,6 +1360,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/prescriptions", `?patientId=${id}`] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Medication discontinued" });
       setDiscontinueRxOpen(false);
       setDiscontinuePrescription(null);
@@ -980,6 +1383,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/prescriptions", `?patientId=${id}`] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Medication deleted" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -999,6 +1403,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/lab-orders", `?patientId=${id}`] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Order deleted" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -1018,6 +1423,7 @@ export default function PatientDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/imaging-orders", `?patientId=${id}`] });
+      invalidateVisitSummaryForScheduleSession();
       toast({ title: "Order deleted" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
@@ -1027,6 +1433,10 @@ export default function PatientDetailPage() {
   const isClinician = role === "clinician";
   const canOrder = role === "clinician" || role === "nurse";
   const canAddNote = role === "clinician" || role === "nurse";
+  /** No visit-documentation tabs (e.g. reception, or browse entry): chart navigator + overview links stay in Review only. */
+  const reviewOnlyNavigator = !showVisitDocumentation;
+  const pathOnly = location.split("?")[0];
+  const onDemographicsPage = id ? pathOnly === `/patients/${id}/demographics` : false;
 
   if (isLoading) {
     return (
@@ -1046,15 +1456,13 @@ export default function PatientDetailPage() {
   }
 
   const statusColors: Record<string, string> = {
+    ...LAB_ORDER_STATUS_BADGE_CLASSES,
     completed: "bg-chart-3/10 text-chart-3",
     in_progress: "bg-chart-4/10 text-chart-4",
     scheduled: "bg-accent text-accent-foreground",
     cancelled: "bg-destructive/10 text-destructive",
     active: "bg-chart-3/10 text-chart-3",
     dispensed: "bg-primary/10 text-primary",
-    ordered: "bg-chart-4/10 text-chart-4",
-    processing: "bg-chart-2/10 text-chart-2",
-    collected: "bg-chart-5/10 text-chart-5",
     paid: "bg-chart-3/10 text-chart-3",
     pending: "bg-chart-4/10 text-chart-4",
     partial: "bg-chart-5/10 text-chart-5",
@@ -1063,49 +1471,79 @@ export default function PatientDetailPage() {
   return (
     <div className="flex h-screen min-h-0 flex-1 overflow-hidden" data-testid="patient-detail-page">
       <div className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
-        <Tabs value={mainTab} onValueChange={setMainTab} className="flex flex-1 min-w-0 overflow-hidden">
+        <Tabs value={mainTab} onValueChange={handleMainTabChange} className="flex flex-1 min-w-0 overflow-hidden">
           <nav className="w-52 flex-shrink-0 border border-border rounded-lg bg-muted/30 flex flex-col overflow-y-auto py-4">
           <div className="px-3 space-y-6">
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Review</p>
-              <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
-                <TabsTrigger value="overview" data-testid="tab-overview" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <LayoutGrid className="w-4 h-4 shrink-0" /> Overview
-                </TabsTrigger>
-                <TabsTrigger value="history" data-testid="tab-history" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <History className="w-4 h-4 shrink-0" /> History
-                </TabsTrigger>
-                <TabsTrigger value="immunization" data-testid="tab-immunization" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <ShieldCheck className="w-4 h-4 shrink-0" /> Immunization
-                </TabsTrigger>
-                <TabsTrigger value="results" data-testid="tab-results" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <FileCheck className="w-4 h-4 shrink-0" /> Results
-                </TabsTrigger>
-                <TabsTrigger value="allergy" data-testid="tab-allergy" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <AlertTriangle className="w-4 h-4 shrink-0" /> Allergy
-                </TabsTrigger>
-              </TabsList>
+              <div className="flex flex-col gap-0.5">
+                <Link href={`/patients/${id}/demographics`} className="block w-full">
+                  <a
+                    className={cn(
+                      "inline-flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 h-auto text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                      "bg-transparent hover:bg-accent text-foreground",
+                      onDemographicsPage && "bg-accent"
+                    )}
+                    data-testid="nav-review-demographics"
+                  >
+                    <User className="w-4 h-4 shrink-0" /> Demographics
+                  </a>
+                </Link>
+                <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
+                  <TabsTrigger value="overview" data-testid="tab-overview" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <LayoutGrid className="w-4 h-4 shrink-0" /> Overview
+                  </TabsTrigger>
+                  <TabsTrigger value="history" data-testid="tab-history" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <History className="w-4 h-4 shrink-0" /> History
+                  </TabsTrigger>
+                  <TabsTrigger value="immunization" data-testid="tab-immunization" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <ShieldCheck className="w-4 h-4 shrink-0" /> Immunization
+                  </TabsTrigger>
+                  <TabsTrigger value="results" data-testid="tab-results" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <FileCheck className="w-4 h-4 shrink-0" /> Results
+                  </TabsTrigger>
+                </TabsList>
+              </div>
             </div>
-            <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Visit documentation</p>
-              <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
-                <TabsTrigger value="problems" data-testid="tab-problems" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <ListChecks className="w-4 h-4 shrink-0" /> Problems List
-                </TabsTrigger>
-                <TabsTrigger value="vitals" data-testid="tab-vitals" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <Activity className="w-4 h-4 shrink-0" /> Vitals
-                </TabsTrigger>
-                <TabsTrigger value="medication" data-testid="tab-medication" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <Pill className="w-4 h-4 shrink-0" /> Medication
-                </TabsTrigger>
-                <TabsTrigger value="orders" data-testid="tab-orders" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <ClipboardList className="w-4 h-4 shrink-0" /> Orders
-                </TabsTrigger>
-                <TabsTrigger value="notes" data-testid="tab-notes" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                  <FileText className="w-4 h-4 shrink-0" /> Notes
-                </TabsTrigger>
-              </TabsList>
-            </div>
+            {showVisitDocumentation && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Visit documentation</p>
+                <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
+                  <TabsTrigger value="allergy" data-testid="tab-allergy" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <AlertTriangle className="w-4 h-4 shrink-0" /> Allergy
+                  </TabsTrigger>
+                  <TabsTrigger value="problems" data-testid="tab-problems" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <ListChecks className="w-4 h-4 shrink-0" /> Problems List
+                  </TabsTrigger>
+                  <TabsTrigger value="vitals" data-testid="tab-vitals" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <Activity className="w-4 h-4 shrink-0" /> Vitals
+                  </TabsTrigger>
+                  <TabsTrigger value="medication" data-testid="tab-medication" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <Pill className="w-4 h-4 shrink-0" /> Medication
+                  </TabsTrigger>
+                  <TabsTrigger value="orders" data-testid="tab-orders" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <ClipboardList className="w-4 h-4 shrink-0" /> Orders
+                  </TabsTrigger>
+                  <TabsTrigger value="notes" data-testid="tab-notes" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <FileText className="w-4 h-4 shrink-0" /> Notes
+                  </TabsTrigger>
+                </TabsList>
+                {visitSummaryMeta && (
+                  <div className="mt-4">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Visit Summary</p>
+                    <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
+                      <TabsTrigger
+                        value="visit-summary"
+                        data-testid="tab-visit-summary"
+                        className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium"
+                      >
+                        <ScrollText className="w-4 h-4 shrink-0" /> Visit Summary
+                      </TabsTrigger>
+                    </TabsList>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </nav>
 
@@ -1120,59 +1558,130 @@ export default function PatientDetailPage() {
 
             <Card className="hover:border-primary/50 transition-colors">
               <CardContent className="p-4">
-                <button
-                  type="button"
-                  onClick={() => setMainTab("vitals")}
-                  className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
-                >
-                  <Activity className="w-4 h-4 shrink-0" />
-                  Vitals
-                </button>
+                {reviewOnlyNavigator ? (
+                  <div className="w-full text-left font-semibold text-foreground flex items-center gap-2 mb-3">
+                    <Activity className="w-4 h-4 shrink-0" />
+                    Vitals
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleMainTabChange("vitals")}
+                    className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
+                  >
+                    <Activity className="w-4 h-4 shrink-0" />
+                    Vitals
+                  </button>
+                )}
                 {vitalsList.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No vitals recorded. Record vitals in the Vitals section.</p>
+                ) : !(storyboardVitals && storyboardVitalsHasAnyValue(storyboardVitals)) ? (
+                  <p className="text-sm text-muted-foreground">No vital measurements recorded yet.</p>
                 ) : (
                   <>
-                    <div className="mb-4">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Last 3 recorded</p>
-                      <ul className="space-y-2">
-                        {vitalsList.slice(0, 3).map((v) => (
-                          <li key={v.id} className="text-sm flex flex-wrap items-center gap-x-3 gap-y-0.5">
-                            <span className="text-muted-foreground shrink-0">{v.recordedAt ? format(new Date(v.recordedAt), "MMM d, HH:mm") : "—"}</span>
-                            {v.temperature != null && <span>Temp {v.temperature} °C</span>}
-                            {(v.bloodPressureSystolic != null || v.bloodPressureDiastolic != null) && (
-                              <span>BP {v.bloodPressureSystolic ?? "—"}/{v.bloodPressureDiastolic ?? "—"}</span>
-                            )}
-                            {v.heartRate != null && <span>HR {v.heartRate}</span>}
-                            {v.weight != null && <span>{v.weight} kg</span>}
-                            {v.height != null && <span>{v.height} cm</span>}
-                          </li>
-                        ))}
+                    <div className="mb-4 space-y-2 text-sm">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Most recent values</p>
+                      {(() => {
+                        const latest = storyboardVitalsLatestTimestamp(storyboardVitals);
+                        return (
+                          <p className="text-xs text-muted-foreground">
+                            {latest ? format(latest, "MMM d, yyyy · HH:mm") : ""}
+                          </p>
+                        );
+                      })()}
+                      <ul className="space-y-1.5">
+                        <li className="flex flex-wrap gap-x-2">
+                          <span className="font-medium text-foreground">Temperature:</span>
+                          <span>
+                            {storyboardVitals.temperature != null ? `${storyboardVitals.temperature} °C` : "—"}
+                          </span>
+                        </li>
+                        <li className="flex flex-wrap gap-x-2">
+                          <span className="font-medium text-foreground">Blood pressure:</span>
+                          <span>
+                            {storyboardVitals.bloodPressureSystolic != null || storyboardVitals.bloodPressureDiastolic != null
+                              ? `${storyboardVitals.bloodPressureSystolic ?? "—"} / ${storyboardVitals.bloodPressureDiastolic ?? "—"} mmHg`
+                              : "—"}
+                          </span>
+                        </li>
+                        <li className="flex flex-wrap gap-x-2">
+                          <span className="font-medium text-foreground">Pulse rate:</span>
+                          <span>{storyboardVitals.pulseRate != null ? `${storyboardVitals.pulseRate} bpm` : "—"}</span>
+                        </li>
+                        <li className="flex flex-wrap gap-x-2">
+                          <span className="font-medium text-foreground">Respiration rate:</span>
+                          <span>{storyboardVitals.respiratoryRate != null ? `${storyboardVitals.respiratoryRate} /min` : "—"}</span>
+                        </li>
+                        <li className="flex flex-wrap gap-x-2">
+                          <span className="font-medium text-foreground">Oxygen saturation (SpO₂):</span>
+                          <span>
+                            {storyboardVitals.oxygenSaturation != null ? `${storyboardVitals.oxygenSaturation}%` : "—"}
+                          </span>
+                        </li>
+                        <li className="flex flex-wrap gap-x-2">
+                          <span className="font-medium text-foreground">Weight:</span>
+                          <span>{storyboardVitals.weight != null ? `${storyboardVitals.weight} kg` : "—"}</span>
+                        </li>
+                        <li className="flex flex-wrap gap-x-2">
+                          <span className="font-medium text-foreground">Height:</span>
+                          <span>{storyboardVitals.height != null ? `${storyboardVitals.height} cm` : "—"}</span>
+                        </li>
                       </ul>
                     </div>
                     {vitalsList.length >= 2 && (() => {
+                      const num = (v: unknown) => {
+                        if (v == null || v === "") return null;
+                        const n = typeof v === "string" ? parseFloat(v) : Number(v);
+                        return Number.isFinite(n) ? n : null;
+                      };
                       const chartData = [...vitalsList.slice(0, 3)].reverse().map((v) => ({
                         date: v.recordedAt ? format(new Date(v.recordedAt), "MMM d") : "",
-                        temp: v.temperature != null ? Number(v.temperature) : null,
                         systolic: v.bloodPressureSystolic != null ? Number(v.bloodPressureSystolic) : null,
                         diastolic: v.bloodPressureDiastolic != null ? Number(v.bloodPressureDiastolic) : null,
                         heartRate: v.heartRate != null ? Number(v.heartRate) : null,
+                        respiratoryRate: v.respiratoryRate != null ? Number(v.respiratoryRate) : null,
+                        temperature: num(v.temperature),
+                        oxygenSaturation: v.oxygenSaturation != null ? Number(v.oxygenSaturation) : null,
+                        weight: num(v.weight),
+                        height: num(v.height),
                       }));
-                      const hasTemp = chartData.some((d) => d.temp != null);
                       const hasBp = chartData.some((d) => d.systolic != null || d.diastolic != null);
                       const hasHr = chartData.some((d) => d.heartRate != null);
+                      const hasRr = chartData.some((d) => d.respiratoryRate != null);
+                      const hasTemp = chartData.some((d) => d.temperature != null);
+                      const hasSpo2 = chartData.some((d) => d.oxygenSaturation != null);
+                      const hasWt = chartData.some((d) => d.weight != null);
+                      const hasHt = chartData.some((d) => d.height != null);
                       return (
-                        <div className="h-[220px] w-full">
-                          <ChartContainer config={{ temp: { label: "Temp °C", color: "hsl(var(--chart-1))" }, systolic: { label: "BP Sys", color: "hsl(var(--chart-2))" }, diastolic: { label: "BP Dias", color: "hsl(var(--chart-3))" }, heartRate: { label: "HR", color: "hsl(var(--chart-4))" } }} className="h-full w-full">
+                        <div className="h-[240px] w-full">
+                          <p className="text-xs text-muted-foreground mb-2">Trend (last 3 recordings)</p>
+                          <ChartContainer
+                            config={{
+                              systolic: { label: "BP systolic", color: "hsl(var(--chart-1))" },
+                              diastolic: { label: "BP diastolic", color: "hsl(var(--chart-2))" },
+                              heartRate: { label: "Pulse rate", color: "hsl(var(--chart-3))" },
+                              respiratoryRate: { label: "Respiration rate", color: "hsl(var(--chart-4))" },
+                              temperature: { label: "Temp °C", color: "hsl(var(--chart-5))" },
+                              oxygenSaturation: { label: "SpO₂ %", color: "hsl(var(--primary))" },
+                              weight: { label: "Weight kg", color: "hsl(var(--chart-5))" },
+                              height: { label: "Height cm", color: "hsl(var(--chart-2))" },
+                            }}
+                            className="h-full w-full"
+                          >
                             <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
                               <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                               <XAxis dataKey="date" tick={{ fontSize: 10 }} />
                               <YAxis tick={{ fontSize: 10 }} width={28} />
                               <Tooltip contentStyle={{ fontSize: 12 }} formatter={(value: number) => [value, ""]} />
-                              <Legend verticalAlign="bottom" height={36} wrapperStyle={{ fontSize: 11 }} iconType="line" iconSize={8} />
-                              {hasTemp && <Line type="monotone" dataKey="temp" name="Temp °C" stroke="var(--color-temp)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
-                              {hasBp && <Line type="monotone" dataKey="systolic" name="BP Sys" stroke="var(--color-systolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
-                              {hasBp && <Line type="monotone" dataKey="diastolic" name="BP Dias" stroke="var(--color-diastolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
-                              {hasHr && <Line type="monotone" dataKey="heartRate" name="HR" stroke="var(--color-heartRate)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              <Legend verticalAlign="bottom" height={52} wrapperStyle={{ fontSize: 10 }} iconType="line" iconSize={8} />
+                              {hasBp && <Line type="monotone" dataKey="systolic" name="BP systolic" stroke="var(--color-systolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasBp && <Line type="monotone" dataKey="diastolic" name="BP diastolic" stroke="var(--color-diastolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasHr && <Line type="monotone" dataKey="heartRate" name="Pulse rate" stroke="var(--color-heartRate)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasRr && <Line type="monotone" dataKey="respiratoryRate" name="Respiration rate" stroke="var(--color-respiratoryRate)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasTemp && <Line type="monotone" dataKey="temperature" name="Temp °C" stroke="var(--color-temperature)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasSpo2 && <Line type="monotone" dataKey="oxygenSaturation" name="SpO₂ %" stroke="var(--color-oxygenSaturation)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasWt && <Line type="monotone" dataKey="weight" name="Weight kg" stroke="var(--color-weight)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasHt && <Line type="monotone" dataKey="height" name="Height cm" stroke="var(--color-height)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
                             </LineChart>
                           </ChartContainer>
                         </div>
@@ -1188,7 +1697,7 @@ export default function PatientDetailPage() {
                 <CardContent className="p-4">
                   <button
                     type="button"
-                    onClick={() => setMainTab("history")}
+                    onClick={() => handleMainTabChange("history")}
                     className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
                   >
                     <History className="w-4 h-4 shrink-0" />
@@ -1217,14 +1726,21 @@ export default function PatientDetailPage() {
 
               <Card className="hover:border-primary/50 transition-colors">
                 <CardContent className="p-4">
-                  <button
-                    type="button"
-                    onClick={() => setMainTab("allergy")}
-                    className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
-                  >
-                    <AlertTriangle className="w-4 h-4 shrink-0" />
-                    Allergy
-                  </button>
+                  {reviewOnlyNavigator ? (
+                    <div className="w-full text-left font-semibold text-foreground flex items-center gap-2 mb-3">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      Allergy
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleMainTabChange("allergy")}
+                      className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
+                    >
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      Allergy
+                    </button>
+                  )}
                   <div className="text-sm text-muted-foreground">
                     {patientAllergies.length > 0 ? (
                       <ul className="space-y-1">
@@ -1247,7 +1763,7 @@ export default function PatientDetailPage() {
                 <CardContent className="p-4">
                   <button
                     type="button"
-                    onClick={() => setMainTab("results")}
+                    onClick={() => handleMainTabChange("results")}
                     className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
                   >
                     <FileCheck className="w-4 h-4 shrink-0" />
@@ -1276,7 +1792,7 @@ export default function PatientDetailPage() {
                 <CardContent className="p-4">
                   <button
                     type="button"
-                    onClick={() => setMainTab("immunization")}
+                    onClick={() => handleMainTabChange("immunization")}
                     className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
                   >
                     <ShieldCheck className="w-4 h-4 shrink-0" />
@@ -1867,6 +2383,16 @@ export default function PatientDetailPage() {
           })()}
         </TabsContent>
 
+        <TabsContent value="visit-summary" className="mt-4 data-[state=inactive]:hidden">
+          {visitSummaryMeta && (
+            <VisitSummaryTab
+              encounterId={visitSummaryMeta.encounterId}
+              authToken={authToken}
+              prescriberNameById={prescriberNameById}
+            />
+          )}
+        </TabsContent>
+
         <TabsContent value="history" className="space-y-4 mt-4">
           <Tabs defaultValue="medical" className="w-full">
             <TabsList className="w-full grid grid-cols-3">
@@ -2034,44 +2560,54 @@ export default function PatientDetailPage() {
               <div className="space-y-4 py-2">
                 <div className="space-y-2">
                   <Label>Allergen</Label>
-                  <Popover open={allergenSuggestOpen} onOpenChange={setAllergenSuggestOpen}>
-                    <PopoverTrigger asChild>
-                      <div className="relative">
-                        <Input
-                          value={newAllergyForm.allergen}
-                          onChange={(e) => setNewAllergyForm((f) => ({ ...f, allergen: e.target.value }))}
-                          onFocus={() => setAllergenSuggestOpen(true)}
-                          placeholder="Search or type allergen (e.g. Penicillin, Peanuts)"
-                        />
+                  {/*
+                    Avoid Radix Popover inside Dialog — nested portals/focus guards can throw at runtime.
+                    Inline dropdown stays in the dialog layer.
+                  */}
+                  <div className="relative" ref={allergenSuggestContainerRef}>
+                    <Input
+                      value={newAllergyForm.allergen}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setNewAllergyForm((f) => ({ ...f, allergen: v }));
+                        if (v.trim().length >= 2) setAllergenSuggestOpen(true);
+                      }}
+                      onFocus={() => {
+                        if (newAllergyForm.allergen.trim().length >= 2) setAllergenSuggestOpen(true);
+                      }}
+                      placeholder="Search or type allergen (e.g. Penicillin, Peanuts)"
+                      autoComplete="off"
+                    />
+                    {allergenSuggestOpen && newAllergyForm.allergen.trim().length >= 2 ? (
+                      <div className="absolute z-[200] top-full left-0 right-0 mt-1 max-h-[200px] overflow-auto rounded-md border bg-popover text-popover-foreground shadow-md py-1">
+                        {allergenSuggestLoading ? (
+                          <div className="flex items-center justify-center py-4">
+                            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                          </div>
+                        ) : allergenSuggestions.length > 0 ? (
+                          <ul className="py-0">
+                            {allergenSuggestions.map((s, i) => (
+                              <li key={`${s}-${i}`}>
+                                <button
+                                  type="button"
+                                  className="w-full text-left px-3 py-2 text-sm hover:bg-muted focus:bg-muted outline-none"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => {
+                                    setNewAllergyForm((f) => ({ ...f, allergen: s }));
+                                    setAllergenSuggestOpen(false);
+                                  }}
+                                >
+                                  {s}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="py-4 px-3 text-sm text-muted-foreground text-center">No suggestions. You can enter your own.</p>
+                        )}
                       </div>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
-                      {allergenSuggestLoading ? (
-                        <div className="flex items-center justify-center py-4">
-                          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                        </div>
-                      ) : allergenSuggestions.length > 0 ? (
-                        <ul className="max-h-[200px] overflow-auto py-1">
-                          {allergenSuggestions.map((s) => (
-                            <li key={s}>
-                              <button
-                                type="button"
-                                className="w-full text-left px-3 py-2 text-sm hover:bg-muted focus:bg-muted outline-none"
-                                onClick={() => {
-                                  setNewAllergyForm((f) => ({ ...f, allergen: s }));
-                                  setAllergenSuggestOpen(false);
-                                }}
-                              >
-                                {s}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : newAllergyForm.allergen.trim().length >= 2 ? (
-                        <p className="py-4 px-3 text-sm text-muted-foreground text-center">No suggestions. You can enter your own.</p>
-                      ) : null}
-                    </PopoverContent>
-                  </Popover>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label>Severity</Label>
@@ -2157,7 +2693,7 @@ export default function PatientDetailPage() {
                         )}
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                        Documented {a.createdAt ? format(new Date(a.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                        Documented {safeFormatDateTime(a.createdAt)}
                         {" · "}
                         By {a.addedBy ? (prescriberNameById.get(a.addedBy) ?? a.addedBy) : "Unknown user"}
                       </div>
@@ -2631,9 +3167,17 @@ export default function PatientDetailPage() {
                 </div>
               </>
             ) : (
-              <div className="space-y-2 flex flex-col min-h-0">
+              <div className="space-y-2 flex flex-col flex-1 min-h-0">
                 <Label>Note content</Label>
-                <Textarea value={editNoteContent} onChange={(e) => setEditNoteContent(e.target.value)} placeholder="Enter note content..." className="resize-none flex-1 min-h-0" data-testid="input-edit-note-content" />
+                <div className="relative w-full flex flex-1 flex-col rounded-md border border-input bg-background ring-offset-background focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 min-h-[min(45vh,18rem)]">
+                  <Textarea
+                    value={editNoteContent}
+                    onChange={(e) => setEditNoteContent(e.target.value)}
+                    placeholder="Enter note content..."
+                    className="resize-none border-0 focus-visible:ring-0 focus-visible:ring-offset-0 block min-h-0 w-full flex-1"
+                    data-testid="input-edit-note-content"
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -2727,6 +3271,36 @@ export default function PatientDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={!!reopenVisitPrompt}
+        onOpenChange={(open) => {
+          if (!open && !skipReopenDeclineRef.current) {
+            declineReopenVisit();
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Visit already signed</AlertDialogTitle>
+            <AlertDialogDescription>
+              This appointment was completed. Do you want to edit visit documentation?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={reopenVisitLoading}>No, back to schedule</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={reopenVisitLoading}
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmReopenVisit();
+              }}
+            >
+              {reopenVisitLoading ? "Opening…" : "Yes, edit documentation"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={newOrderOpen} onOpenChange={(open) => { setNewOrderOpen(open); if (!open) setOrderComposerType(null); }}>
         <DialogContent>

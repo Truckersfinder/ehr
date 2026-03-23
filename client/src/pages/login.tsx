@@ -37,7 +37,7 @@ export default function LoginPage() {
               <Heart className="w-8 h-8" />
             </div>
             <div>
-              <h1 className="text-3xl font-bold tracking-tight">OneHealthEHR</h1>
+              <h1 className="text-3xl font-bold tracking-tight">PPH</h1>
               <p className="text-primary-foreground/70 text-sm">Electronic Health Records</p>
             </div>
           </div>
@@ -68,7 +68,7 @@ export default function LoginPage() {
               <Heart className="w-7 h-7 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight">OneHealthEHR</h1>
+              <h1 className="text-2xl font-bold tracking-tight">PPH</h1>
               <p className="text-muted-foreground text-sm">Electronic Health Records</p>
             </div>
           </div>
@@ -137,7 +137,7 @@ export default function LoginPage() {
                     <p className="text-muted-foreground">nomondi / nurse123</p>
                   </div>
                   <div className="p-2 rounded-md bg-accent/50">
-                    <p className="font-medium">Reception</p>
+                    <p className="font-medium">Receptionist</p>
                     <p className="text-muted-foreground">reception / reception123</p>
                   </div>
                 </div>

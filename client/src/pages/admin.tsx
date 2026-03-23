@@ -7,9 +7,10 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Shield, Building2, Users, FileText } from "lucide-react";
 import { format } from "date-fns";
 import type { User, Facility, AuditLog } from "@shared/schema";
+import { useAuth } from "@/lib/auth";
 
 export default function AdminPage() {
-  const token = localStorage.getItem("ehr_token");
+  const { token } = useAuth();
 
   const { data: users = [], isLoading: usersLoading } = useQuery<Omit<User, "password">[]>({
     queryKey: ["/api/users"],
@@ -46,7 +47,7 @@ export default function AdminPage() {
     lab_tech: "Lab Tech",
     pharmacist: "Pharmacist",
     finance: "Finance",
-    reception: "Reception",
+    reception: "Receptionist",
   };
 
   const roleColors: Record<string, string> = {

@@ -1,5 +1,9 @@
 import { useState } from "react";
+import { PatientSearchCombobox } from "@/components/patient-search-combobox";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useAuth } from "@/lib/auth";
+import { appointmentStatusBadgeClass, formatAppointmentStatusLabel } from "@/lib/appointment-status";
+import ReceptionAppointmentsPage from "@/pages/reception-appointments";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,14 +17,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Calendar, Clock, User } from "lucide-react";
 import { format } from "date-fns";
-import type { Appointment, Patient, User as UserType } from "@shared/schema";
+import type { Appointment, Patient, User as UserType, CommonVisitReason } from "@shared/schema";
 
-export default function AppointmentsPage() {
+function AppointmentsManagementPage() {
   const { toast } = useToast();
-  const token = localStorage.getItem("ehr_token");
+  const { token } = useAuth();
   const [open, setOpen] = useState(false);
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [formData, setFormData] = useState({
-    patientId: "", clinicianId: "", scheduledDate: "", scheduledTime: "09:00",
+    clinicianId: "", scheduledDate: "", scheduledTime: "09:00",
     duration: 30, reason: "", notes: "",
   });
 
@@ -42,6 +47,16 @@ export default function AppointmentsPage() {
     },
   });
 
+  const { data: visitReasons = [] } = useQuery<CommonVisitReason[]>({
+    queryKey: ["/api/common-visit-reasons"],
+    queryFn: async () => {
+      const res = await fetch("/api/common-visit-reasons", { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: open && !!token,
+  });
+
   const { data: users = [] } = useQuery<Omit<UserType, "password">[]>({
     queryKey: ["/api/users"],
     queryFn: async () => {
@@ -56,7 +71,7 @@ export default function AppointmentsPage() {
   const userMap = new Map(users.map((u) => [u.id, u]));
 
   const createMutation = useMutation({
-    mutationFn: async (data: typeof formData) => {
+    mutationFn: async (data: typeof formData & { patientId: string }) => {
       const dateTime = new Date(`${data.scheduledDate}T${data.scheduledTime}`);
       const res = await fetch("/api/appointments", {
         method: "POST",
@@ -71,13 +86,28 @@ export default function AppointmentsPage() {
           status: "scheduled",
         }),
       });
-      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as {
+          message?: string;
+          issues?: { path: string; message: string }[];
+          errors?: unknown;
+        };
+        const detail =
+          err.issues?.map((i) => `${i.path || "?"}: ${i.message}`).join(" · ") ||
+          (err.errors ? JSON.stringify(err.errors) : "");
+        throw new Error([err.message || "Failed to schedule", detail].filter(Boolean).join(" — "));
+      }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       toast({ title: "Appointment scheduled" });
       setOpen(false);
+      setSelectedPatient(null);
+      setFormData({
+        clinicianId: "", scheduledDate: "", scheduledTime: "09:00",
+        duration: 30, reason: "", notes: "",
+      });
     },
     onError: (error: Error) => toast({ title: "Error", description: error.message, variant: "destructive" }),
   });
@@ -98,16 +128,6 @@ export default function AppointmentsPage() {
     },
   });
 
-  const statusColors: Record<string, string> = {
-    scheduled: "bg-accent text-accent-foreground",
-    confirmed: "bg-primary/10 text-primary",
-    checked_in: "bg-chart-4/10 text-chart-4",
-    in_progress: "bg-chart-3/10 text-chart-3",
-    completed: "bg-chart-3/10 text-chart-3",
-    cancelled: "bg-destructive/10 text-destructive",
-    no_show: "bg-muted text-muted-foreground",
-  };
-
   const grouped = appointments.reduce<Record<string, Appointment[]>>((acc, apt) => {
     const dateKey = format(new Date(apt.scheduledDate), "yyyy-MM-dd");
     if (!acc[dateKey]) acc[dateKey] = [];
@@ -124,7 +144,19 @@ export default function AppointmentsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Appointments</h1>
           <p className="text-muted-foreground text-sm mt-1">{appointments.length} total appointments</p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog
+          open={open}
+          onOpenChange={(o) => {
+            setOpen(o);
+            if (!o) {
+              setSelectedPatient(null);
+              setFormData({
+                clinicianId: "", scheduledDate: "", scheduledTime: "09:00",
+                duration: 30, reason: "", notes: "",
+              });
+            }
+          }}
+        >
           <DialogTrigger asChild>
             <Button data-testid="button-new-appointment">
               <Plus className="w-4 h-4 mr-2" /> Schedule Appointment
@@ -132,15 +164,22 @@ export default function AppointmentsPage() {
           </DialogTrigger>
           <DialogContent>
             <DialogHeader><DialogTitle>Schedule Appointment</DialogTitle></DialogHeader>
-            <form onSubmit={(e) => { e.preventDefault(); createMutation.mutate(formData); }} className="space-y-4">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!selectedPatient?.id) return;
+                createMutation.mutate({ ...formData, patientId: selectedPatient.id });
+              }}
+              className="space-y-4"
+            >
               <div className="space-y-2">
                 <Label>Patient *</Label>
-                <Select value={formData.patientId} onValueChange={(v) => setFormData({ ...formData, patientId: v })}>
-                  <SelectTrigger data-testid="select-appt-patient"><SelectValue placeholder="Select patient" /></SelectTrigger>
-                  <SelectContent>
-                    {patients.map((p) => <SelectItem key={p.id} value={p.id}>{p.firstName} {p.lastName}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <PatientSearchCombobox
+                  token={token}
+                  value={selectedPatient}
+                  onChange={setSelectedPatient}
+                  triggerTestId="select-appt-patient"
+                />
               </div>
               <div className="space-y-2">
                 <Label>Clinician *</Label>
@@ -174,8 +213,29 @@ export default function AppointmentsPage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Reason</Label>
-                <Textarea data-testid="input-appt-reason" value={formData.reason} onChange={(e) => setFormData({ ...formData, reason: e.target.value })} className="resize-none" placeholder="e.g. Follow-up, annual check-up" />
+                <Label>Visit reason</Label>
+                <Select
+                  value={visitReasons.some((r) => r.label === formData.reason) ? formData.reason : undefined}
+                  onValueChange={(v) => setFormData({ ...formData, reason: v })}
+                >
+                  <SelectTrigger data-testid="select-appt-common-reason">
+                    <SelectValue placeholder="Quick pick common reason (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {visitReasons.map((r) => (
+                      <SelectItem key={r.id} value={r.label}>
+                        {r.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Textarea
+                  data-testid="input-appt-reason"
+                  value={formData.reason}
+                  onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
+                  className="resize-none"
+                  placeholder="Type or edit reason for visit…"
+                />
               </div>
               <div className="space-y-2">
                 <Label>Appointment note</Label>
@@ -190,7 +250,7 @@ export default function AppointmentsPage() {
               </div>
               <div className="flex justify-end gap-2">
                 <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-                <Button type="submit" data-testid="button-create-appointment" disabled={createMutation.isPending || !formData.patientId || !formData.clinicianId}>
+                <Button type="submit" data-testid="button-create-appointment" disabled={createMutation.isPending || !selectedPatient?.id || !formData.clinicianId}>
                   {createMutation.isPending ? "Scheduling..." : "Schedule"}
                 </Button>
               </div>
@@ -242,8 +302,8 @@ export default function AppointmentsPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap">
-                          <Badge variant="secondary" className={`text-[10px] ${statusColors[apt.status] || ""}`}>
-                            {apt.status.replace("_", " ")}
+                          <Badge variant="secondary" className={`text-[10px] ${appointmentStatusBadgeClass(apt.status)}`}>
+                            {formatAppointmentStatusLabel(apt.status)}
                           </Badge>
                           {apt.status === "scheduled" && (
                             <>
@@ -266,4 +326,12 @@ export default function AppointmentsPage() {
       )}
     </div>
   );
+}
+
+export default function AppointmentsPage() {
+  const { user } = useAuth();
+  if (user?.role === "reception") {
+    return <ReceptionAppointmentsPage />;
+  }
+  return <AppointmentsManagementPage />;
 }

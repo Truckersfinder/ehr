@@ -1,10 +1,31 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
+import cors from "cors";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { ensureUploadsDir } from "./uploads-dir";
 
 const app = express();
+
+/** Allow browser requests from Vite dev (e.g. :5173) to hit API on :3000 (dev fetch shim). */
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return callback(null, true);
+      callback(null, true);
+    },
+    credentials: true,
+  }),
+);
+
+/** Serve uploaded files before API/Vite so profile images always resolve in dev & prod. */
+const uploadsDir = ensureUploadsDir();
+app.use("/uploads", (req, res, next) => {
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  next();
+}, express.static(uploadsDir));
 const httpServer = createServer(app);
 
 declare module "http" {
@@ -86,11 +107,9 @@ app.use((req, res, next) => {
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
+  /** Local default; production hosts usually set `PORT` in the environment. */
+  const DEFAULT_PORT = 3000;
+  const port = parseInt(process.env.PORT ?? String(DEFAULT_PORT), 10);
   httpServer.listen(
     {
       port,

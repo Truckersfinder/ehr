@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
+import { appointmentStatusBadgeClass, formatAppointmentStatusLabel } from "@/lib/appointment-status";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -32,8 +33,7 @@ function StatCard({ title, value, icon: Icon, description, color }: {
 }
 
 export default function DashboardPage() {
-  const { user } = useAuth();
-  const token = localStorage.getItem("ehr_token");
+  const { user, token } = useAuth();
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ["/api/dashboard/stats"],
@@ -69,16 +69,6 @@ export default function DashboardPage() {
   });
 
   const activeEncounters = encounters.filter((e) => e.status === "in_progress");
-
-  const statusColors: Record<string, string> = {
-    scheduled: "bg-accent text-accent-foreground",
-    confirmed: "bg-primary/10 text-primary",
-    checked_in: "bg-chart-4/10 text-chart-4",
-    in_progress: "bg-chart-3/10 text-chart-3",
-    completed: "bg-chart-3/10 text-chart-3",
-    cancelled: "bg-destructive/10 text-destructive",
-    no_show: "bg-muted text-muted-foreground",
-  };
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto" data-testid="dashboard-page">
@@ -133,8 +123,8 @@ export default function DashboardPage() {
                     <p className="text-sm font-medium truncate">{apt.reason || "General visit"}</p>
                     <p className="text-xs text-muted-foreground">Patient ID: {apt.patientId.slice(0, 8)}...</p>
                   </div>
-                  <Badge variant="secondary" className={`text-[10px] ${statusColors[apt.status] || ""}`}>
-                    {apt.status.replace("_", " ")}
+                  <Badge variant="secondary" className={`text-[10px] ${appointmentStatusBadgeClass(apt.status)}`}>
+                    {formatAppointmentStatusLabel(apt.status)}
                   </Badge>
                 </div>
               ))

@@ -7,13 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
 import { Pill, Package, Clock } from "lucide-react";
 import { format } from "date-fns";
 import type { Prescription, Patient } from "@shared/schema";
 
 export default function PharmacyPage() {
   const { toast } = useToast();
-  const token = localStorage.getItem("ehr_token");
+  const { token } = useAuth();
 
   const { data: prescriptions = [], isLoading } = useQuery<Prescription[]>({
     queryKey: ["/api/prescriptions"],

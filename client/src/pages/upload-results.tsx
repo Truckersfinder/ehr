@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
+import { getStoredAuthToken } from "@/lib/auth-storage";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,10 +18,13 @@ import type { Patient, LabOrder } from "@shared/schema";
 const DEBOUNCE_MS = 300;
 
 export default function UploadResultsPage() {
-  const [, setLocation] = useLocation();
+  const [, navigate] = useLocation();
+  const search = useSearch();
+  const patientIdFromUrl = useMemo(() => new URLSearchParams(search).get("patientId"), [search]);
+
   const { user, token } = useAuth();
   const { toast } = useToast();
-  const authToken = token ?? (typeof localStorage !== "undefined" ? localStorage.getItem("ehr_token") : null);
+  const authToken = token ?? getStoredAuthToken();
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Patient[]>([]);
@@ -37,6 +41,21 @@ export default function UploadResultsPage() {
     modality: "X-Ray",
   });
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  /** Pre-select patient when opened from toolbar with ?patientId= */
+  useEffect(() => {
+    if (!patientIdFromUrl || !authToken) return;
+    fetch(`/api/patients/${patientIdFromUrl}`, { headers: { Authorization: `Bearer ${authToken}` } })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((p: Patient | null) => {
+        if (p) {
+          setSelectedPatient(p);
+          setQuery("");
+          setResults([]);
+        }
+      })
+      .catch(() => {});
+  }, [patientIdFromUrl, authToken]);
 
   useEffect(() => {
     if (!query.trim()) {
@@ -131,6 +150,7 @@ export default function UploadResultsPage() {
     setDocType(null);
     setLabOrderId("");
     setForm({ title: "", result: "", resultValue: "", referenceRange: "", documentUrl: "", modality: "X-Ray" });
+    navigate("/upload-results");
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -221,15 +241,32 @@ export default function UploadResultsPage() {
         <Card>
           <CardHeader>
             <p className="font-medium">{selectedPatient.firstName} {selectedPatient.lastName} · MRN: {selectedPatient.mrn}</p>
-            <Button variant="ghost" size="sm" onClick={() => setSelectedPatient(null)}>Change patient</Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setSelectedPatient(null);
+                navigate("/upload-results");
+              }}
+            >
+              Change patient
+            </Button>
           </CardHeader>
           <CardContent>
             <Label className="text-muted-foreground block mb-3">Select document type</Label>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <Button variant="outline" className="h-auto py-4 flex flex-col gap-1" onClick={() => setDocType("lab_result")}>
+              <Button
+                variant="outline"
+                className="h-auto py-4 flex flex-col gap-1"
+                onClick={() => {
+                  sessionStorage.setItem("ehr_active_patient_id", selectedPatient.id);
+                  navigate(`/patients/${selectedPatient.id}?tab=results&chartEntry=browse`);
+                }}
+                data-testid="upload-results-choose-lab-go-to-chart-results"
+              >
                 <FlaskConical className="w-5 h-5" />
                 <span>Lab result</span>
-                <span className="text-xs text-muted-foreground font-normal">Outside lab or attach to order</span>
+                <span className="text-xs text-muted-foreground font-normal">Open Results (Labs) in chart</span>
               </Button>
               <Button variant="outline" className="h-auto py-4 flex flex-col gap-1" onClick={() => setDocType("imaging")}>
                 <ImageIcon className="w-5 h-5" />

@@ -18,10 +18,9 @@ import { format } from "date-fns";
 import type { Encounter, Patient, User } from "@shared/schema";
 
 export default function EncountersPage() {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const { toast } = useToast();
   const [, navigate] = useLocation();
-  const token = localStorage.getItem("ehr_token");
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [formData, setFormData] = useState({

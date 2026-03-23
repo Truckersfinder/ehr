@@ -18,7 +18,7 @@ A comprehensive, production-grade Electronic Health Record (EHR) system built fo
 - `server/db.ts` - Database connection (Drizzle + pg)
 - `client/src/App.tsx` - Main app with routing and auth
 - `client/src/lib/auth.tsx` - Auth context with JWT token management
-- `client/src/components/app-sidebar.tsx` - Role-aware sidebar navigation
+- `client/src/lib/app-nav-items.ts` + `client/src/components/app-header-nav.tsx` - Role-aware header navigation (main nav sidebar removed)
 - `client/src/components/theme-provider.tsx` - Dark/light theme toggle
 
 ## Pages
@@ -40,7 +40,7 @@ A comprehensive, production-grade Electronic Health Record (EHR) system built fo
 - admin / admin123 (Super Admin)
 - drwanjiku / doctor123 (Clinician)
 - nomondi / nurse123 (Nurse)
-- reception / reception123 (Reception)
+- reception / reception123 (Receptionist)
 - labtech / lab123 (Lab Tech)
 - pharmacist / pharm123 (Pharmacist)
 
@@ -49,4 +49,4 @@ PostgreSQL via Drizzle ORM. Schema managed in `shared/schema.ts`.
 Push schema changes with `npm run db:push`.
 
 ## Running
-`npm run dev` starts the Express backend + Vite dev server on port 5000.
+`npm run dev` starts the Express backend + Vite dev server on **http://127.0.0.1:3000** (port 3000).

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { EHR_TOKEN_STORAGE_KEY } from "@/lib/auth-storage";
 
 interface AuthUser {
   id: string;
@@ -22,13 +23,13 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem("ehr_token"));
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem(EHR_TOKEN_STORAGE_KEY));
   const [isLoading, setIsLoading] = useState(true);
 
   const logout = useCallback(() => {
     setUser(null);
     setToken(null);
-    localStorage.removeItem("ehr_token");
+    localStorage.removeItem(EHR_TOKEN_STORAGE_KEY);
   }, []);
 
   useEffect(() => {
@@ -61,7 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const data = await res.json();
     setToken(data.token);
     setUser(data.user);
-    localStorage.setItem("ehr_token", data.token);
+    localStorage.setItem(EHR_TOKEN_STORAGE_KEY, data.token);
   };
 
   return (

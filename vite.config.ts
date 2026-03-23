@@ -36,5 +36,10 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    // When running `vite` alone (not `npm run dev`), forward API/uploads to the Express app.
+    proxy: {
+      "/api": { target: "http://127.0.0.1:3000", changeOrigin: true },
+      "/uploads": { target: "http://127.0.0.1:3000", changeOrigin: true },
+    },
   },
 });

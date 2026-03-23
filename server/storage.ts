@@ -1,13 +1,13 @@
 import { db } from "./db";
-import { eq, like, ilike, or, desc, and, sql, count, inArray } from "drizzle-orm";
+import { eq, like, ilike, or, desc, and, sql, count, inArray, isNull, gte, asc } from "drizzle-orm";
 import {
   users, facilities, patients, patientProblems, patientAllergies, patientNotes, familyMembers, familyMemberConditions,
-  encounters, vitals, appointments, labOrders, imagingOrders, prescriptions, invoices, imagingResults, patientDocuments, auditLogs,
+  encounters, vitals, appointments, commonVisitReasons, labOrders, imagingOrders, prescriptions, invoices, imagingResults, patientDocuments, auditLogs,
   type InsertUser, type User, type InsertFacility, type Facility,
   type InsertPatient, type Patient, type InsertPatientProblem, type PatientProblem,
   type InsertPatientAllergy, type PatientAllergy, type InsertPatientNote, type PatientNote, type InsertFamilyMember, type FamilyMember,
   type InsertFamilyMemberCondition, type FamilyMemberCondition, type InsertEncounter, type Encounter,
-  type InsertVitals, type Vitals, type InsertAppointment, type Appointment,
+  type InsertVitals, type Vitals, type InsertAppointment, type Appointment, type CommonVisitReason,
   type InsertLabOrder, type LabOrder, type InsertImagingOrder, type ImagingOrder,
   type InsertPrescription, type Prescription, type InsertImagingResult, type ImagingResult,
   type InsertPatientDocument, type PatientDocument, type InsertInvoice, type Invoice, type InsertAuditLog, type AuditLog,
@@ -39,7 +39,10 @@ export interface IStorage {
 
   getPatientNotes(patientId: string): Promise<PatientNote[]>;
   createPatientNote(n: InsertPatientNote): Promise<PatientNote>;
-  updatePatientNote(id: string, data: Partial<Pick<InsertPatientNote, "content" | "status">> & { signedAt?: Date | null }): Promise<PatientNote | undefined>;
+  updatePatientNote(
+    id: string,
+    data: Partial<Pick<InsertPatientNote, "content" | "status" | "encounterId">> & { signedAt?: Date | null },
+  ): Promise<PatientNote | undefined>;
 
   getFamilyMembers(patientId: string): Promise<FamilyMember[]>;
   createFamilyMember(f: InsertFamilyMember): Promise<FamilyMember>;
@@ -49,8 +52,23 @@ export interface IStorage {
 
   getEncounters(patientId?: string): Promise<Encounter[]>;
   getEncounter(id: string): Promise<Encounter | undefined>;
+  /** Latest encounter linked to a schedule appointment (for reopening a signed visit). */
+  getEncounterByAppointmentId(appointmentId: string): Promise<Encounter | undefined>;
   createEncounter(e: InsertEncounter): Promise<Encounter>;
   updateEncounter(id: string, data: Partial<InsertEncounter>): Promise<Encounter | undefined>;
+  /** Schedule-linked encounter only (appointmentId set); else null */
+  getVisitSummaryForEncounter(encounterId: string): Promise<{
+    encounter: Encounter;
+    patient: Patient;
+    appointment: Appointment | null;
+    labOrders: LabOrder[];
+    imagingOrders: ImagingOrder[];
+    prescriptions: Prescription[];
+    vitals: Vitals[];
+    notes: PatientNote[];
+    imagingResults: ImagingResult[];
+    allergiesDocumentedThisVisit: PatientAllergy[];
+  } | null>;
 
   getVitals(encounterId: string): Promise<Vitals[]>;
   getVitalsByPatientId(patientId: string): Promise<Vitals[]>;
@@ -62,6 +80,10 @@ export interface IStorage {
   getAppointment(id: string): Promise<Appointment | undefined>;
   createAppointment(a: InsertAppointment): Promise<Appointment>;
   updateAppointment(id: string, data: Partial<InsertAppointment>): Promise<Appointment | undefined>;
+
+  getCommonVisitReasons(): Promise<CommonVisitReason[]>;
+  /** Inserts default rows if table is empty (idempotent). */
+  ensureCommonVisitReasonsSeeded(): Promise<void>;
 
   getLabOrders(patientId?: string): Promise<LabOrder[]>;
   createLabOrder(l: InsertLabOrder): Promise<LabOrder>;
@@ -144,21 +166,39 @@ export class DatabaseStorage implements IStorage {
   }
 
   async searchPatients(query: string): Promise<Patient[]> {
-    const tokens = String(query ?? "").trim().split(/\s+/).filter(Boolean).slice(0, 5);
-    if (tokens.length === 0) return [];
+    // Normalize: commas → space, collapse whitespace, strip LIKE metacharacters from user input
+    const raw = String(query ?? "")
+      .trim()
+      .replace(/,/g, " ")
+      .replace(/\s+/g, " ")
+      .replace(/[%_\\]/g, "")
+      .slice(0, 200);
+    if (!raw) return [];
 
-    const tokenFilters = tokens.map((t) => {
-      const pattern = `%${t}%`;
-      return or(
-        ilike(patients.firstName, pattern),
-        ilike(patients.lastName, pattern),
-        ilike(patients.mrn, pattern),
-        ilike(patients.nationalId, pattern),
-        ilike(patients.phone, pattern),
+    const pattern = `%${raw}%`;
+
+    /**
+     * Previous logic AND-ed each whitespace token (each had to match some field). That broke
+     * common cases: extra words, "Last, First", middle names, or "Last First" vs stored "First Last".
+     * Match on each name part, full name both orders, MRN, ID, and phone.
+     */
+    const fullNameFwd = sql`(TRIM(COALESCE(${patients.firstName}, '')) || ' ' || TRIM(COALESCE(${patients.lastName}, '')))`;
+    const fullNameRev = sql`(TRIM(COALESCE(${patients.lastName}, '')) || ' ' || TRIM(COALESCE(${patients.firstName}, '')))`;
+
+    return db
+      .select()
+      .from(patients)
+      .where(
+        or(
+          ilike(patients.firstName, pattern),
+          ilike(patients.lastName, pattern),
+          sql`${fullNameFwd} ILIKE ${pattern}`,
+          sql`${fullNameRev} ILIKE ${pattern}`,
+          ilike(patients.mrn, pattern),
+          ilike(patients.nationalId, pattern),
+          ilike(patients.phone, pattern),
+        ),
       );
-    });
-
-    return db.select().from(patients).where(and(...tokenFilters));
   }
 
   async createPatient(p: InsertPatient): Promise<Patient> {
@@ -209,7 +249,10 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async updatePatientNote(id: string, data: Partial<Pick<InsertPatientNote, "content" | "status">> & { signedAt?: Date | null }): Promise<PatientNote | undefined> {
+  async updatePatientNote(
+    id: string,
+    data: Partial<Pick<InsertPatientNote, "content" | "status" | "encounterId">> & { signedAt?: Date | null },
+  ): Promise<PatientNote | undefined> {
     const [updated] = await db.update(patientNotes).set(data).where(eq(patientNotes.id, id)).returning();
     return updated;
   }
@@ -251,6 +294,16 @@ export class DatabaseStorage implements IStorage {
     return e;
   }
 
+  async getEncounterByAppointmentId(appointmentId: string): Promise<Encounter | undefined> {
+    const rows = await db
+      .select()
+      .from(encounters)
+      .where(eq(encounters.appointmentId, appointmentId))
+      .orderBy(desc(encounters.createdAt))
+      .limit(1);
+    return rows[0];
+  }
+
   async createEncounter(e: InsertEncounter): Promise<Encounter> {
     const [created] = await db.insert(encounters).values(e).returning();
     return created;
@@ -259,6 +312,68 @@ export class DatabaseStorage implements IStorage {
   async updateEncounter(id: string, data: Partial<InsertEncounter>): Promise<Encounter | undefined> {
     const [updated] = await db.update(encounters).set(data).where(eq(encounters.id, id)).returning();
     return updated;
+  }
+
+  async getVisitSummaryForEncounter(encounterId: string): Promise<{
+    encounter: Encounter;
+    patient: Patient;
+    appointment: Appointment | null;
+    labOrders: LabOrder[];
+    imagingOrders: ImagingOrder[];
+    prescriptions: Prescription[];
+    vitals: Vitals[];
+    notes: PatientNote[];
+    imagingResults: ImagingResult[];
+    allergiesDocumentedThisVisit: PatientAllergy[];
+  } | null> {
+    const encounter = await this.getEncounter(encounterId);
+    if (!encounter?.appointmentId) return null;
+    const patient = await this.getPatient(encounter.patientId);
+    if (!patient) return null;
+    const appointment = await this.getAppointment(encounter.appointmentId);
+    const encounterStart = encounter.createdAt ?? new Date(0);
+    const [labList, imagingOrderList, rxList, vitalsList, imgResults, allergyList] = await Promise.all([
+      db.select().from(labOrders).where(eq(labOrders.encounterId, encounterId)),
+      db.select().from(imagingOrders).where(eq(imagingOrders.encounterId, encounterId)),
+      db.select().from(prescriptions).where(eq(prescriptions.encounterId, encounterId)),
+      this.getVitals(encounterId),
+      db.select().from(imagingResults).where(eq(imagingResults.encounterId, encounterId)),
+      db
+        .select()
+        .from(patientAllergies)
+        .where(
+          and(eq(patientAllergies.patientId, encounter.patientId), gte(patientAllergies.createdAt, encounterStart)),
+        )
+        .orderBy(desc(patientAllergies.createdAt)),
+    ]);
+    const notesList = await db
+      .select()
+      .from(patientNotes)
+      .where(
+        and(
+          eq(patientNotes.patientId, encounter.patientId),
+          or(
+            eq(patientNotes.encounterId, encounterId),
+            and(
+              isNull(patientNotes.encounterId),
+              gte(patientNotes.createdAt, encounter.createdAt ?? new Date(0)),
+            ),
+          ),
+        ),
+      )
+      .orderBy(desc(sql`coalesce(${patientNotes.signedAt}, ${patientNotes.createdAt})`));
+    return {
+      encounter,
+      patient,
+      appointment: appointment ?? null,
+      labOrders: labList,
+      imagingOrders: imagingOrderList,
+      prescriptions: rxList,
+      vitals: vitalsList,
+      notes: notesList,
+      imagingResults: imgResults,
+      allergiesDocumentedThisVisit: allergyList,
+    };
   }
 
   async getVitals(encounterId: string): Promise<Vitals[]> {
@@ -328,6 +443,32 @@ export class DatabaseStorage implements IStorage {
   async updateAppointment(id: string, data: Partial<InsertAppointment>): Promise<Appointment | undefined> {
     const [updated] = await db.update(appointments).set(data).where(eq(appointments.id, id)).returning();
     return updated;
+  }
+
+  async getCommonVisitReasons(): Promise<CommonVisitReason[]> {
+    return db
+      .select()
+      .from(commonVisitReasons)
+      .where(eq(commonVisitReasons.isActive, true))
+      .orderBy(asc(commonVisitReasons.sortOrder), asc(commonVisitReasons.label));
+  }
+
+  async ensureCommonVisitReasonsSeeded(): Promise<void> {
+    const [row] = await db.select({ n: count() }).from(commonVisitReasons);
+    if ((row?.n ?? 0) > 0) return;
+    const defaults: { label: string; sortOrder: number; isActive: boolean }[] = [
+      { label: "Annual physical / wellness visit", sortOrder: 10, isActive: true },
+      { label: "Follow-up visit", sortOrder: 20, isActive: true },
+      { label: "Sick visit / acute complaint", sortOrder: 30, isActive: true },
+      { label: "Chronic disease management", sortOrder: 40, isActive: true },
+      { label: "Medication refill / review", sortOrder: 50, isActive: true },
+      { label: "Lab results review", sortOrder: 60, isActive: true },
+      { label: "Post-operative check", sortOrder: 70, isActive: true },
+      { label: "Vaccination / immunization", sortOrder: 80, isActive: true },
+      { label: "Mental health visit", sortOrder: 90, isActive: true },
+      { label: "Other", sortOrder: 100, isActive: true },
+    ];
+    await db.insert(commonVisitReasons).values(defaults);
   }
 
   async getLabOrders(patientId?: string): Promise<LabOrder[]> {

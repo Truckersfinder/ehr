@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/popover";
 import { Search, Loader2, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 import type { Patient } from "@shared/schema";
 
 const DEBOUNCE_MS = 300;
@@ -18,8 +19,15 @@ export function PatientSearch() {
   const [results, setResults] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(false);
   const [, setLocation] = useLocation();
-  const token = typeof localStorage !== "undefined" ? localStorage.getItem("ehr_token") : null;
+  const { token } = useAuth();
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  /** Re-open when typing after popover was closed (e.g. Escape) while input stays focused */
+  useEffect(() => {
+    if (query.trim().length > 0) {
+      setOpen(true);
+    }
+  }, [query]);
 
   useEffect(() => {
     if (!query.trim()) {
@@ -45,7 +53,7 @@ export function PatientSearch() {
   }, [query, token]);
 
   const handleSelect = (patient: Patient) => {
-    setLocation(`/patients/${patient.id}`);
+    setLocation(`/patients/${patient.id}?fromSearch=1`);
     setQuery("");
     setOpen(false);
     setResults([]);
@@ -60,7 +68,11 @@ export function PatientSearch() {
             type="search"
             placeholder="Patient search (name or MRN)..."
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setQuery(v);
+              if (v.trim().length > 0) setOpen(true);
+            }}
             onFocus={() => setOpen(true)}
             className="pl-9 h-9 bg-muted/50"
             data-testid="patient-search-input"

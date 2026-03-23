@@ -49,12 +49,22 @@ export const patients = pgTable("patients", {
   city: text("city"),
   country: text("country").default("KE"),
   bloodGroup: text("blood_group"),
+  /** Profile image served from /uploads/… after upload */
+  profilePhotoUrl: text("profile_photo_url"),
   allergies: text("allergies"),
   nextOfKinName: text("next_of_kin_name"),
   nextOfKinPhone: text("next_of_kin_phone"),
   nextOfKinRelation: text("next_of_kin_relation"),
   primaryProviderId: varchar("primary_provider_id"),
   facilityId: varchar("facility_id"),
+  /** Registration / billing (front desk) */
+  insuranceCarrier: text("insurance_carrier"),
+  insurancePolicyNumber: text("insurance_policy_number"),
+  insuranceGroupNumber: text("insurance_group_number"),
+  billingGuarantorName: text("billing_guarantor_name"),
+  billingGuarantorPhone: text("billing_guarantor_phone"),
+  billingGuarantorRelation: text("billing_guarantor_relation"),
+  billingNotes: text("billing_notes"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -79,7 +89,8 @@ export const patientAllergies = pgTable("patient_allergies", {
   allergen: text("allergen").notNull(),
   severity: allergySeverityEnum("severity").notNull().default("HIGH"),
   reactionType: text("reaction_type"),
-  addedBy: varchar("added_by").notNull(),
+  /** Nullable for legacy rows; new rows should set addedBy from the API */
+  addedBy: varchar("added_by"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -88,6 +99,8 @@ export const noteTypeEnum = pgEnum("note_type", ["nursing", "clinician"]);
 export const patientNotes = pgTable("patient_notes", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   patientId: varchar("patient_id").notNull(),
+  /** When set, ties the note to a specific visit/encounter (e.g. schedule visit) */
+  encounterId: varchar("encounter_id"),
   authorId: varchar("author_id").notNull(),
   authorRole: noteTypeEnum("author_role").notNull(),
   noteKind: text("note_kind").default("Progress Note"),
@@ -126,6 +139,8 @@ export const encounters = pgTable("encounters", {
   patientId: varchar("patient_id").notNull(),
   clinicianId: varchar("clinician_id").notNull(),
   facilityId: varchar("facility_id"),
+  /** Set when the encounter was started from the schedule (visit summary eligibility) */
+  appointmentId: varchar("appointment_id"),
   type: encounterTypeEnum("type").notNull().default("outpatient"),
   status: encounterStatusEnum("status").notNull().default("scheduled"),
   chiefComplaint: text("chief_complaint"),
@@ -134,6 +149,8 @@ export const encounters = pgTable("encounters", {
   assessment: text("assessment"),
   plan: text("plan"),
   icdCodes: text("icd_codes"),
+  /** Discharge / handout instructions for the patient; editable on Visit Summary */
+  patientInstructions: text("patient_instructions"),
   visitDate: timestamp("visit_date").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -168,6 +185,20 @@ export const appointments = pgTable("appointments", {
   status: appointmentStatusEnum("status").notNull().default("scheduled"),
   reason: text("reason"),
   notes: text("notes"),
+  /** Captured at front-desk check-in (reception) */
+  checkInCopayAmount: decimal("check_in_copay_amount"),
+  checkInPaymentMethod: text("check_in_payment_method"),
+  checkInAmountReceived: decimal("check_in_amount_received"),
+  checkInPaymentNotes: text("check_in_payment_notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/** Curated list for scheduling / visit reason pickers (seeded; extend via DB later). */
+export const commonVisitReasons = pgTable("common_visit_reasons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  label: text("label").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -300,7 +331,18 @@ export const insertFamilyMemberSchema = createInsertSchema(familyMembers).omit({
 export const insertFamilyMemberConditionSchema = createInsertSchema(familyMemberConditions).omit({ id: true, createdAt: true });
 export const insertEncounterSchema = createInsertSchema(encounters).omit({ id: true, createdAt: true });
 export const insertVitalsSchema = createInsertSchema(vitals).omit({ id: true, recordedAt: true });
-export const insertAppointmentSchema = createInsertSchema(appointments).omit({ id: true, createdAt: true });
+/**
+ * API / JSON: `scheduledDate` is an ISO string; drizzle-zod defaults expect `Date`.
+ * Use omit+extend so coercion reliably replaces the generated field (plain `.extend()` can still fail).
+ * `duration` may arrive as a string from some clients — coerce to int.
+ */
+export const insertAppointmentSchema = createInsertSchema(appointments)
+  .omit({ id: true, createdAt: true, scheduledDate: true, duration: true })
+  .extend({
+    scheduledDate: z.coerce.date(),
+    duration: z.coerce.number().int().min(1).max(480).default(30),
+  });
+export const insertCommonVisitReasonSchema = createInsertSchema(commonVisitReasons).omit({ id: true, createdAt: true });
 export const insertLabOrderSchema = createInsertSchema(labOrders).omit({ id: true, createdAt: true, completedAt: true });
 export const insertImagingOrderSchema = createInsertSchema(imagingOrders).omit({ id: true, createdAt: true, completedAt: true });
 export const insertImagingResultSchema = createInsertSchema(imagingResults).omit({ id: true, createdAt: true });
@@ -336,6 +378,8 @@ export type InsertVitals = z.infer<typeof insertVitalsSchema>;
 export type Vitals = typeof vitals.$inferSelect;
 export type InsertAppointment = z.infer<typeof insertAppointmentSchema>;
 export type Appointment = typeof appointments.$inferSelect;
+export type InsertCommonVisitReason = z.infer<typeof insertCommonVisitReasonSchema>;
+export type CommonVisitReason = typeof commonVisitReasons.$inferSelect;
 export type InsertLabOrder = z.infer<typeof insertLabOrderSchema>;
 export type LabOrder = typeof labOrders.$inferSelect;
 export type InsertImagingOrder = z.infer<typeof insertImagingOrderSchema>;

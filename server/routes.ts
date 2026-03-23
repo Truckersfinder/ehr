@@ -3,13 +3,17 @@ import { createServer, type Server } from "http";
 import path from "path";
 import fs from "fs";
 import multer from "multer";
+import { ensureUploadsDir } from "./uploads-dir";
 import { storage } from "./storage";
 import { authMiddleware, comparePassword, generateToken, hashPassword, requireRole, type AuthRequest } from "./auth";
 import { loginSchema, insertPatientSchema, insertEncounterSchema, insertVitalsSchema, insertAppointmentSchema, insertLabOrderSchema, insertImagingOrderSchema, insertImagingResultSchema, insertPatientDocumentSchema, insertPrescriptionSchema, insertInvoiceSchema } from "@shared/schema";
-import { seedDatabase } from "./seed";
 
-const uploadsDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+/** Create patient: never take legacy free-text `allergies` from the request (autofill / stray JSON). Use structured patient_allergies + clinical workflow instead. */
+const insertPatientCreateSchema = insertPatientSchema.omit({ allergies: true, profilePhotoUrl: true });
+import { seedDatabase } from "./seed";
+import { getCountriesList } from "./countries";
+
+const uploadsDir = ensureUploadsDir();
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -22,16 +26,29 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 },
 });
 
+const profilePhotoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadsDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase();
+      const safeExt = [".jpg", ".jpeg", ".png", ".gif", ".webp"].includes(ext) ? ext : ".jpg";
+      cb(null, `patient-profile-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPEG, PNG, GIF, or WebP images are allowed"));
+  },
+});
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
   await seedDatabase();
-
-  app.use("/uploads", (req, res, next) => {
-    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    next();
-  }, express.static(uploadsDir));
+  await storage.ensureCommonVisitReasonsSeeded();
 
   app.post("/api/upload", authMiddleware as any, upload.single("file"), (req: any, res: any) => {
     try {
@@ -136,6 +153,15 @@ export async function registerRoutes(
     }
   });
 
+  /** ISO 3166-1 alpha-2 list + English names (for country pickers across the app). */
+  app.get("/api/countries", authMiddleware as any, async (_req, res) => {
+    try {
+      return res.json(getCountriesList());
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/patients", authMiddleware as any, async (req, res) => {
     try {
       const search = req.query.search as string;
@@ -162,9 +188,9 @@ export async function registerRoutes(
 
   app.post("/api/patients", authMiddleware as any, async (req: any, res) => {
     try {
-      const parsed = insertPatientSchema.safeParse(req.body);
+      const parsed = insertPatientCreateSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: "Invalid patient data", errors: parsed.error.flatten() });
-      const patient = await storage.createPatient(parsed.data);
+      const patient = await storage.createPatient({ ...parsed.data, allergies: null, profilePhotoUrl: null });
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_PATIENT", resource: "patient", resourceId: patient.id, details: `Created patient ${patient.firstName} ${patient.lastName}` });
       return res.status(201).json(patient);
     } catch (error: any) {
@@ -172,16 +198,91 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/patients/:id", authMiddleware as any, async (req: any, res) => {
-    try {
-      const updated = await storage.updatePatient(req.params.id, req.body);
-      if (!updated) return res.status(404).json({ message: "Patient not found" });
-      await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_PATIENT", resource: "patient", resourceId: req.params.id });
-      return res.json(updated);
-    } catch (error: any) {
-      return res.status(500).json({ message: error.message });
-    }
-  });
+  app.patch(
+    "/api/patients/:id",
+    authMiddleware as any,
+    requireRole(
+      "super_admin",
+      "facility_admin",
+      "clinician",
+      "nurse",
+      "lab_tech",
+      "pharmacist",
+      "finance",
+      "reception",
+    ) as any,
+    async (req: any, res) => {
+      try {
+        const updated = await storage.updatePatient(req.params.id, req.body);
+        if (!updated) return res.status(404).json({ message: "Patient not found" });
+        await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_PATIENT", resource: "patient", resourceId: req.params.id });
+        return res.json(updated);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/patients/:patientId/profile-photo",
+    authMiddleware as any,
+    requireRole(
+      "super_admin",
+      "facility_admin",
+      "clinician",
+      "nurse",
+      "lab_tech",
+      "pharmacist",
+      "finance",
+      "reception",
+    ) as any,
+    (req: any, res: any, next: any) => {
+      profilePhotoUpload.single("photo")(req, res, (err: unknown) => {
+        if (err) {
+          const message = err instanceof Error ? err.message : "Invalid upload";
+          return res.status(400).json({ message });
+        }
+        next();
+      });
+    },
+    async (req: any, res) => {
+      try {
+        if (!req.file) return res.status(400).json({ message: "No image uploaded" });
+        const patientId = req.params.patientId;
+        const patient = await storage.getPatient(patientId);
+        if (!patient) {
+          try {
+            fs.unlinkSync(req.file.path);
+          } catch {
+            /* ignore */
+          }
+          return res.status(404).json({ message: "Patient not found" });
+        }
+        const url = `/uploads/${req.file.filename}`;
+        if (patient.profilePhotoUrl?.startsWith("/uploads/")) {
+          const oldName = path.basename(patient.profilePhotoUrl);
+          const oldPath = path.join(uploadsDir, oldName);
+          if (oldPath.startsWith(uploadsDir) && fs.existsSync(oldPath)) {
+            try {
+              fs.unlinkSync(oldPath);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        const updated = await storage.updatePatient(patientId, { profilePhotoUrl: url });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "UPDATE_PATIENT_PROFILE_PHOTO",
+          resource: "patient",
+          resourceId: patientId,
+        });
+        return res.json(updated);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
 
   app.get("/api/patients/:id/problems", authMiddleware as any, async (req, res) => {
     try {
@@ -383,6 +484,15 @@ export async function registerRoutes(
       }
       const authorRole = (req.user.role && String(req.user.role).toLowerCase() === "nurse") ? "nursing" : "clinician";
       const noteKind = body.noteKind && typeof body.noteKind === "string" ? String(body.noteKind).trim() : "Progress Note";
+      let encounterIdNote: string | undefined;
+      if (body.encounterId && typeof body.encounterId === "string") {
+        const enc = await storage.getEncounter(body.encounterId);
+        if (!enc || enc.patientId !== patientId) {
+          res.status(400).json({ message: "Invalid encounter for this patient" });
+          return;
+        }
+        encounterIdNote = enc.id;
+      }
       const created = await storage.createPatientNote({
         patientId,
         authorId: req.user.id,
@@ -390,6 +500,7 @@ export async function registerRoutes(
         noteKind: noteKind || "Progress Note",
         content: saveAsIncomplete ? (trimmed || "(Draft)") : trimmed,
         ...(saveAsIncomplete ? { status: "incomplete" as const } : {}),
+        ...(encounterIdNote ? { encounterId: encounterIdNote } : {}),
       } as any);
       await storage.createAuditLog({ userId: req.user.id, action: "ADD_PATIENT_NOTE", resource: "patient_note", resourceId: created.id });
       res.status(201).json(created);
@@ -414,11 +525,15 @@ export async function registerRoutes(
       if (content !== undefined && (typeof content !== "string" || !String(content).trim())) {
         return res.status(400).json({ message: "Note content cannot be empty" });
       }
-      const updates: { content?: string; status: string; signedAt?: Date | null } = {
+      const updates: { content?: string; status: string; signedAt?: Date | null; encounterId?: string } = {
         status: signAndSave ? "signed" : saveAsIncomplete ? "incomplete" : "edited",
       };
       if (signAndSave) updates.signedAt = new Date();
       if (content !== undefined) updates.content = String(content).trim();
+      if (signAndSave && !note.encounterId && body.encounterId && typeof body.encounterId === "string") {
+        const enc = await storage.getEncounter(body.encounterId);
+        if (enc && enc.patientId === patientId) updates.encounterId = enc.id;
+      }
       const updated = await storage.updatePatientNote(noteId, updates);
       if (!updated) return res.status(404).json({ message: "Note not found" });
       await storage.createAuditLog({ userId: req.user.id, action: "EDIT_PATIENT_NOTE", resource: "patient_note", resourceId: noteId });
@@ -470,23 +585,31 @@ export async function registerRoutes(
   app.post("/api/patients/:id/vitals", authMiddleware as any, requireRole("nurse", "clinician") as any, async (req: any, res) => {
     try {
       const patientId = req.params.id;
-      const encounters = await storage.getEncounters(patientId);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const visitEnd = new Date(today);
-      visitEnd.setDate(visitEnd.getDate() + 1);
-      let encounter = encounters.find(
-        (e) => (e.status === "in_progress" || e.status === "scheduled") && e.visitDate && new Date(e.visitDate) >= today && new Date(e.visitDate) < visitEnd
-      );
-      if (!encounter) {
-        encounter = await storage.createEncounter({
-          patientId,
-          clinicianId: req.user.id,
-          type: "outpatient",
-          status: "in_progress",
-        });
-      }
       const body = req.body && typeof req.body === "object" ? req.body : {};
+      let encounter: Awaited<ReturnType<typeof storage.getEncounter>> | undefined;
+      if (body.encounterId && typeof body.encounterId === "string") {
+        encounter = await storage.getEncounter(body.encounterId);
+        if (!encounter || encounter.patientId !== patientId) {
+          return res.status(400).json({ message: "Invalid encounter for this patient" });
+        }
+      } else {
+        const encounters = await storage.getEncounters(patientId);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const visitEnd = new Date(today);
+        visitEnd.setDate(visitEnd.getDate() + 1);
+        encounter = encounters.find(
+          (e) => (e.status === "in_progress" || e.status === "scheduled") && e.visitDate && new Date(e.visitDate) >= today && new Date(e.visitDate) < visitEnd
+        );
+        if (!encounter) {
+          encounter = await storage.createEncounter({
+            patientId,
+            clinicianId: req.user.id,
+            type: "outpatient",
+            status: "in_progress",
+          });
+        }
+      }
       const payload = {
         encounterId: encounter.id,
         patientId,
@@ -625,6 +748,94 @@ export async function registerRoutes(
     }
   });
 
+  /** Open patient chart from Schedule: create an in-progress encounter and mark the appointment in progress */
+  app.post(
+    "/api/patients/:patientId/start-from-schedule",
+    authMiddleware as any,
+    requireRole("clinician", "nurse", "reception", "super_admin", "facility_admin") as any,
+    async (req: any, res) => {
+      try {
+        const patientId = req.params.patientId;
+        const appointmentId = req.body?.appointmentId;
+        if (!appointmentId || typeof appointmentId !== "string") {
+          return res.status(400).json({ message: "appointmentId is required" });
+        }
+        const appt = await storage.getAppointment(appointmentId);
+        if (!appt || appt.patientId !== patientId) {
+          return res.status(400).json({ message: "Appointment not found for this patient" });
+        }
+        if (appt.status === "completed") {
+          return res.status(409).json({
+            code: "VISIT_COMPLETED",
+            message: "This visit has already been signed. Choose whether to edit documentation when opening from the schedule.",
+          });
+        }
+        if (appt.status === "cancelled" || appt.status === "no_show") {
+          return res.status(400).json({ message: "Cannot start an encounter for a cancelled or no-show appointment" });
+        }
+        const encounter = await storage.createEncounter({
+          patientId,
+          clinicianId: appt.clinicianId,
+          appointmentId: appt.id,
+          type: "outpatient",
+          status: "in_progress",
+          chiefComplaint: appt.reason ?? undefined,
+          visitDate: appt.scheduledDate,
+        });
+        await storage.updateAppointment(appt.id, { status: "in_progress" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "START_ENCOUNTER_FROM_SCHEDULE",
+          resource: "encounter",
+          resourceId: encounter.id,
+        });
+        return res.status(201).json({ encounter, appointmentId: appt.id });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
+  /** Reopen a signed visit from Schedule: clinician/nurse puts encounter + appointment back to in progress. */
+  app.post(
+    "/api/patients/:patientId/reopen-from-schedule",
+    authMiddleware as any,
+    requireRole("clinician", "nurse") as any,
+    async (req: any, res) => {
+      try {
+        const patientId = req.params.patientId;
+        const appointmentId = req.body?.appointmentId;
+        if (!appointmentId || typeof appointmentId !== "string") {
+          return res.status(400).json({ message: "appointmentId is required" });
+        }
+        const appt = await storage.getAppointment(appointmentId);
+        if (!appt || appt.patientId !== patientId) {
+          return res.status(400).json({ message: "Appointment not found for this patient" });
+        }
+        if (appt.status !== "completed") {
+          return res.status(400).json({ message: "Only a signed (completed) visit can be reopened from the schedule." });
+        }
+        const encounter = await storage.getEncounterByAppointmentId(appointmentId);
+        if (!encounter || encounter.patientId !== patientId) {
+          return res.status(404).json({ message: "No encounter found for this appointment." });
+        }
+        await storage.updateEncounter(encounter.id, { status: "in_progress" });
+        await storage.updateAppointment(appt.id, { status: "in_progress" });
+        const updated = await storage.getEncounter(encounter.id);
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "REOPEN_VISIT_FROM_SCHEDULE",
+          resource: "encounter",
+          resourceId: encounter.id,
+          details: `Reopened visit for appointment ${appt.id}`,
+        });
+        return res.json({ encounter: updated, appointmentId: appt.id });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
   app.post("/api/encounters", authMiddleware as any, async (req: any, res) => {
     try {
       const parsed = insertEncounterSchema.safeParse(req.body);
@@ -643,6 +854,17 @@ export async function registerRoutes(
       if (!updated) return res.status(404).json({ message: "Encounter not found" });
       await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_ENCOUNTER", resource: "encounter", resourceId: req.params.id });
       return res.json(updated);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  /** Aggregated read-only visit data for schedule-started encounters (clinician / nurse only) */
+  app.get("/api/encounters/:id/visit-summary", authMiddleware as any, requireRole("clinician", "nurse") as any, async (req, res) => {
+    try {
+      const data = await storage.getVisitSummaryForEncounter(req.params.id);
+      if (!data) return res.status(404).json({ message: "Visit summary is only available for visits started from the schedule." });
+      return res.json(data);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
@@ -669,6 +891,15 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/common-visit-reasons", authMiddleware as any, async (_req, res) => {
+    try {
+      const list = await storage.getCommonVisitReasons();
+      return res.json(list);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/appointments", authMiddleware as any, async (req, res) => {
     try {
       const { date, start, end } = req.query as { date?: string; start?: string; end?: string };
@@ -679,10 +910,26 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/appointments/:id", authMiddleware as any, async (req, res) => {
+    try {
+      const appt = await storage.getAppointment(req.params.id);
+      if (!appt) return res.status(404).json({ message: "Appointment not found" });
+      return res.json(appt);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/appointments", authMiddleware as any, async (req: any, res) => {
     try {
       const parsed = insertAppointmentSchema.safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ message: "Invalid appointment data", errors: parsed.error.flatten() });
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: "Invalid appointment data",
+          errors: parsed.error.flatten(),
+          issues: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+        });
+      }
       const appt = await storage.createAppointment(parsed.data);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_APPOINTMENT", resource: "appointment", resourceId: appt.id });
       return res.status(201).json(appt);

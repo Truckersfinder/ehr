@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/lib/auth";
+import { getStoredAuthToken } from "@/lib/auth-storage";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, X, FileText } from "lucide-react";
 
@@ -24,7 +25,7 @@ export function DocumentFileUpload({
   const [uploading, setUploading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const { token } = useAuth();
-  const authToken = token ?? (typeof localStorage !== "undefined" ? localStorage.getItem("ehr_token") : null);
+  const authToken = token ?? getStoredAuthToken();
   const { toast } = useToast();
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -1,10 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
+import { useAuth } from "@/lib/auth";
+import { appointmentStatusBadgeClass, formatAppointmentStatusLabel } from "@/lib/appointment-status";
 import { format, startOfDay, endOfDay, addDays, subDays } from "date-fns";
 import { Link } from "wouter";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Table,
   TableBody,
@@ -17,21 +22,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Clock, ChevronLeft, ChevronRight } from "lucide-react";
 import type { Appointment, Patient, User as UserType } from "@shared/schema";
 
-const statusColors: Record<string, string> = {
-  scheduled: "bg-accent text-accent-foreground",
-  confirmed: "bg-primary/10 text-primary",
-  checked_in: "bg-chart-4/10 text-chart-4",
-  in_progress: "bg-chart-3/10 text-chart-3",
-  completed: "bg-chart-3/10 text-chart-3",
-  cancelled: "bg-destructive/10 text-destructive",
-  no_show: "bg-muted text-muted-foreground",
-};
-
 export default function SchedulePage() {
-  const token = localStorage.getItem("ehr_token");
+  const { user, token } = useAuth();
+  const [, navigate] = useLocation();
   const today = new Date();
 
+  useEffect(() => {
+    if (user?.role === "reception") {
+      navigate("/appointments");
+    }
+  }, [user?.role, navigate]);
+
   const [viewingDate, setViewingDate] = useState(() => new Date(today.getFullYear(), today.getMonth(), today.getDate()));
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
 
   const viewingDayStart = startOfDay(viewingDate).toISOString();
   const viewingDayEnd = endOfDay(viewingDate).toISOString();
@@ -76,14 +79,19 @@ export default function SchedulePage() {
   const isToday =
     viewingDate.getTime() === new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
 
+  if (user?.role === "reception") {
+    return (
+      <div className="p-6 text-muted-foreground text-sm" data-testid="schedule-redirect-reception">
+        Redirecting to Appointments…
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto" data-testid="schedule-page">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Schedule</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            Use the arrows to view previous or upcoming days
-          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -95,10 +103,31 @@ export default function SchedulePage() {
           >
             <ChevronLeft className="w-4 h-4" />
           </Button>
-          <span className="font-medium min-w-[200px] text-center text-sm">
-            {format(viewingDate, "EEEE, MMM d, yyyy")}
-            {isToday && <span className="text-muted-foreground font-normal ml-1">(today)</span>}
-          </span>
+          <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                className="font-medium min-w-[220px] text-center text-sm h-auto p-0 text-primary hover:text-primary hover:underline"
+                aria-label="Open date picker"
+              >
+                {format(viewingDate, "EEEE, MMM d, yyyy")}
+                {isToday && <span className="text-muted-foreground font-normal ml-1">(today)</span>}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="center">
+              <Calendar
+                mode="single"
+                selected={viewingDate}
+                onSelect={(date) => {
+                  if (!date) return;
+                  setViewingDate(new Date(date.getFullYear(), date.getMonth(), date.getDate()));
+                  setDatePickerOpen(false);
+                }}
+                initialFocus
+              />
+            </PopoverContent>
+          </Popover>
           <Button
             type="button"
             variant="outline"
@@ -155,7 +184,9 @@ export default function SchedulePage() {
                           {format(new Date(apt.scheduledDate), "HH:mm")}
                         </TableCell>
                         <TableCell>
-                          <Link href={`/patients/${apt.patientId}`}>
+                          <Link
+                            href={`/patients/${apt.patientId}?fromSchedule=1&appointmentId=${encodeURIComponent(apt.id)}`}
+                          >
                             <a className="text-primary hover:underline font-medium">
                               {patient ? `${patient.firstName} ${patient.lastName}` : "—"}
                             </a>
@@ -169,9 +200,9 @@ export default function SchedulePage() {
                         <TableCell>
                           <Badge
                             variant="secondary"
-                            className={`text-[10px] capitalize ${statusColors[apt.status] ?? ""}`}
+                            className={`text-[10px] capitalize ${appointmentStatusBadgeClass(apt.status)}`}
                           >
-                            {apt.status.replace("_", " ")}
+                            {formatAppointmentStatusLabel(apt.status)}
                           </Badge>
                         </TableCell>
                         <TableCell className="max-w-[10rem] truncate" title={apt.reason ?? ""}>

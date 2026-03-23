@@ -11,13 +11,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
 import { Receipt, CreditCard, Banknote, Smartphone } from "lucide-react";
 import { format } from "date-fns";
 import type { Invoice, Patient } from "@shared/schema";
 
 export default function BillingPage() {
   const { toast } = useToast();
-  const token = localStorage.getItem("ehr_token");
+  const { token } = useAuth();
   const [payOpen, setPayOpen] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState("cash");
