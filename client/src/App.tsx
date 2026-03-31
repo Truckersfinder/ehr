@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Switch, Route, Link, useRoute, useLocation } from "wouter";
+import { useEffect, useMemo } from "react";
+import { Switch, Route, Redirect, Link, useRoute, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -8,12 +8,13 @@ import { AppHeaderNav } from "@/components/app-header-nav";
 import { PatientSearch } from "@/components/patient-search";
 import { PatientDemographicsSidebar } from "@/components/patient-demographics-sidebar";
 import { PatientChartNavigatorEmbedded } from "@/components/patient-chart-navigator-embedded";
-import { ToolbarPatientPickerDialog } from "./components/toolbar-patient-picker-dialog";
 import { ScheduleNewAppointmentToolbarDialog } from "@/components/schedule-new-appointment-toolbar-dialog";
+import { cn } from "@/lib/utils";
+import { MutedIconBox } from "@/components/muted-icon-box";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ThemeProvider, useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
-import { Moon, Sun, CalendarDays, FlaskConical, Upload, UserPlus, LogOut, Receipt, Heart } from "lucide-react";
+import { Moon, Sun, CalendarDays, FlaskConical, Upload, User, UserPlus, LogOut, Heart, PhoneCall, Shield } from "lucide-react";
 
 import LoginPage from "@/pages/login";
 import DashboardPage from "@/pages/dashboard";
@@ -28,10 +29,12 @@ import AppointmentsPage from "@/pages/appointments";
 import CheckInAppointmentPage from "@/pages/check-in-appointment";
 import LaboratoryPage from "@/pages/laboratory";
 import UploadResultsPage from "@/pages/upload-results";
-import PharmacyPage from "@/pages/pharmacy";
 import BillingPage from "@/pages/billing";
+import BillingVisitChargesReviewPage from "@/pages/billing-visit-charges-review";
 import AdminPage from "@/pages/admin";
 import NotFound from "@/pages/not-found";
+import PatientFollowUpPage from "@/pages/patient-follow-up";
+import PatientCallPage from "@/pages/patient-call";
 
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
@@ -44,6 +47,9 @@ function ThemeToggle() {
 
 function LandingByRole() {
   const { user } = useAuth();
+  if (user?.role === "security") {
+    return <Redirect to="/admin" />;
+  }
   if (user?.role === "reception") {
     return <AppointmentsPage />;
   }
@@ -67,10 +73,12 @@ function Router() {
       <Route path="/encounters/:id" component={EncounterDetailPage} />
       <Route path="/appointments/check-in/:appointmentId" component={CheckInAppointmentPage} />
       <Route path="/appointments" component={AppointmentsPage} />
+      <Route path="/patient-follow-up" component={PatientFollowUpPage} />
+      <Route path="/patient-call" component={PatientCallPage} />
       <Route path="/laboratory" component={LaboratoryPage} />
       <Route path="/upload-results" component={UploadResultsPage} />
-      <Route path="/pharmacy" component={PharmacyPage} />
       <Route path="/billing" component={BillingPage} />
+      <Route path="/billing/visit-charges/:encounterId" component={BillingVisitChargesReviewPage} />
       <Route path="/admin" component={AdminPage} />
       <Route component={NotFound} />
     </Switch>
@@ -79,7 +87,7 @@ function Router() {
 
 function AuthenticatedApp() {
   const { user, logout } = useAuth();
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const pathOnly = location.split("?")[0];
   const [matchDemographics, demoParams] = useRoute("/patients/:id/demographics");
   const [matchPatient, params] = useRoute("/patients/:id");
@@ -102,6 +110,13 @@ function AuthenticatedApp() {
     }
   }, [pathOnly]);
 
+  /** Security role: Administration area only. */
+  useEffect(() => {
+    if (user?.role === "security" && pathOnly !== "/admin") {
+      setLocation("/admin");
+    }
+  }, [user, pathOnly, setLocation]);
+
   const activePatientId = useMemo(() => {
     if (patientIdFromRoute) return patientIdFromRoute;
     if (typeof window === "undefined") return null;
@@ -118,31 +133,12 @@ function AuthenticatedApp() {
 
   /**
    * Toolbar: Schedule never shows the embedded storyboard.
-   * Laboratory & Upload Results: show demographics + chart navigator only when there is an
-   * active patient chart session AND the user role is allowed for that workflow (same as sidebar).
-   * Other routes (dashboard, admin, etc.) never show the embedded storyboard.
+   * Laboratory & Uploads: full-width only (no demographics + chart navigator rail).
+   * Other routes (dashboard, admin, etc.) never show the embedded chrome.
    */
-  const laboratoryRoles = new Set([
-    "super_admin",
-    "facility_admin",
-    "clinician",
-    "nurse",
-    "lab_tech",
-  ]);
-  const uploadResultsRoles = new Set([
-    "super_admin",
-    "facility_admin",
-    "clinician",
-    "nurse",
-    "lab_tech",
-  ]);
-
-  const role = user?.role ?? "";
-  const inPatientChartSession = !!activePatientId;
-  const showEmbeddedOnLaboratory =
-    pathOnly === "/laboratory" && inPatientChartSession && laboratoryRoles.has(role);
-  const showEmbeddedOnUploadResults =
-    pathOnly === "/upload-results" && inPatientChartSession && uploadResultsRoles.has(role);
+  /** Lab and Uploads are full-width workflows; do not pin demographics / chart review beside them. */
+  const showEmbeddedOnLaboratory = false;
+  const showEmbeddedOnUploadResults = false;
 
   const showEmbeddedPatientChrome =
     !isPatientDetailRoute &&
@@ -156,141 +152,181 @@ function AuthenticatedApp() {
 
   const showLabAndUpload = user && ["clinician", "nurse"].includes(user.role);
   const isReception = user && user.role === "reception";
-  const isAdminToolbar = user && (user.role === "super_admin" || user.role === "facility_admin");
-
-  const [labPickerOpen, setLabPickerOpen] = useState(false);
-  const [uploadPickerOpen, setUploadPickerOpen] = useState(false);
+  /** Put module nav (Dashboard, Billing, …) before Schedule / Patient Call so admins see the intended order. */
+  const isAdminRole = user && (user.role === "super_admin" || user.role === "facility_admin");
+  const isSecurityOnly = user && user.role === "security";
 
   return (
     <>
-      <ToolbarPatientPickerDialog
-        open={labPickerOpen}
-        onOpenChange={setLabPickerOpen}
-        title="Laboratory — select patient"
-        description="Search for the patient you are resulting labs for."
-        targetPath="/laboratory"
-      />
-      <ToolbarPatientPickerDialog
-        open={uploadPickerOpen}
-        onOpenChange={setUploadPickerOpen}
-        title="Upload results — select patient"
-        description="Search for the patient whose outside lab, imaging, or document you are uploading."
-        targetPath="/upload-results"
-      />
-      <div className="flex h-screen w-full">
-        {showPatientDemographicsSidebar && demographicsPatientId ? (
-          <>
-            <PatientDemographicsSidebar
-              patientId={demographicsPatientId}
-              onRequestLeave={(path) => window.dispatchEvent(new CustomEvent("ehr-request-leave", { detail: path }))}
-            />
-            {/* Laboratory / Upload Results: embedded storyboard is review-only (no visit documentation) */}
-            {showEmbeddedPatientChrome && (
-              <PatientChartNavigatorEmbedded
-                patientId={demographicsPatientId}
-                showVisitDocumentation={false}
-              />
-            )}
-          </>
-        ) : null}
-        <div className="flex flex-col flex-1 min-w-0">
-          <header className="flex flex-wrap items-center gap-2 sm:gap-3 p-2 border-b bg-background sticky top-0 z-50">
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 flex-1">
+      <div className="flex h-screen w-full flex-col">
+        <header className="flex w-full flex-wrap items-center gap-2 sm:gap-3 p-2 border-b bg-background sticky top-0 z-50 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 flex-1">
               <Link href="/">
                 <a
                   className="inline-flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-accent/80 transition-colors shrink-0"
                   data-testid="link-app-brand"
                 >
-                  <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center">
-                    <Heart className="w-4 h-4 text-primary-foreground" />
-                  </div>
-                  <span className="font-bold text-sm tracking-tight">PPH</span>
+                  <MutedIconBox icon={Heart} size="sm" />
+                  <span className="font-bold text-xs sm:text-sm tracking-tight leading-tight">
+                    Pin Point Health
+                  </span>
                 </a>
               </Link>
-              {isReception ? (
-                <Link href="/appointments">
-                  <a
-                    className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
-                    data-testid="toolbar-appointments"
-                  >
-                    <CalendarDays className="w-4 h-4" />
-                    Appointments
-                  </a>
-                </Link>
-              ) : (
-                <Link href="/schedule">
-                  <a className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors" data-testid="toolbar-schedule">
-                    <CalendarDays className="w-4 h-4" />
-                    Schedule
-                  </a>
-                </Link>
-              )}
-              {isAdminToolbar && (
-                <Link href="/billing">
-                  <a
-                    className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
-                    data-testid="toolbar-billing"
-                  >
-                    <Receipt className="w-4 h-4" />
-                    Billing
-                  </a>
-                </Link>
-              )}
-              {showLabAndUpload && (
+              {isSecurityOnly ? (
+                <AppHeaderNav user={user} />
+              ) : isAdminRole ? (
                 <>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="inline-flex items-center gap-2 px-3 py-2 h-auto rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-                    data-testid="toolbar-laboratory"
-                    onClick={() => setLabPickerOpen(true)}
-                  >
-                    <FlaskConical className="w-4 h-4" />
-                    Laboratory
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="inline-flex items-center gap-2 px-3 py-2 h-auto rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-                    data-testid="toolbar-upload-results"
-                    onClick={() => setUploadPickerOpen(true)}
-                  >
-                    <Upload className="w-4 h-4" />
-                    Upload Results
-                  </Button>
-                </>
-              )}
-              {isReception && (
-                <>
-                  <ScheduleNewAppointmentToolbarDialog />
-                  <Link href="/patients/register">
-                    <a className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors" data-testid="toolbar-register-new-patient">
-                      <UserPlus className="w-4 h-4" />
-                      <span className="hidden sm:inline">Register New Patient</span>
-                      <span className="sm:hidden">Register</span>
+                  <AppHeaderNav user={user} />
+                  <Link href="/schedule">
+                    <a
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+                      data-testid="toolbar-schedule"
+                    >
+                      <CalendarDays className="w-4 h-4" />
+                      Schedule
+                    </a>
+                  </Link>
+                  <Link href="/admin">
+                    <a
+                      className={cn(
+                        "inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                        "hover:bg-accent hover:text-accent-foreground",
+                        (pathOnly === "/admin" || pathOnly.startsWith("/admin/")) && "bg-accent text-accent-foreground"
+                      )}
+                      data-testid="link-nav-admin"
+                    >
+                      <Shield className="w-4 h-4 shrink-0" />
+                      <span className="whitespace-nowrap">Admin</span>
+                    </a>
+                  </Link>
+                  <Link href="/patient-call">
+                    <a
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+                      data-testid="toolbar-patient-call"
+                    >
+                      <PhoneCall className="w-4 h-4" />
+                      Patient Call
                     </a>
                   </Link>
                 </>
+              ) : (
+                <>
+                  {isReception ? (
+                    <Link href="/appointments">
+                      <a
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+                        data-testid="toolbar-appointments"
+                      >
+                        <CalendarDays className="w-4 h-4" />
+                        Scheduled Appointment
+                      </a>
+                    </Link>
+                  ) : (
+                    <Link href="/schedule">
+                      <a
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+                        data-testid="toolbar-schedule"
+                      >
+                        <CalendarDays className="w-4 h-4" />
+                        Schedule
+                      </a>
+                    </Link>
+                  )}
+                  <Link href="/patient-call">
+                    <a
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+                      data-testid="toolbar-patient-call"
+                    >
+                      <PhoneCall className="w-4 h-4" />
+                      Patient Call
+                    </a>
+                  </Link>
+                  {showLabAndUpload && (
+                    <>
+                      <Link href="/laboratory">
+                        <a
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+                          data-testid="toolbar-laboratory"
+                        >
+                          <FlaskConical className="w-4 h-4" />
+                          Laboratory
+                        </a>
+                      </Link>
+                      <Link href="/upload-results">
+                        <a
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+                          data-testid="toolbar-upload-results"
+                        >
+                          <Upload className="w-4 h-4" />
+                          Uploads
+                        </a>
+                      </Link>
+                    </>
+                  )}
+                  {isReception && (
+                    <>
+                      <ScheduleNewAppointmentToolbarDialog />
+                      <Link href="/patients/register">
+                        <a
+                          className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+                          data-testid="toolbar-register-new-patient"
+                        >
+                          <UserPlus className="w-4 h-4" />
+                          <span className="hidden sm:inline">New Patient</span>
+                          <span className="sm:hidden">Register</span>
+                        </a>
+                      </Link>
+                    </>
+                  )}
+                  {user ? <AppHeaderNav user={user} /> : null}
+                </>
               )}
-              {user ? <AppHeaderNav user={user} /> : null}
-            </div>
-            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-              <PatientSearch />
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                onClick={logout}
-                title="Log out"
-                aria-label="Log out"
-                data-testid="button-logout"
+          </div>
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
+            {user && (
+              <span
+                className="inline-flex items-center gap-1.5 min-w-0 max-w-[min(12rem,40vw)] sm:max-w-xs"
+                data-testid="header-user-name"
+                title={user.fullName || user.username}
               >
-                <LogOut className="w-4 h-4" />
-              </Button>
-              <ThemeToggle />
-            </div>
-          </header>
-          <main className="flex-1 overflow-auto">
+                <User className="w-4 h-4 shrink-0 text-muted-foreground" aria-hidden />
+                <span className="truncate text-sm font-medium text-foreground" title={user.fullName || user.username}>
+                  {user.fullName?.trim() || user.username}
+                </span>
+              </span>
+            )}
+            <PatientSearch />
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={logout}
+              title="Log out"
+              aria-label="Log out"
+              data-testid="button-logout"
+            >
+              <LogOut className="w-4 h-4" />
+            </Button>
+            <ThemeToggle />
+          </div>
+        </header>
+        <div className="flex min-h-0 min-w-0 flex-1">
+          {showPatientDemographicsSidebar && demographicsPatientId ? (
+            <>
+              <PatientDemographicsSidebar
+                patientId={demographicsPatientId}
+                onRequestLeave={(path) => window.dispatchEvent(new CustomEvent("ehr-request-leave", { detail: path }))}
+              />
+              {/* Laboratory / Uploads: embedded storyboard is review-only (no visit documentation) */}
+              {showEmbeddedPatientChrome && (
+                <PatientChartNavigatorEmbedded
+                  patientId={demographicsPatientId}
+                  showVisitDocumentation={false}
+                />
+              )}
+            </>
+          ) : null}
+          <main className="min-w-0 flex-1 overflow-auto">
             <Router />
           </main>
         </div>
@@ -307,7 +343,7 @@ function AppContent() {
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-sm text-muted-foreground">Loading PPH…</p>
+          <p className="text-sm text-muted-foreground">Loading Pin Point Health…</p>
         </div>
       </div>
     );

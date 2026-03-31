@@ -12,12 +12,19 @@ const enLocale = require("i18n-iso-countries/langs/en.json") as import("i18n-iso
 i18nCountries.registerLocale(enLocale);
 
 let cached: CountryOption[] | null = null;
+const AFRICA_COUNTRY_CODES = new Set([
+  "DZ", "AO", "BJ", "BW", "BF", "BI", "CV", "CM", "CF", "TD", "KM", "CD", "CG", "CI", "DJ",
+  "EG", "GQ", "ER", "SZ", "ET", "GA", "GM", "GH", "GN", "GW", "KE", "LS", "LR", "LY", "MG",
+  "MW", "ML", "MR", "MU", "YT", "MA", "MZ", "NA", "NE", "NG", "RE", "RW", "ST", "SN", "SC",
+  "SL", "SO", "ZA", "SS", "SD", "TZ", "TG", "TN", "UG", "EH", "ZM", "ZW",
+]);
 
-/** All officially assigned ISO 3166-1 alpha-2 countries, English official names, sorted by name. */
+/** African ISO 3166-1 alpha-2 countries, English official names, sorted by name. */
 export function getCountriesList(): CountryOption[] {
   if (cached) return cached;
   const names = i18nCountries.getNames("en", { select: "official" }) as Record<string, string>;
   cached = Object.entries(names)
+    .filter(([code]) => AFRICA_COUNTRY_CODES.has(code.toUpperCase()))
     .map(([code, name]) => ({ code, name: String(name) }))
     .sort((a, b) => a.name.localeCompare(b.name, "en"));
   return cached;

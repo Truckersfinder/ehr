@@ -1,8 +1,9 @@
 import { db } from "./db";
-import { eq, like, ilike, or, desc, and, sql, count, inArray, isNull, gte, asc } from "drizzle-orm";
+import { eq, like, ilike, or, desc, and, sql, count, inArray, isNull, gte, asc, sum } from "drizzle-orm";
 import {
   users, facilities, patients, patientProblems, patientAllergies, patientNotes, familyMembers, familyMemberConditions,
-  encounters, vitals, appointments, commonVisitReasons, labOrders, imagingOrders, prescriptions, invoices, imagingResults, patientDocuments, auditLogs,
+  encounters, vitals, appointments, commonVisitReasons, labOrders, imagingOrders, prescriptions, invoices, billingChargeCatalog, encounterVisitCharges, imagingResults, patientDocuments, auditLogs,
+  followUpContacts,
   type InsertUser, type User, type InsertFacility, type Facility,
   type InsertPatient, type Patient, type InsertPatientProblem, type PatientProblem,
   type InsertPatientAllergy, type PatientAllergy, type InsertPatientNote, type PatientNote, type InsertFamilyMember, type FamilyMember,
@@ -10,18 +11,24 @@ import {
   type InsertVitals, type Vitals, type InsertAppointment, type Appointment, type CommonVisitReason,
   type InsertLabOrder, type LabOrder, type InsertImagingOrder, type ImagingOrder,
   type InsertPrescription, type Prescription, type InsertImagingResult, type ImagingResult,
-  type InsertPatientDocument, type PatientDocument, type InsertInvoice, type Invoice, type InsertAuditLog, type AuditLog,
+  type InsertPatientDocument, type PatientDocument, type InsertInvoice, type Invoice,
+  type BillingChargeCatalog, type InsertBillingChargeCatalog, type InsertAuditLog, type AuditLog,
+  type InsertFollowUpContact, type FollowUpContact,
+  type EncounterVisitCharge, type InsertEncounterVisitCharge,
 } from "@shared/schema";
+import { BILLING_CHARGE_CATALOG_SEEDS, buildLabOrderBillingChargeSeeds, VISIT_CHARGE_EXTRA_CATALOG_ROWS } from "@shared/billing-charge-seeds";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  updateUserPassword(id: string, passwordHash: string): Promise<User | undefined>;
   getUsers(): Promise<User[]>;
 
   getFacilities(): Promise<Facility[]>;
   getFacility(id: string): Promise<Facility | undefined>;
   createFacility(f: InsertFacility): Promise<Facility>;
+  updateFacility(id: string, data: Partial<InsertFacility>): Promise<Facility | undefined>;
 
   getPatients(): Promise<Patient[]>;
   getPatient(id: string): Promise<Patient | undefined>;
@@ -51,6 +58,20 @@ export interface IStorage {
   getFamilyHistory(patientId: string): Promise<{ members: FamilyMember[]; conditions: FamilyMemberCondition[] }>;
 
   getEncounters(patientId?: string): Promise<Encounter[]>;
+  /** Appointments whose scheduled time falls in [startISO, endISO] (use client local day bounds, same as Schedule). */
+  getBillingAppointmentsForRange(
+    startISO: string,
+    endISO: string,
+  ): Promise<
+    {
+      appointment: Appointment;
+      patient: Patient;
+      encounter: Encounter | null;
+      visitChargeTotal: string;
+      billingCurrency: string;
+      chargesFinalizedAt: Date | null;
+    }[]
+  >;
   getEncounter(id: string): Promise<Encounter | undefined>;
   /** Latest encounter linked to a schedule appointment (for reopening a signed visit). */
   getEncounterByAppointmentId(appointmentId: string): Promise<Encounter | undefined>;
@@ -68,6 +89,8 @@ export interface IStorage {
     notes: PatientNote[];
     imagingResults: ImagingResult[];
     allergiesDocumentedThisVisit: PatientAllergy[];
+    visitCharges: EncounterVisitCharge[];
+    billingCurrency: string;
   } | null>;
 
   getVitals(encounterId: string): Promise<Vitals[]>;
@@ -101,6 +124,9 @@ export interface IStorage {
   getPatientDocuments(patientId: string): Promise<PatientDocument[]>;
   createPatientDocument(d: InsertPatientDocument): Promise<PatientDocument>;
 
+  getFollowUpContacts(patientId?: string): Promise<FollowUpContact[]>;
+  createFollowUpContact(c: InsertFollowUpContact): Promise<FollowUpContact>;
+
   getPrescriptions(patientId?: string): Promise<Prescription[]>;
   createPrescription(p: InsertPrescription): Promise<Prescription>;
   updatePrescription(id: string, data: Partial<InsertPrescription>): Promise<Prescription | undefined>;
@@ -109,9 +135,56 @@ export interface IStorage {
   getInvoices(patientId?: string): Promise<Invoice[]>;
   createInvoice(i: InsertInvoice): Promise<Invoice>;
   updateInvoice(id: string, data: Partial<InsertInvoice>): Promise<Invoice | undefined>;
+  getInvoiceByEncounterId(encounterId: string): Promise<Invoice | undefined>;
+  /** Creates or updates a pending invoice from current encounter visit charges. */
+  upsertPendingInvoiceForEncounter(encounterId: string): Promise<Invoice>;
+
+  getBillingChargeCatalog(): Promise<BillingChargeCatalog[]>;
+  createBillingChargeCatalogItem(row: InsertBillingChargeCatalog): Promise<BillingChargeCatalog>;
+  updateBillingChargeCatalogItem(
+    id: string,
+    data: Partial<Pick<InsertBillingChargeCatalog, "unitPrice" | "label" | "sortOrder">>,
+  ): Promise<BillingChargeCatalog | undefined>;
+  ensureBillingChargeCatalogSeeded(): Promise<void>;
+  /** If there are no lab_order rows yet, seed from the common clinician list (does not overwrite uploads). */
+  ensureLabOrderBillingChargesSyncedFromCommonList(): Promise<void>;
+  /** Deletes all rows for the category and inserts the new list (full replace). */
+  replaceBillingChargeCatalogForCategory(
+    category: InsertBillingChargeCatalog["category"],
+    rows: InsertBillingChargeCatalog[],
+  ): Promise<number>;
+
+  getBillingChargeCatalogItem(
+    category: BillingChargeCatalog["category"],
+    itemKey: string,
+  ): Promise<BillingChargeCatalog | undefined>;
+  /** Ensures visit-type and imaging default price keys exist (idempotent, for DB upgrades). */
+  ensureVisitChargeCatalogKeys(): Promise<void>;
+  /** Ensures DB enum includes `manual` for price-list add-ons (idempotent). */
+  ensureVisitChargeLineKindManualEnum(): Promise<void>;
+  /** Ensures encounter columns exist for charge finalization (idempotent). */
+  ensureEncounterChargeFinalizationColumns(): Promise<void>;
+  getEncounterVisitCharges(encounterId: string): Promise<EncounterVisitCharge[]>;
+  tryInsertEncounterVisitCharge(row: InsertEncounterVisitCharge): Promise<boolean>;
+  /** Removes a line by stable source id (e.g. order id) regardless of encounter. */
+  deleteEncounterVisitChargeByKindAndSource(
+    lineKind: InsertEncounterVisitCharge["lineKind"],
+    sourceId: string,
+  ): Promise<void>;
+  /** Deletes a manual catalog line by id (must belong to encounter). */
+  deleteEncounterVisitChargeManualLine(encounterId: string, chargeId: string): Promise<boolean>;
+  finalizeEncounterCharges(encounterId: string, userId: string): Promise<Encounter | undefined>;
 
   createAuditLog(log: InsertAuditLog): Promise<AuditLog>;
   getAuditLogs(limit?: number): Promise<AuditLog[]>;
+  getBillingRevenueStatsForRange(
+    startISO: string,
+    endISO: string,
+    facilityId?: string | null,
+  ): Promise<{ revenue: number; outstanding: number }>;
+
+  /** Encounters still open whose opened time is in [startISO, endISO]. */
+  getOpenEncountersForRange(startISO: string, endISO: string): Promise<Encounter[]>;
 
   getDashboardStats(): Promise<{
     totalPatients: number;
@@ -138,6 +211,11 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async updateUserPassword(id: string, passwordHash: string): Promise<User | undefined> {
+    const [updated] = await db.update(users).set({ password: passwordHash }).where(eq(users.id, id)).returning();
+    return updated;
+  }
+
   async getUsers(): Promise<User[]> {
     return db.select().from(users).orderBy(desc(users.createdAt));
   }
@@ -154,6 +232,11 @@ export class DatabaseStorage implements IStorage {
   async createFacility(f: InsertFacility): Promise<Facility> {
     const [created] = await db.insert(facilities).values(f).returning();
     return created;
+  }
+
+  async updateFacility(id: string, data: Partial<InsertFacility>): Promise<Facility | undefined> {
+    const [updated] = await db.update(facilities).set(data).where(eq(facilities.id, id)).returning();
+    return updated;
   }
 
   async getPatients(): Promise<Patient[]> {
@@ -289,6 +372,60 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(encounters).orderBy(desc(encounters.visitDate));
   }
 
+  async getBillingAppointmentsForRange(
+    startISO: string,
+    endISO: string,
+  ): Promise<
+    {
+      appointment: Appointment;
+      patient: Patient;
+      encounter: Encounter | null;
+      visitChargeTotal: string;
+      billingCurrency: string;
+      chargesFinalizedAt: Date | null;
+    }[]
+  > {
+    const appts = await this.getAppointments(undefined, startISO, endISO);
+    const out: {
+      appointment: Appointment;
+      patient: Patient;
+      encounter: Encounter | null;
+      visitChargeTotal: string;
+      billingCurrency: string;
+      chargesFinalizedAt: Date | null;
+    }[] = [];
+    for (const appt of appts) {
+      const patient = await this.getPatient(appt.patientId);
+      if (!patient) continue;
+      const encounter = await this.getEncounterByAppointmentId(appt.id);
+      let visitChargeTotal = "0";
+      let billingCurrency = "KES";
+      let chargesFinalizedAt: Date | null = null;
+      const effectiveFacilityId = encounter?.facilityId ?? appt.facilityId ?? patient.facilityId ?? null;
+      if (effectiveFacilityId) {
+        const fac = await this.getFacility(effectiveFacilityId);
+        if (fac?.billingCurrency) billingCurrency = fac.billingCurrency;
+      }
+      if (encounter) {
+        // Once charges are finalized, this visit leaves “Today’s visit” and is handled in Pending Payment via invoice.
+        if ((encounter as any).chargesFinalizedAt) continue;
+        const charges = await this.getEncounterVisitCharges(encounter.id);
+        const total = charges.reduce((sum, c) => sum + Number(c.amount ?? 0), 0);
+        visitChargeTotal = String(Math.round(total * 100) / 100);
+        chargesFinalizedAt = ((encounter as any).chargesFinalizedAt ?? null) as any;
+      }
+      out.push({
+        appointment: appt,
+        patient,
+        encounter: encounter ?? null,
+        visitChargeTotal,
+        billingCurrency,
+        chargesFinalizedAt,
+      });
+    }
+    return out;
+  }
+
   async getEncounter(id: string): Promise<Encounter | undefined> {
     const [e] = await db.select().from(encounters).where(eq(encounters.id, id));
     return e;
@@ -325,12 +462,14 @@ export class DatabaseStorage implements IStorage {
     notes: PatientNote[];
     imagingResults: ImagingResult[];
     allergiesDocumentedThisVisit: PatientAllergy[];
+    visitCharges: EncounterVisitCharge[];
+    billingCurrency: string;
   } | null> {
     const encounter = await this.getEncounter(encounterId);
-    if (!encounter?.appointmentId) return null;
+    if (!encounter) return null;
     const patient = await this.getPatient(encounter.patientId);
     if (!patient) return null;
-    const appointment = await this.getAppointment(encounter.appointmentId);
+    const appointment = encounter.appointmentId ? await this.getAppointment(encounter.appointmentId) : undefined;
     const encounterStart = encounter.createdAt ?? new Date(0);
     const [labList, imagingOrderList, rxList, vitalsList, imgResults, allergyList] = await Promise.all([
       db.select().from(labOrders).where(eq(labOrders.encounterId, encounterId)),
@@ -362,6 +501,14 @@ export class DatabaseStorage implements IStorage {
         ),
       )
       .orderBy(desc(sql`coalesce(${patientNotes.signedAt}, ${patientNotes.createdAt})`));
+    const visitChargeList = await this.getEncounterVisitCharges(encounterId);
+    let billingCurrency = "KES";
+    const effectiveFacilityId = encounter.facilityId ?? appointment?.facilityId ?? patient.facilityId ?? null;
+    if (effectiveFacilityId) {
+      const fac = await this.getFacility(effectiveFacilityId);
+      if (fac?.billingCurrency) billingCurrency = fac.billingCurrency;
+    }
+
     return {
       encounter,
       patient,
@@ -373,6 +520,8 @@ export class DatabaseStorage implements IStorage {
       notes: notesList,
       imagingResults: imgResults,
       allergiesDocumentedThisVisit: allergyList,
+      visitCharges: visitChargeList,
+      billingCurrency,
     };
   }
 
@@ -531,6 +680,18 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async getFollowUpContacts(patientId?: string): Promise<FollowUpContact[]> {
+    if (patientId) {
+      return db.select().from(followUpContacts).where(eq(followUpContacts.patientId, patientId)).orderBy(desc(followUpContacts.createdAt));
+    }
+    return db.select().from(followUpContacts).orderBy(desc(followUpContacts.createdAt));
+  }
+
+  async createFollowUpContact(c: InsertFollowUpContact): Promise<FollowUpContact> {
+    const [created] = await db.insert(followUpContacts).values(c).returning();
+    return created;
+  }
+
   async getPrescriptions(patientId?: string): Promise<Prescription[]> {
     if (patientId) {
       return db.select().from(prescriptions).where(eq(prescriptions.patientId, patientId)).orderBy(desc(prescriptions.createdAt));
@@ -569,6 +730,251 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async getBillingChargeCatalog(): Promise<BillingChargeCatalog[]> {
+    return db
+      .select()
+      .from(billingChargeCatalog)
+      .orderBy(asc(billingChargeCatalog.category), asc(billingChargeCatalog.sortOrder), asc(billingChargeCatalog.label));
+  }
+
+  async createBillingChargeCatalogItem(row: InsertBillingChargeCatalog): Promise<BillingChargeCatalog> {
+    const [created] = await db.insert(billingChargeCatalog).values(row).returning();
+    return created;
+  }
+
+  async updateBillingChargeCatalogItem(
+    id: string,
+    data: Partial<Pick<InsertBillingChargeCatalog, "unitPrice" | "label" | "sortOrder">>,
+  ): Promise<BillingChargeCatalog | undefined> {
+    const [updated] = await db
+      .update(billingChargeCatalog)
+      .set({ ...data, updatedAt: sql`now()` })
+      .where(eq(billingChargeCatalog.id, id))
+      .returning();
+    return updated;
+  }
+
+  async ensureBillingChargeCatalogSeeded(): Promise<void> {
+    const [row] = await db.select({ n: count() }).from(billingChargeCatalog);
+    if ((row?.n ?? 0) > 0) return;
+    await db.insert(billingChargeCatalog).values(BILLING_CHARGE_CATALOG_SEEDS);
+  }
+
+  async ensureLabOrderBillingChargesSyncedFromCommonList(): Promise<void> {
+    const [row] = await db
+      .select({ n: count() })
+      .from(billingChargeCatalog)
+      .where(eq(billingChargeCatalog.category, "lab_order"));
+    if ((row?.n ?? 0) > 0) return;
+    const seeds = buildLabOrderBillingChargeSeeds();
+    if (seeds.length) await db.insert(billingChargeCatalog).values(seeds);
+  }
+
+  async replaceBillingChargeCatalogForCategory(
+    category: InsertBillingChargeCatalog["category"],
+    rows: InsertBillingChargeCatalog[],
+  ): Promise<number> {
+    await db.transaction(async (tx) => {
+      await tx.delete(billingChargeCatalog).where(eq(billingChargeCatalog.category, category));
+      if (rows.length > 0) {
+        await tx.insert(billingChargeCatalog).values(rows);
+      }
+    });
+    return rows.length;
+  }
+
+  async getBillingChargeCatalogItem(
+    category: BillingChargeCatalog["category"],
+    itemKey: string,
+  ): Promise<BillingChargeCatalog | undefined> {
+    const [row] = await db
+      .select()
+      .from(billingChargeCatalog)
+      .where(and(eq(billingChargeCatalog.category, category), eq(billingChargeCatalog.itemKey, itemKey)))
+      .limit(1);
+    return row;
+  }
+
+  async ensureVisitChargeCatalogKeys(): Promise<void> {
+    for (const row of VISIT_CHARGE_EXTRA_CATALOG_ROWS) {
+      await db
+        .insert(billingChargeCatalog)
+        .values(row)
+        .onConflictDoNothing({ target: [billingChargeCatalog.category, billingChargeCatalog.itemKey] });
+    }
+  }
+
+  async ensureVisitChargeLineKindManualEnum(): Promise<void> {
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_enum e
+    JOIN pg_type t ON e.enumtypid = t.oid
+    WHERE t.typname = 'visit_charge_line_kind' AND e.enumlabel = 'manual'
+  ) THEN
+    ALTER TYPE visit_charge_line_kind ADD VALUE 'manual';
+  END IF;
+END $$;
+`));
+  }
+
+  async ensureEncounterChargeFinalizationColumns(): Promise<void> {
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name = 'encounters' AND column_name = 'charges_finalized_at'
+  ) THEN
+    ALTER TABLE encounters ADD COLUMN charges_finalized_at timestamp;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name = 'encounters' AND column_name = 'charges_finalized_by'
+  ) THEN
+    ALTER TABLE encounters ADD COLUMN charges_finalized_by varchar;
+  END IF;
+END $$;
+`));
+  }
+
+  async getEncounterVisitCharges(encounterId: string): Promise<EncounterVisitCharge[]> {
+    const rows = await db
+      .select()
+      .from(encounterVisitCharges)
+      .where(eq(encounterVisitCharges.encounterId, encounterId))
+      .orderBy(asc(encounterVisitCharges.createdAt));
+
+    // Safety: if a clinic-administered medication order is later discontinued, it must not appear in visit charges.
+    const rxChargeRows = rows.filter((r) => r.lineKind === "prescription");
+    if (rxChargeRows.length > 0) {
+      const rxIds = Array.from(new Set(rxChargeRows.map((r) => r.sourceId).filter(Boolean)));
+      if (rxIds.length > 0) {
+        const rxList = await db
+          .select({ id: prescriptions.id, status: prescriptions.status })
+          .from(prescriptions)
+          .where(inArray(prescriptions.id, rxIds));
+        const statusById = new Map(rxList.map((r) => [r.id, r.status]));
+        return rows.filter((r) => {
+          if (r.lineKind !== "prescription") return true;
+          const st = statusById.get(r.sourceId);
+          return st !== "cancelled";
+        });
+      }
+    }
+
+    return rows;
+  }
+
+  async tryInsertEncounterVisitCharge(row: InsertEncounterVisitCharge): Promise<boolean> {
+    const existing = await db
+      .select({ id: encounterVisitCharges.id })
+      .from(encounterVisitCharges)
+      .where(
+        and(
+          eq(encounterVisitCharges.encounterId, row.encounterId),
+          eq(encounterVisitCharges.lineKind, row.lineKind),
+          eq(encounterVisitCharges.sourceId, row.sourceId),
+        ),
+      )
+      .limit(1);
+    if (existing.length) return false;
+    await db.insert(encounterVisitCharges).values(row);
+    return true;
+  }
+
+  async deleteEncounterVisitChargeByKindAndSource(
+    lineKind: InsertEncounterVisitCharge["lineKind"],
+    sourceId: string,
+  ): Promise<void> {
+    await db
+      .delete(encounterVisitCharges)
+      .where(and(eq(encounterVisitCharges.lineKind, lineKind), eq(encounterVisitCharges.sourceId, sourceId)));
+  }
+
+  async deleteEncounterVisitChargeManualLine(encounterId: string, chargeId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: encounterVisitCharges.id })
+      .from(encounterVisitCharges)
+      .where(
+        and(
+          eq(encounterVisitCharges.id, chargeId),
+          eq(encounterVisitCharges.encounterId, encounterId),
+          eq(encounterVisitCharges.lineKind, "manual"),
+        ),
+      )
+      .limit(1);
+    if (!row) return false;
+    await db.delete(encounterVisitCharges).where(eq(encounterVisitCharges.id, chargeId));
+    return true;
+  }
+
+  async finalizeEncounterCharges(encounterId: string, userId: string): Promise<Encounter | undefined> {
+    const [enc] = await db.select().from(encounters).where(eq(encounters.id, encounterId)).limit(1);
+    if (!enc) return undefined;
+    if (enc.status !== "completed") {
+      throw new Error("Charges can only be finalized after the visit is completed.");
+    }
+    if ((enc as any).chargesFinalizedAt) return enc;
+    const [updated] = await db
+      .update(encounters)
+      .set({ chargesFinalizedAt: new Date(), chargesFinalizedBy: userId } as any)
+      .where(eq(encounters.id, encounterId))
+      .returning();
+    // Once finalized, ensure there is a pending invoice for payment.
+    await this.upsertPendingInvoiceForEncounter(encounterId);
+    return updated;
+  }
+
+  async getInvoiceByEncounterId(encounterId: string): Promise<Invoice | undefined> {
+    const [row] = await db.select().from(invoices).where(eq(invoices.encounterId, encounterId)).limit(1);
+    return row;
+  }
+
+  async upsertPendingInvoiceForEncounter(encounterId: string): Promise<Invoice> {
+    const encounter = await this.getEncounter(encounterId);
+    if (!encounter) throw new Error("Encounter not found");
+    const patient = await this.getPatient(encounter.patientId);
+    if (!patient) throw new Error("Patient not found");
+    const charges = await this.getEncounterVisitCharges(encounterId);
+    const total = charges.reduce((sum, c) => sum + Number(c.amount ?? 0), 0);
+    const items = charges.map((c) => ({
+      description: c.description,
+      amount: Number(c.amount ?? 0),
+    }));
+    const effectiveFacilityId = encounter.facilityId ?? patient.facilityId ?? null;
+    const existing = await this.getInvoiceByEncounterId(encounterId);
+    if (!existing) {
+      const [created] = await db
+        .insert(invoices)
+        .values({
+          encounterId,
+          patientId: encounter.patientId,
+          facilityId: effectiveFacilityId ?? undefined,
+          totalAmount: String(Math.round(total * 100) / 100),
+          paidAmount: "0",
+          status: "pending",
+          items: items as any,
+          paymentMethod: null,
+        } as any)
+        .returning();
+      return created;
+    }
+    // Do not overwrite paid/cancelled invoices.
+    if (existing.status === "paid" || existing.status === "cancelled") return existing;
+    const [updated] = await db
+      .update(invoices)
+      .set({
+        totalAmount: String(Math.round(total * 100) / 100),
+        items: items as any,
+        status: existing.status === "partial" ? "partial" : "pending",
+      } as any)
+      .where(eq(invoices.id, existing.id))
+      .returning();
+    return updated ?? existing;
+  }
+
   async createAuditLog(log: InsertAuditLog): Promise<AuditLog> {
     const [created] = await db.insert(auditLogs).values(log).returning();
     return created;
@@ -576,6 +982,48 @@ export class DatabaseStorage implements IStorage {
 
   async getAuditLogs(limit = 100): Promise<AuditLog[]> {
     return db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(limit);
+  }
+
+  async getBillingRevenueStatsForRange(
+    startISO: string,
+    endISO: string,
+    facilityId?: string | null,
+  ): Promise<{ revenue: number; outstanding: number }> {
+    const whereParts = [
+      sql`${invoices.createdAt} >= ${startISO}::timestamptz`,
+      sql`${invoices.createdAt} <= ${endISO}::timestamptz`,
+    ];
+    if (facilityId) {
+      whereParts.push(eq(invoices.facilityId, facilityId));
+    }
+    const where = and(...(whereParts as any));
+
+    const [row] = await db
+      .select({
+        revenue: sum(invoices.paidAmount),
+        total: sum(invoices.totalAmount),
+      })
+      .from(invoices)
+      .where(where);
+
+    const revenue = Number(row?.revenue ?? 0);
+    const total = Number(row?.total ?? 0);
+    const outstanding = Math.max(0, total - revenue);
+    return { revenue, outstanding };
+  }
+
+  async getOpenEncountersForRange(startISO: string, endISO: string): Promise<Encounter[]> {
+    return db
+      .select()
+      .from(encounters)
+      .where(
+        and(
+          eq(encounters.status, "in_progress"),
+          sql`${encounters.createdAt} >= ${startISO}::timestamptz`,
+          sql`${encounters.createdAt} <= ${endISO}::timestamptz`,
+        ),
+      )
+      .orderBy(desc(encounters.createdAt));
   }
 
   async getDashboardStats() {

@@ -10,7 +10,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,6 +30,8 @@ function AppointmentsManagementPage() {
   const { toast } = useToast();
   const { token } = useAuth();
   const [open, setOpen] = useState(false);
+  const [cancelDialog, setCancelDialog] = useState<{ id: string } | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [formData, setFormData] = useState({
     clinicianId: "", scheduledDate: "", scheduledTime: "09:00",
@@ -113,11 +122,23 @@ function AppointmentsManagementPage() {
   });
 
   const statusMutation = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+    mutationFn: async ({
+      id,
+      status,
+      cancellationReason,
+    }: {
+      id: string;
+      status: string;
+      cancellationReason?: string;
+    }) => {
+      const body: Record<string, unknown> = { status };
+      if (status === "cancelled" && cancellationReason) {
+        body.cancellationReason = cancellationReason;
+      }
       const res = await fetch(`/api/appointments/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error("Failed");
       return res.json();
@@ -308,7 +329,16 @@ function AppointmentsManagementPage() {
                           {apt.status === "scheduled" && (
                             <>
                               <Button size="sm" variant="secondary" onClick={() => statusMutation.mutate({ id: apt.id, status: "checked_in" })}>Check In</Button>
-                              <Button size="sm" variant="secondary" onClick={() => statusMutation.mutate({ id: apt.id, status: "cancelled" })}>Cancel</Button>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => {
+                                  setCancelDialog({ id: apt.id });
+                                  setCancelReason("");
+                                }}
+                              >
+                                Cancel
+                              </Button>
                             </>
                           )}
                           {apt.status === "checked_in" && (
@@ -324,6 +354,62 @@ function AppointmentsManagementPage() {
           );
         })
       )}
+
+      <Dialog
+        open={!!cancelDialog}
+        onOpenChange={(o) => {
+          if (!o) {
+            setCancelDialog(null);
+            setCancelReason("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel appointment</DialogTitle>
+            <DialogDescription>
+              Enter why this appointment is being cancelled. This is saved with the appointment record.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="mgmt-cancellation-reason">Cancellation reason *</Label>
+            <Textarea
+              id="mgmt-cancellation-reason"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="e.g. Patient requested, schedule conflict…"
+              rows={3}
+              className="resize-none"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setCancelDialog(null)}>
+              Back
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={!cancelReason.trim() || statusMutation.isPending}
+              onClick={() => {
+                if (!cancelDialog) return;
+                const r = cancelReason.trim();
+                if (!r) return;
+                statusMutation.mutate(
+                  { id: cancelDialog.id, status: "cancelled", cancellationReason: r },
+                  {
+                    onSuccess: () => {
+                      setCancelDialog(null);
+                      setCancelReason("");
+                    },
+                  }
+                );
+              }}
+            >
+              {statusMutation.isPending ? "Cancelling…" : "Cancel appointment"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

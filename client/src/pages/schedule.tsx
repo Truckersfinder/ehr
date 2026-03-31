@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
+import { apiGetJson } from "@/lib/api-client";
+import { queryKeys } from "@/lib/query-keys";
 import { appointmentStatusBadgeClass, formatAppointmentStatusLabel } from "@/lib/appointment-status";
 import { format, startOfDay, endOfDay, addDays, subDays } from "date-fns";
 import { Link } from "wouter";
@@ -40,33 +42,22 @@ export default function SchedulePage() {
   const viewingDayEnd = endOfDay(viewingDate).toISOString();
 
   const { data: appointments = [], isLoading } = useQuery<Appointment[]>({
-    queryKey: ["/api/appointments", "day", viewingDayStart, viewingDayEnd],
-    queryFn: async () => {
-      const res = await fetch(
+    queryKey: queryKeys.appointments.dayRange(viewingDayStart, viewingDayEnd),
+    queryFn: () =>
+      apiGetJson<Appointment[]>(
         `/api/appointments?start=${encodeURIComponent(viewingDayStart)}&end=${encodeURIComponent(viewingDayEnd)}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (!res.ok) throw new Error("Failed to fetch appointments");
-      return res.json();
-    },
+        token,
+      ),
   });
 
   const { data: patients = [] } = useQuery<Patient[]>({
-    queryKey: ["/api/patients"],
-    queryFn: async () => {
-      const res = await fetch("/api/patients", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.patients.root,
+    queryFn: () => apiGetJson<Patient[]>("/api/patients", token),
   });
 
   const { data: users = [] } = useQuery<Omit<UserType, "password">[]>({
-    queryKey: ["/api/users"],
-    queryFn: async () => {
-      const res = await fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.users.root,
+    queryFn: () => apiGetJson<Omit<UserType, "password">[]>("/api/users", token),
   });
 
   const patientMap = new Map(patients.map((p) => [p.id, p]));

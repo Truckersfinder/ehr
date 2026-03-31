@@ -6,14 +6,69 @@ import multer from "multer";
 import { ensureUploadsDir } from "./uploads-dir";
 import { storage } from "./storage";
 import { authMiddleware, comparePassword, generateToken, hashPassword, requireRole, type AuthRequest } from "./auth";
-import { loginSchema, insertPatientSchema, insertEncounterSchema, insertVitalsSchema, insertAppointmentSchema, insertLabOrderSchema, insertImagingOrderSchema, insertImagingResultSchema, insertPatientDocumentSchema, insertPrescriptionSchema, insertInvoiceSchema } from "@shared/schema";
+import {
+  loginSchema,
+  createUserBodySchema,
+  resetUserPasswordBodySchema,
+  insertPatientSchema,
+  insertEncounterSchema,
+  insertVitalsSchema,
+  insertAppointmentSchema,
+  insertLabOrderSchema,
+  insertImagingOrderSchema,
+  insertImagingResultSchema,
+  insertPatientDocumentSchema,
+  insertPrescriptionSchema,
+  insertInvoiceSchema,
+  insertFollowUpContactSchema,
+  patchBillingChargeCatalogBodySchema,
+  createBillingChargeCatalogBodySchema,
+  addManualVisitChargeBodySchema,
+} from "@shared/schema";
 
 /** Create patient: never take legacy free-text `allergies` from the request (autofill / stray JSON). Use structured patient_allergies + clinical workflow instead. */
 const insertPatientCreateSchema = insertPatientSchema.omit({ allergies: true, profilePhotoUrl: true });
-import { seedDatabase } from "./seed";
+import { seedDatabase, ensureSecurityUser } from "./seed";
 import { getCountriesList } from "./countries";
+import { getStatesForCountry } from "./states";
+import { getEmergencyContactRelationships } from "./emergency-contact-relationships";
+import { getPatientCallReasons } from "./patient-call-reasons";
+import { PATIENT_RECORD_DOCUMENT_TYPES, isValidPatientRecordDocumentTypeId } from "@shared/patient-record-document-types";
+import {
+  getRecordDocumentTypeId,
+  normalizePatientDocumentRow,
+  type PatientDocumentRow,
+} from "@shared/patient-document-normalize";
+import { isBillingChargeCategory, parseBillingChargeXlsxBuffer } from "./billing-charge-xlsx";
+import { patchFacilityBillingBodySchema } from "@shared/billing-currencies";
+import {
+  applyImagingOrderCharge,
+  applyLabOrderCharge,
+  applyPrescriptionCharge,
+  applyVisitTypeCharge,
+  removeImagingOrderVisitCharge,
+  removeLabOrderVisitCharge,
+  removePrescriptionVisitCharge,
+  syncImagingOrderVisitCharge,
+  syncLabOrderVisitCharge,
+  syncPrescriptionVisitCharge,
+  applyManualCatalogCharge,
+} from "./visit-charge-service";
 
 const uploadsDir = ensureUploadsDir();
+
+const chargeCatalogUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const name = (file.originalname || "").toLowerCase();
+    const ok =
+      /\.(xlsx|xls)$/i.test(name) ||
+      file.mimetype === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      file.mimetype === "application/vnd.ms-excel";
+    cb(null, ok);
+  },
+});
 
 const upload = multer({
   storage: multer.diskStorage({
@@ -48,7 +103,13 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   await seedDatabase();
+  await ensureSecurityUser();
   await storage.ensureCommonVisitReasonsSeeded();
+  await storage.ensureBillingChargeCatalogSeeded();
+  await storage.ensureLabOrderBillingChargesSyncedFromCommonList();
+  await storage.ensureVisitChargeCatalogKeys();
+  await storage.ensureVisitChargeLineKindManualEnum();
+  await storage.ensureEncounterChargeFinalizationColumns();
 
   app.post("/api/upload", authMiddleware as any, upload.single("file"), (req: any, res: any) => {
     try {
@@ -134,6 +195,55 @@ export async function registerRoutes(
     }
   });
 
+  /** Open encounters older than the selected window (Dashboard: overdue open visits). */
+  app.get("/api/dashboard/overdue-visits", authMiddleware as any, async (req, res) => {
+    try {
+      const start = typeof req.query.start === "string" ? req.query.start.trim() : "";
+      const end = typeof req.query.end === "string" ? req.query.end.trim() : "";
+      if (!start || !end) return res.status(400).json({ message: "start and end are required" });
+      const list = await storage.getOpenEncountersForRange(start, end);
+      const out: {
+        encounter: any;
+        patientName: string;
+        clinicianName: string;
+        appointmentDate: string | null;
+      }[] = [];
+      for (const enc of list) {
+        const patient = await storage.getPatient(enc.patientId);
+        const clinician = await storage.getUser(enc.clinicianId);
+        const appt = enc.appointmentId ? await storage.getAppointment(enc.appointmentId) : undefined;
+        out.push({
+          encounter: enc,
+          patientName: patient ? `${patient.firstName} ${patient.lastName}`.trim() : enc.patientId,
+          clinicianName: clinician?.fullName?.trim?.() ? clinician.fullName : enc.clinicianId,
+          appointmentDate: (appt?.scheduledDate ?? enc.visitDate ?? null) ? String(appt?.scheduledDate ?? enc.visitDate) : null,
+        });
+      }
+      return res.json(out);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get(
+    "/api/billing/revenue-stats",
+    authMiddleware as any,
+    requireRole("super_admin", "facility_admin", "finance") as any,
+    async (req: any, res) => {
+      try {
+        const start = typeof req.query.start === "string" ? req.query.start.trim() : "";
+        const end = typeof req.query.end === "string" ? req.query.end.trim() : "";
+        if (!start || !end) return res.status(400).json({ message: "start and end are required" });
+        const user = await storage.getUser(req.user.id);
+        const facilityId = user?.facilityId ?? null;
+        const stats = await storage.getBillingRevenueStatsForRange(start, end, facilityId);
+        return res.json(stats);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
   app.get("/api/users", authMiddleware as any, async (_req, res) => {
     try {
       const users = await storage.getUsers();
@@ -143,6 +253,80 @@ export async function registerRoutes(
       return res.status(500).json({ message: error.message });
     }
   });
+
+  app.post(
+    "/api/users",
+    authMiddleware as any,
+    requireRole("security") as any,
+    async (req: any, res) => {
+    try {
+      const parsed = createUserBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid user data", errors: parsed.error.flatten() });
+      }
+      const body = parsed.data;
+      const username = body.username.trim();
+      const existing = await storage.getUserByUsername(username);
+      if (existing) {
+        return res.status(409).json({ message: "Username already taken" });
+      }
+      if (body.facilityId) {
+        const fac = await storage.getFacility(body.facilityId);
+        if (!fac) return res.status(400).json({ message: "Facility not found" });
+      }
+      const fullName = `${body.firstName.trim()} ${body.lastName.trim()}`.trim();
+      const created = await storage.createUser({
+        username,
+        password: hashPassword(body.password),
+        fullName,
+        role: body.role,
+        email: body.email ?? null,
+        phone: body.phone ?? null,
+        facilityId: body.facilityId ?? null,
+        isActive: body.isActive ?? true,
+      });
+      await storage.createAuditLog({
+        userId: req.user.id,
+        action: "CREATE_USER",
+        resource: "user",
+        resourceId: created.id,
+        details: `Created user ${username} (${body.role})`,
+      });
+      const { password: _pw, ...safe } = created;
+      return res.status(201).json(safe);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch(
+    "/api/users/:id/password",
+    authMiddleware as any,
+    requireRole("security") as any,
+    async (req: any, res) => {
+      try {
+        const parsed = resetUserPasswordBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid password", errors: parsed.error.flatten() });
+        }
+        const target = await storage.getUser(req.params.id);
+        if (!target) {
+          return res.status(404).json({ message: "User not found" });
+        }
+        await storage.updateUserPassword(req.params.id, hashPassword(parsed.data.password));
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "RESET_USER_PASSWORD",
+          resource: "user",
+          resourceId: req.params.id,
+          details: `Password reset for @${target.username}`,
+        });
+        return res.json({ ok: true });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
 
   app.get("/api/facilities", authMiddleware as any, async (_req, res) => {
     try {
@@ -154,9 +338,46 @@ export async function registerRoutes(
   });
 
   /** ISO 3166-1 alpha-2 list + English names (for country pickers across the app). */
-  app.get("/api/countries", authMiddleware as any, async (_req, res) => {
+  app.get("/api/countries", async (_req, res) => {
     try {
       return res.json(getCountriesList());
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  /** First-level administrative subdivisions (states/provinces) for an African country code. */
+  app.get("/api/countries/:code/states", async (req, res) => {
+    try {
+      const states = getStatesForCountry(req.params.code);
+      return res.json(states);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  /** Select options for emergency contact relationship fields. */
+  app.get("/api/emergency-contact-relationships", async (_req, res) => {
+    try {
+      return res.json(getEmergencyContactRelationships());
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  /** Select options for patient-call reason field. */
+  app.get("/api/patient-call-reasons", async (_req, res) => {
+    try {
+      return res.json(getPatientCallReasons());
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  /** Medical record document categories for general patient uploads (Upload document flow). */
+  app.get("/api/patient-record-document-types", async (_req, res) => {
+    try {
+      return res.json(PATIENT_RECORD_DOCUMENT_TYPES);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
@@ -602,12 +823,15 @@ export async function registerRoutes(
           (e) => (e.status === "in_progress" || e.status === "scheduled") && e.visitDate && new Date(e.visitDate) >= today && new Date(e.visitDate) < visitEnd
         );
         if (!encounter) {
+          const patient = await storage.getPatient(patientId);
           encounter = await storage.createEncounter({
             patientId,
             clinicianId: req.user.id,
+            facilityId: (patient?.facilityId ?? req.user.facilityId) || undefined,
             type: "outpatient",
             status: "in_progress",
           });
+          await applyVisitTypeCharge(encounter);
         }
       }
       const payload = {
@@ -776,12 +1000,14 @@ export async function registerRoutes(
         const encounter = await storage.createEncounter({
           patientId,
           clinicianId: appt.clinicianId,
+          facilityId: appt.facilityId ?? req.user.facilityId ?? undefined,
           appointmentId: appt.id,
           type: "outpatient",
           status: "in_progress",
           chiefComplaint: appt.reason ?? undefined,
           visitDate: appt.scheduledDate,
         });
+        await applyVisitTypeCharge(encounter);
         await storage.updateAppointment(appt.id, { status: "in_progress" });
         await storage.createAuditLog({
           userId: req.user.id,
@@ -840,13 +1066,109 @@ export async function registerRoutes(
     try {
       const parsed = insertEncounterSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: "Invalid encounter data", errors: parsed.error.flatten() });
-      const encounter = await storage.createEncounter(parsed.data);
+      const encounter = await storage.createEncounter({
+        ...parsed.data,
+        facilityId: parsed.data.facilityId ?? req.user.facilityId ?? undefined,
+      });
+      await applyVisitTypeCharge(encounter);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_ENCOUNTER", resource: "encounter", resourceId: encounter.id });
       return res.status(201).json(encounter);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
   });
+
+  app.get("/api/encounters/:id/visit-charges", authMiddleware as any, async (req, res) => {
+    try {
+      const list = await storage.getEncounterVisitCharges(req.params.id);
+      return res.json(list);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  const billingChargeRoles = ["super_admin", "facility_admin", "finance"] as const;
+
+  app.post(
+    "/api/encounters/:id/visit-charges/manual",
+    authMiddleware as any,
+    requireRole(...billingChargeRoles) as any,
+    async (req: any, res) => {
+      try {
+        const parsed = addManualVisitChargeBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+        }
+        const encounter = await storage.getEncounter(req.params.id);
+        if (!encounter) return res.status(404).json({ message: "Encounter not found" });
+        await applyManualCatalogCharge({
+          encounterId: encounter.id,
+          patientId: encounter.patientId,
+          catalogCategory: parsed.data.catalogCategory,
+          catalogItemKey: parsed.data.catalogItemKey,
+          quantity: parsed.data.quantity ?? 1,
+          orderedByUserId: req.user.id,
+        });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "ADD_MANUAL_VISIT_CHARGE",
+          resource: "encounter",
+          resourceId: encounter.id,
+          details: JSON.stringify({
+            catalogCategory: parsed.data.catalogCategory,
+            catalogItemKey: parsed.data.catalogItemKey,
+            quantity: parsed.data.quantity,
+          }),
+        });
+        return res.status(201).json({ ok: true });
+      } catch (error: any) {
+        return res.status(400).json({ message: error?.message ?? "Failed to add charge" });
+      }
+    },
+  );
+
+  app.delete(
+    "/api/encounters/:id/visit-charges/:chargeId",
+    authMiddleware as any,
+    requireRole(...billingChargeRoles) as any,
+    async (req: any, res) => {
+      try {
+        const ok = await storage.deleteEncounterVisitChargeManualLine(req.params.id, req.params.chargeId);
+        if (!ok) return res.status(404).json({ message: "Charge not found or cannot be removed" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "DELETE_MANUAL_VISIT_CHARGE",
+          resource: "encounter",
+          resourceId: req.params.id,
+          details: req.params.chargeId,
+        });
+        return res.json({ ok: true });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/encounters/:id/visit-charges/finalize",
+    authMiddleware as any,
+    requireRole(...billingChargeRoles) as any,
+    async (req: any, res) => {
+      try {
+        const updated = await storage.finalizeEncounterCharges(req.params.id, req.user.id);
+        if (!updated) return res.status(404).json({ message: "Encounter not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "FINALIZE_VISIT_CHARGES",
+          resource: "encounter",
+          resourceId: req.params.id,
+        });
+        return res.status(201).json(updated);
+      } catch (error: any) {
+        return res.status(400).json({ message: error?.message ?? "Failed to finalize charges" });
+      }
+    },
+  );
 
   app.patch("/api/encounters/:id", authMiddleware as any, async (req: any, res) => {
     try {
@@ -859,11 +1181,15 @@ export async function registerRoutes(
     }
   });
 
-  /** Aggregated read-only visit data for schedule-started encounters (clinician / nurse only) */
-  app.get("/api/encounters/:id/visit-summary", authMiddleware as any, requireRole("clinician", "nurse") as any, async (req, res) => {
+  /** Aggregated read-only visit data for schedule-started encounters (clinical staff + billing admins for review) */
+  app.get(
+    "/api/encounters/:id/visit-summary",
+    authMiddleware as any,
+    requireRole("clinician", "nurse", "super_admin", "facility_admin", "finance", "reception") as any,
+    async (req, res) => {
     try {
       const data = await storage.getVisitSummaryForEncounter(req.params.id);
-      if (!data) return res.status(404).json({ message: "Visit summary is only available for visits started from the schedule." });
+      if (!data) return res.status(404).json({ message: "Visit summary not found for this encounter." });
       return res.json(data);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -966,6 +1292,7 @@ export async function registerRoutes(
       const raw = req.body.internalExternal ?? parsed.data.internalExternal ?? "internal";
       const internalExternal = String(raw).toLowerCase() === "external" ? "external" : "internal";
       const order = await storage.createLabOrder({ ...parsed.data, internalExternal });
+      await applyLabOrderCharge(order);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_LAB_ORDER", resource: "lab_order", resourceId: order.id });
       return res.status(201).json(order);
     } catch (error: any) {
@@ -979,8 +1306,12 @@ export async function registerRoutes(
       if (body.completedAt != null && typeof body.completedAt === "string") {
         body.completedAt = new Date(body.completedAt);
       }
+      if (body.internalExternal != null) {
+        body.internalExternal = String(body.internalExternal).toLowerCase() === "external" ? "external" : "internal";
+      }
       const updated = await storage.updateLabOrder(req.params.id, body);
       if (!updated) return res.status(404).json({ message: "Lab order not found" });
+      await syncLabOrderVisitCharge(updated);
       await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_LAB_ORDER", resource: "lab_order", resourceId: req.params.id });
       return res.json(updated);
     } catch (error: any) {
@@ -990,6 +1321,7 @@ export async function registerRoutes(
 
   app.delete("/api/lab-orders/:id", authMiddleware as any, requireRole("nurse", "clinician") as any, async (req: any, res) => {
     try {
+      await removeLabOrderVisitCharge({ id: req.params.id });
       await storage.deleteLabOrder(req.params.id);
       await storage.createAuditLog({ userId: req.user.id, action: "DELETE_LAB_ORDER", resource: "lab_order", resourceId: req.params.id });
       return res.json({ ok: true });
@@ -1035,7 +1367,10 @@ export async function registerRoutes(
     try {
       const parsed = insertImagingOrderSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: "Invalid imaging order data", errors: parsed.error.flatten() });
-      const order = await storage.createImagingOrder(parsed.data);
+      const raw = req.body.internalExternal ?? parsed.data.internalExternal ?? "internal";
+      const internalExternal = String(raw).toLowerCase() === "external" ? "external" : "internal";
+      const order = await storage.createImagingOrder({ ...parsed.data, internalExternal });
+      await applyImagingOrderCharge(order);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_IMAGING_ORDER", resource: "imaging_order", resourceId: order.id });
       return res.status(201).json(order);
     } catch (error: any) {
@@ -1045,8 +1380,13 @@ export async function registerRoutes(
 
   app.patch("/api/imaging-orders/:id", authMiddleware as any, async (req: any, res) => {
     try {
-      const updated = await storage.updateImagingOrder(req.params.id, req.body);
+      const body = { ...req.body };
+      if (body.internalExternal != null) {
+        body.internalExternal = String(body.internalExternal).toLowerCase() === "external" ? "external" : "internal";
+      }
+      const updated = await storage.updateImagingOrder(req.params.id, body);
       if (!updated) return res.status(404).json({ message: "Imaging order not found" });
+      await syncImagingOrderVisitCharge(updated);
       await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_IMAGING_ORDER", resource: "imaging_order", resourceId: req.params.id });
       return res.json(updated);
     } catch (error: any) {
@@ -1056,6 +1396,7 @@ export async function registerRoutes(
 
   app.delete("/api/imaging-orders/:id", authMiddleware as any, requireRole("nurse", "clinician") as any, async (req: any, res) => {
     try {
+      await removeImagingOrderVisitCharge({ id: req.params.id });
       await storage.deleteImagingOrder(req.params.id);
       await storage.createAuditLog({ userId: req.user.id, action: "DELETE_IMAGING_ORDER", resource: "imaging_order", resourceId: req.params.id });
       return res.json({ ok: true });
@@ -1069,7 +1410,7 @@ export async function registerRoutes(
       const patientId = req.query.patientId as string;
       if (!patientId) return res.status(400).json({ message: "patientId required" });
       const list = await storage.getPatientDocuments(patientId);
-      return res.json(list);
+      return res.json(list.map((row) => normalizePatientDocumentRow(row as PatientDocumentRow)));
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
@@ -1077,11 +1418,55 @@ export async function registerRoutes(
 
   app.post("/api/patient-documents", authMiddleware as any, async (req: any, res) => {
     try {
-      const parsed = insertPatientDocumentSchema.safeParse(req.body);
+      const body = { ...req.body };
+      if (typeof body.record_document_type === "string" && (body.recordDocumentType === undefined || body.recordDocumentType === null)) {
+        body.recordDocumentType = body.record_document_type;
+      }
+      const parsed = insertPatientDocumentSchema.safeParse(body);
       if (!parsed.success) return res.status(400).json({ message: "Invalid document data", errors: parsed.error.flatten() });
-      const doc = await storage.createPatientDocument(parsed.data);
+      const recordTypeFromBody = getRecordDocumentTypeId(body as PatientDocumentRow);
+      const merged = {
+        ...parsed.data,
+        recordDocumentType: parsed.data.recordDocumentType ?? recordTypeFromBody,
+      };
+      if (merged.documentType === "patient_document") {
+        const rt = typeof merged.recordDocumentType === "string" ? merged.recordDocumentType.trim() : "";
+        if (!rt || !isValidPatientRecordDocumentTypeId(rt)) {
+          return res.status(400).json({ message: "Document type is required for patient documents" });
+        }
+      }
+      const doc = await storage.createPatientDocument(merged);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_PATIENT_DOCUMENT", resource: "patient_document", resourceId: doc.id });
-      return res.status(201).json(doc);
+      return res.status(201).json(normalizePatientDocumentRow(doc as PatientDocumentRow));
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/follow-up-contacts", authMiddleware as any, async (req: any, res) => {
+    try {
+      const parsed = insertFollowUpContactSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid follow-up contact data", errors: parsed.error.flatten() });
+      }
+      const created = await storage.createFollowUpContact(parsed.data);
+      await storage.createAuditLog({
+        userId: req.user.id,
+        action: "CREATE_FOLLOW_UP_CONTACT",
+        resource: "follow_up_contact",
+        resourceId: created.id,
+      });
+      return res.status(201).json(created);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/follow-up-contacts", authMiddleware as any, async (req: any, res) => {
+    try {
+      const patientId = req.query.patientId as string | undefined;
+      const list = await storage.getFollowUpContacts(patientId);
+      return res.json(list);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
@@ -1101,7 +1486,12 @@ export async function registerRoutes(
     try {
       const parsed = insertPrescriptionSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ message: "Invalid prescription data", errors: parsed.error.flatten() });
-      const rx = await storage.createPrescription(parsed.data);
+      const body = { ...parsed.data } as any;
+      if (body.orderType != null) {
+        body.orderType = String(body.orderType).toLowerCase() === "administered" ? "administered" : "prescription";
+      }
+      const rx = await storage.createPrescription(body);
+      await applyPrescriptionCharge(rx);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_PRESCRIPTION", resource: "prescription", resourceId: rx.id });
       return res.status(201).json(rx);
     } catch (error: any) {
@@ -1111,8 +1501,13 @@ export async function registerRoutes(
 
   app.patch("/api/prescriptions/:id", authMiddleware as any, async (req: any, res) => {
     try {
-      const updated = await storage.updatePrescription(req.params.id, req.body);
+      const body = { ...req.body };
+      if ((body as any).orderType != null) {
+        (body as any).orderType = String((body as any).orderType).toLowerCase() === "administered" ? "administered" : "prescription";
+      }
+      const updated = await storage.updatePrescription(req.params.id, body);
       if (!updated) return res.status(404).json({ message: "Prescription not found" });
+      await syncPrescriptionVisitCharge(updated);
       await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_PRESCRIPTION", resource: "prescription", resourceId: req.params.id });
       return res.json(updated);
     } catch (error: any) {
@@ -1122,6 +1517,7 @@ export async function registerRoutes(
 
   app.delete("/api/prescriptions/:id", authMiddleware as any, requireRole("nurse", "clinician") as any, async (req: any, res) => {
     try {
+      await removePrescriptionVisitCharge({ id: req.params.id });
       await storage.deletePrescription(req.params.id);
       await storage.createAuditLog({ userId: req.user.id, action: "DELETE_PRESCRIPTION", resource: "prescription", resourceId: req.params.id });
       return res.json({ ok: true });
@@ -1163,7 +1559,215 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/audit-logs", authMiddleware as any, requireRole("super_admin", "facility_admin") as any, async (req, res) => {
+  /** Appointments in a time window (prefer `start` + `end` ISO from the client’s local calendar day; matches Schedule). */
+  app.get("/api/billing/todays-visits", authMiddleware as any, async (req, res) => {
+    try {
+      const startQ = typeof req.query.start === "string" && req.query.start.trim() ? req.query.start.trim() : null;
+      const endQ = typeof req.query.end === "string" && req.query.end.trim() ? req.query.end.trim() : null;
+      const date =
+        typeof req.query.date === "string" && req.query.date.trim() ? req.query.date.trim().slice(0, 10) : null;
+
+      let startISO: string;
+      let endISO: string;
+      if (startQ && endQ) {
+        startISO = startQ;
+        endISO = endQ;
+      } else if (date) {
+        // Legacy: treat YYYY-MM-DD as UTC calendar day (older clients)
+        startISO = `${date}T00:00:00.000Z`;
+        endISO = `${date}T23:59:59.999Z`;
+      } else {
+        const today = new Date().toISOString().slice(0, 10);
+        startISO = `${today}T00:00:00.000Z`;
+        endISO = `${today}T23:59:59.999Z`;
+      }
+
+      const rows = await storage.getBillingAppointmentsForRange(startISO, endISO);
+      return res.json(rows);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/facility/billing-settings", authMiddleware as any, async (req: any, res) => {
+    try {
+      const user = await storage.getUser(req.user.id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      const facilityId = user.facilityId ?? null;
+      if (!facilityId) {
+        return res.json({ facilityId: null, billingCurrency: "KES", canEdit: false });
+      }
+      const fac = await storage.getFacility(facilityId);
+      if (!fac) {
+        return res.json({ facilityId, billingCurrency: "KES", canEdit: false });
+      }
+      const canEdit =
+        !!facilityId &&
+        (user.role === "super_admin" || user.role === "facility_admin" || user.role === "finance");
+      return res.json({
+        facilityId,
+        billingCurrency: fac.billingCurrency || "KES",
+        canEdit,
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch(
+    "/api/facility/billing-settings",
+    authMiddleware as any,
+    requireRole(...billingChargeRoles) as any,
+    async (req: any, res) => {
+      try {
+        const parsed = patchFacilityBillingBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+        }
+        const user = await storage.getUser(req.user.id);
+        if (!user?.facilityId) {
+          return res.status(400).json({ message: "Your account is not linked to a facility" });
+        }
+        const fac = await storage.getFacility(user.facilityId);
+        if (!fac) return res.status(404).json({ message: "Facility not found" });
+        const updated = await storage.updateFacility(user.facilityId, {
+          billingCurrency: parsed.data.billingCurrency,
+        });
+        if (!updated) return res.status(404).json({ message: "Facility not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "UPDATE_FACILITY_BILLING",
+          resource: "facility",
+          resourceId: user.facilityId,
+          details: `billingCurrency=${parsed.data.billingCurrency}`,
+        });
+        return res.json({
+          facilityId: user.facilityId,
+          billingCurrency: updated.billingCurrency,
+          canEdit: true,
+        });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get(
+    "/api/billing/charge-catalog",
+    authMiddleware as any,
+    requireRole(...billingChargeRoles) as any,
+    async (_req, res) => {
+      try {
+        const rows = await storage.getBillingChargeCatalog();
+        return res.json(rows);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/billing/charge-catalog",
+    authMiddleware as any,
+    requireRole(...billingChargeRoles) as any,
+    async (req: any, res) => {
+      try {
+        const parsed = createBillingChargeCatalogBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid charge item", errors: parsed.error.flatten() });
+        }
+        const body = parsed.data;
+        const itemKey = body.itemKey.trim().toLowerCase().replace(/\s+/g, "_");
+        const created = await storage.createBillingChargeCatalogItem({
+          category: body.category,
+          itemKey,
+          label: body.label.trim(),
+          unitPrice: body.unitPrice.trim(),
+          sortOrder: body.sortOrder ?? 999,
+        });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "CREATE_BILLING_CHARGE_ITEM",
+          resource: "billing_charge_catalog",
+          resourceId: created.id,
+          details: `${body.category} / ${itemKey}`,
+        });
+        return res.status(201).json(created);
+      } catch (error: any) {
+        const msg = String(error?.message || error);
+        if (msg.includes("unique") || msg.includes("duplicate")) {
+          return res.status(409).json({ message: "An item with this category and key already exists" });
+        }
+        return res.status(500).json({ message: msg });
+      }
+    },
+  );
+
+  app.patch(
+    "/api/billing/charge-catalog/:id",
+    authMiddleware as any,
+    requireRole(...billingChargeRoles) as any,
+    async (req: any, res) => {
+      try {
+        const parsed = patchBillingChargeCatalogBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid update", errors: parsed.error.flatten() });
+        }
+        const { unitPrice, label } = parsed.data;
+        const updated = await storage.updateBillingChargeCatalogItem(req.params.id, {
+          unitPrice,
+          ...(label !== undefined ? { label: label.trim() } : {}),
+        });
+        if (!updated) return res.status(404).json({ message: "Charge item not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "UPDATE_BILLING_CHARGE_ITEM",
+          resource: "billing_charge_catalog",
+          resourceId: req.params.id,
+        });
+        return res.json(updated);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/billing/charge-catalog/upload/:category",
+    authMiddleware as any,
+    requireRole(...billingChargeRoles) as any,
+    chargeCatalogUpload.single("file"),
+    async (req: any, res) => {
+      try {
+        const cat = String(req.params.category || "");
+        if (!isBillingChargeCategory(cat)) {
+          return res.status(400).json({ message: "Invalid category" });
+        }
+        const file = req.file as { buffer?: Buffer } | undefined;
+        if (!file?.buffer?.length) {
+          return res.status(400).json({ message: "No Excel file uploaded (field name: file)" });
+        }
+        const rows = parseBillingChargeXlsxBuffer(file.buffer, cat);
+        const count = await storage.replaceBillingChargeCatalogForCategory(cat, rows);
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "REPLACE_BILLING_CHARGE_CATALOG",
+          resource: "billing_charge_catalog",
+          resourceId: null,
+          details: `${cat}: ${count} rows from Excel`,
+        });
+        return res.json({ ok: true, count, category: cat });
+      } catch (error: any) {
+        return res.status(400).json({ message: error.message || "Failed to import spreadsheet" });
+      }
+    },
+  );
+
+  app.get(
+    "/api/audit-logs",
+    authMiddleware as any,
+    requireRole("super_admin", "facility_admin", "security") as any,
+    async (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 100;
       const logs = await storage.getAuditLogs(limit);

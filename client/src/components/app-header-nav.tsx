@@ -16,10 +16,10 @@ export function AppHeaderNav({ user }: { user: UserLike }) {
   const items = APP_NAV_ITEMS.filter((item) => item.roles.includes(user.role));
 
   const hideTitles = new Set<string>();
-  if (user.role === "reception") hideTitles.add("Appointments");
+  if (user.role === "reception") hideTitles.add("Scheduled Appointment");
   if (user.role === "clinician" || user.role === "nurse") {
     hideTitles.add("Laboratory");
-    hideTitles.add("Upload Results");
+    hideTitles.add("Uploads");
   }
 
   const visible = items.filter((i) => !hideTitles.has(i.title));

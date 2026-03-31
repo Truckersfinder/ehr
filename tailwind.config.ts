@@ -1,9 +1,35 @@
 import type { Config } from "tailwindcss";
+import defaultTheme from "tailwindcss/defaultTheme";
+
+/** Tighter layout: all Tailwind spacing (padding, gap, margin, etc.) at 75% of default. */
+const SPACING_SCALE = 0.75;
+
+function scaleSpacing(
+  spacing: Record<string, string>,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(spacing)) {
+    if (key === "0" || value === "0px" || value === "1px") {
+      result[key] = value;
+      continue;
+    }
+    const match = /^([\d.]+)(rem|px)$/.exec(value);
+    if (match) {
+      const n = parseFloat(match[1]);
+      const unit = match[2];
+      result[key] = `${n * SPACING_SCALE}${unit}`;
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
 
 export default {
   darkMode: ["class"],
   content: ["./client/index.html", "./client/src/**/*.{js,jsx,ts,tsx}"],
   theme: {
+    spacing: scaleSpacing(defaultTheme.spacing as Record<string, string>),
     extend: {
       borderRadius: {
         lg: ".5625rem", /* 9px */

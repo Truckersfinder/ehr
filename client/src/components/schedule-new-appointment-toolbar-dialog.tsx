@@ -198,7 +198,7 @@ export function ScheduleNewAppointmentToolbarDialog() {
           data-testid="toolbar-schedule-new-appointment"
         >
           <CalendarPlus className="w-4 h-4 shrink-0" />
-          <span className="hidden sm:inline">Schedule New Appointment</span>
+          <span className="hidden sm:inline">New Appointment</span>
           <span className="sm:hidden">New Appt</span>
         </Button>
       </DialogTrigger>

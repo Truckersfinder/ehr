@@ -230,7 +230,7 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
 
   if (isLoading || !patient) {
     return (
-      <div className="w-[var(--sidebar-width)] flex-shrink-0 border-r bg-muted/30 flex flex-col overflow-y-auto">
+      <div className="w-[clamp(12rem,calc(var(--sidebar-width,16rem)*0.5),18rem)] flex-shrink-0 border-r bg-muted/30 flex flex-col overflow-y-auto">
         <div className="p-4 space-y-4">
           <div className="grid grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-start gap-0 min-w-0">
             <Skeleton className="h-9 w-9 rounded-md shrink-0" />
@@ -250,7 +250,7 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
 
   return (
     <div
-      className="w-[var(--sidebar-width)] flex-shrink-0 border-r bg-muted/30 flex flex-col overflow-y-auto"
+      className="mystic-water-sidebar w-[clamp(12rem,calc(var(--sidebar-width,16rem)*0.5),18rem)] flex-shrink-0 border-r flex flex-col overflow-y-auto"
       data-testid="patient-demographics-sidebar"
     >
       <div className="p-4 space-y-4">
@@ -382,7 +382,12 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
             {patient.address && (
               <div className="flex items-center gap-2">
                 <MapPin className="w-4 h-4 text-muted-foreground shrink-0" />
-                <span className="text-muted-foreground">{patient.address}{patient.city ? `, ${patient.city}` : ""}</span>
+                <span className="text-muted-foreground">
+                  {patient.address}
+                  {patient.city ? `, ${patient.city}` : ""}
+                  {patient.state ? `, ${patient.state}` : ""}
+                  {patient.country ? `, ${patient.country}` : ""}
+                </span>
               </div>
             )}
             {patient.bloodGroup && (
@@ -406,10 +411,7 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
               <ul className="space-y-1">
                 {patientAllergies.map((a) => (
                   <li key={a.id} className={a.severity === "HIGH" ? "text-destructive font-medium" : "text-muted-foreground"}>
-                    <span>{a.allergen} {a.severity && <span className="text-muted-foreground">({a.severity})</span>}</span>
-                    <span className="block text-xs text-muted-foreground font-normal">
-                      Documented {a.createdAt ? format(new Date(a.createdAt), "MMM d, yyyy · HH:mm") : "—"} · By {a.addedBy ? (userNameById.get(a.addedBy) ?? a.addedBy) : "Unknown user"}
-                    </span>
+                    <span>{a.allergen}</span>
                   </li>
                 ))}
               </ul>

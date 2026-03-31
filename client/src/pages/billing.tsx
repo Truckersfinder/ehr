@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,34 +12,99 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
-import { Receipt, CreditCard, Banknote, Smartphone } from "lucide-react";
-import { format } from "date-fns";
+import { apiGetJson, apiPatchJson } from "@/lib/api-client";
+import { useBillingCurrency } from "@/lib/currency";
+import { queryKeys } from "@/lib/query-keys";
+import { Receipt, CreditCard, Banknote, Tags, Clock, CircleCheck, CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
+import { BillingChargeCatalogPanel } from "@/components/billing-charge-catalog-panel";
+import { BillingTodaysVisitsTab, type BillingTodaysVisitRow } from "@/components/billing-todays-visits-tab";
+import { format, parse, startOfDay, endOfDay } from "date-fns";
 import type { Invoice, Patient } from "@shared/schema";
+import { useLocation } from "wouter";
+
+function canManageChargeCatalog(role: string | undefined) {
+  return role === "super_admin" || role === "facility_admin" || role === "finance";
+}
 
 export default function BillingPage() {
   const { toast } = useToast();
-  const { token } = useAuth();
+  const { user, token } = useAuth();
+  const [location, setLocation] = useLocation();
+  const showPricingTab = canManageChargeCatalog(user?.role);
+  const canViewRevenue = canManageChargeCatalog(user?.role);
+  const [activeTab, setActiveTab] = useState<"todays-visit" | "pending" | "paid" | "pricing">("todays-visit");
+  const [deepLinkInvoiceId, setDeepLinkInvoiceId] = useState<string | null>(null);
   const [payOpen, setPayOpen] = useState<string | null>(null);
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState("cash");
+  const [visitsDay, setVisitsDay] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [revStart, setRevStart] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  const [revEnd, setRevEnd] = useState(() => format(new Date(), "yyyy-MM-dd"));
 
   const { data: invoices = [], isLoading } = useQuery<Invoice[]>({
-    queryKey: ["/api/invoices"],
-    queryFn: async () => {
-      const res = await fetch("/api/invoices", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.invoices.root,
+    queryFn: () => apiGetJson<Invoice[]>("/api/invoices", token),
   });
 
   const { data: patients = [] } = useQuery<Patient[]>({
-    queryKey: ["/api/patients"],
-    queryFn: async () => {
-      const res = await fetch("/api/patients", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.patients.root,
+    queryFn: () => apiGetJson<Patient[]>("/api/patients", token),
   });
+
+  const { currencyCode } = useBillingCurrency(token);
+
+  const revenueBounds = useMemo(() => {
+    const s = parse(revStart, "yyyy-MM-dd", new Date());
+    const e = parse(revEnd, "yyyy-MM-dd", new Date());
+    return {
+      start: startOfDay(s).toISOString(),
+      end: endOfDay(e).toISOString(),
+    };
+  }, [revStart, revEnd]);
+
+  const { data: revenueStats } = useQuery<{ revenue: number; outstanding: number }>({
+    queryKey: ["/api/billing/revenue-stats", revenueBounds.start, revenueBounds.end],
+    queryFn: () =>
+      apiGetJson<{ revenue: number; outstanding: number }>(
+        `/api/billing/revenue-stats?start=${encodeURIComponent(revenueBounds.start)}&end=${encodeURIComponent(revenueBounds.end)}`,
+        token,
+      ),
+    enabled: !!token && canViewRevenue,
+  });
+
+  /** Same local-day bounds as Schedule (`startOfDay` / `endOfDay`), so appointments match when changing the date. */
+  const visitsDayBounds = useMemo(() => {
+    const d = parse(visitsDay, "yyyy-MM-dd", new Date());
+    return {
+      start: startOfDay(d).toISOString(),
+      end: endOfDay(d).toISOString(),
+    };
+  }, [visitsDay]);
+
+  const {
+    data: todaysVisits = [],
+    isLoading: todaysVisitsLoading,
+    isError: todaysVisitsError,
+    error: todaysVisitsErr,
+  } = useQuery<BillingTodaysVisitRow[]>({
+    queryKey: queryKeys.billing.todaysVisits(visitsDay),
+    queryFn: () =>
+      apiGetJson<BillingTodaysVisitRow[]>(
+        `/api/billing/todays-visits?start=${encodeURIComponent(visitsDayBounds.start)}&end=${encodeURIComponent(visitsDayBounds.end)}`,
+        token,
+      ),
+    enabled: !!token,
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const visitsDayLabel = useMemo(() => {
+    try {
+      return format(new Date(`${visitsDay}T00:00:00`), "MMM d, yyyy");
+    } catch {
+      return visitsDay;
+    }
+  }, [visitsDay]);
 
   const patientMap = new Map(patients.map((p) => [p.id, p]));
 
@@ -49,16 +114,14 @@ export default function BillingPage() {
       if (!inv) throw new Error("Invoice not found");
       const newPaid = Number(inv.paidAmount || 0) + amount;
       const newStatus = newPaid >= Number(inv.totalAmount) ? "paid" : "partial";
-      const res = await fetch(`/api/invoices/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ paidAmount: String(newPaid), status: newStatus, paymentMethod: method }),
-      });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
+      return apiPatchJson<Invoice>(`/api/invoices/${id}`, {
+        paidAmount: String(newPaid),
+        status: newStatus,
+        paymentMethod: method,
+      }, token);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/invoices"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.invoices.root });
       toast({ title: "Payment recorded" });
       setPayOpen(null);
     },
@@ -77,6 +140,59 @@ export default function BillingPage() {
   const paid = invoices.filter((i) => i.status === "paid");
   const totalRevenue = invoices.reduce((sum, i) => sum + Number(i.paidAmount || 0), 0);
   const totalOutstanding = invoices.reduce((sum, i) => sum + (Number(i.totalAmount) - Number(i.paidAmount || 0)), 0);
+
+  /** Deep link from follow-up: /billing?payInvoiceId=... opens payment dialog. */
+  useEffect(() => {
+    // Always read from the real browser URL (wouter `location` can omit query).
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search || "");
+    const id = sp.get("payInvoiceId");
+    if (!id) {
+      setDeepLinkInvoiceId(null);
+      return;
+    }
+    setDeepLinkInvoiceId(id);
+    setActiveTab("pending");
+  }, [location]);
+
+  /** Sync Billing tabs into URL so Back restores the previous tab. */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search || "");
+    const t = sp.get("tab");
+    if (!t) return;
+    if (t === "todays-visit" || t === "pending" || t === "paid" || t === "pricing") {
+      setActiveTab(t);
+    }
+  }, [location]);
+
+  useEffect(() => {
+    if (!token || invoices.length === 0 || !deepLinkInvoiceId) return;
+    const inv = invoices.find((x) => x.id === deepLinkInvoiceId);
+    if (!inv) return;
+    const balance = Number(inv.totalAmount) - Number(inv.paidAmount || 0);
+    if (balance <= 0) return;
+    setPayOpen(inv.id);
+    setPayAmount(String(balance));
+    // Scroll to the invoice card in the Pending Payment list.
+    setTimeout(() => {
+      try {
+        const el = document.querySelector(`[data-testid="card-invoice-${inv.id}"]`);
+        if (el && "scrollIntoView" in el) (el as HTMLElement).scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch {
+        // ignore
+      }
+    }, 50);
+    // Strip param so refresh doesn't keep reopening.
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("payInvoiceId");
+      window.history.replaceState({}, "", url.pathname + (url.searchParams.toString() ? `?${url.searchParams.toString()}` : ""));
+    } catch {
+      // ignore
+    }
+    setDeepLinkInvoiceId(null);
+  }, [token, invoices, deepLinkInvoiceId]);
 
   const renderInvoice = (inv: Invoice, showPay = false) => {
     const pt = patientMap.get(inv.patientId);
@@ -100,14 +216,20 @@ export default function BillingPage() {
                   {items.map((item: any, idx: number) => (
                     <div key={idx} className="flex justify-between text-xs text-muted-foreground">
                       <span>{item.description}</span>
-                      <span>KES {Number(item.amount).toLocaleString()}</span>
+                      <span>
+                        {currencyCode} {Number(item.amount).toLocaleString()}
+                      </span>
                     </div>
                   ))}
                 </div>
               )}
               <div className="flex items-center justify-between mt-2 pt-2 border-t text-sm">
-                <span>Total: KES {Number(inv.totalAmount).toLocaleString()}</span>
-                <span className="font-medium">Balance: KES {balance.toLocaleString()}</span>
+                <span>
+                  Total: {currencyCode} {Number(inv.totalAmount).toLocaleString()}
+                </span>
+                <span className="font-medium">
+                  Balance: {currencyCode} {balance.toLocaleString()}
+                </span>
               </div>
             </div>
             {showPay && balance > 0 && (
@@ -128,49 +250,137 @@ export default function BillingPage() {
         <p className="text-muted-foreground text-sm mt-1">{pending.length} pending invoices</p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {canViewRevenue ? (
         <Card>
-          <CardContent className="p-5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-md bg-chart-3/10 flex items-center justify-center"><Banknote className="w-5 h-5 text-chart-3" /></div>
+          <CardContent className="p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <p className="text-xs text-muted-foreground">Total Revenue</p>
-                <p className="text-xl font-bold" data-testid="stat-revenue">KES {totalRevenue.toLocaleString()}</p>
+                <p className="text-sm font-medium">Revenue & balance</p>
+                <p className="text-xs text-muted-foreground">Pick a date range to calculate revenue and outstanding balance.</p>
               </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="space-y-1">
+                  <Label className="text-xs">Start</Label>
+                  <Input type="date" value={revStart} onChange={(e) => setRevStart(e.target.value)} className="h-9 w-[10.5rem]" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">End</Label>
+                  <Input type="date" value={revEnd} onChange={(e) => setRevEnd(e.target.value)} className="h-9 w-[10.5rem]" />
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Card className="border-border/60">
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground">Revenue (paid)</p>
+                  <p className="text-xl font-bold" data-testid="stat-range-revenue">
+                    {currencyCode} {Number(revenueStats?.revenue ?? 0).toLocaleString()}
+                  </p>
+                </CardContent>
+              </Card>
+              <Card className="border-border/60">
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground">Outstanding balance</p>
+                  <p className="text-xl font-bold" data-testid="stat-range-outstanding">
+                    {currencyCode} {Number(revenueStats?.outstanding ?? 0).toLocaleString()}
+                  </p>
+                </CardContent>
+              </Card>
             </div>
           </CardContent>
         </Card>
-        <Card>
-          <CardContent className="p-5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-md bg-chart-4/10 flex items-center justify-center"><Receipt className="w-5 h-5 text-chart-4" /></div>
-              <div>
-                <p className="text-xs text-muted-foreground">Outstanding</p>
-                <p className="text-xl font-bold" data-testid="stat-outstanding">KES {totalOutstanding.toLocaleString()}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-md bg-primary/10 flex items-center justify-center"><CreditCard className="w-5 h-5 text-primary" /></div>
-              <div>
-                <p className="text-xs text-muted-foreground">Total Invoices</p>
-                <p className="text-xl font-bold">{invoices.length}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      ) : null}
 
-      <Tabs defaultValue="pending">
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => {
+          const next = v as "todays-visit" | "pending" | "paid" | "pricing";
+          setActiveTab(next);
+          try {
+            const url = new URL(window.location.href);
+            url.searchParams.set("tab", next);
+            setLocation(url.pathname + url.search);
+          } catch {
+            // ignore
+          }
+        }}
+      >
         <TabsList>
-          <TabsTrigger value="pending">Pending ({pending.length})</TabsTrigger>
-          <TabsTrigger value="paid">Paid ({paid.length})</TabsTrigger>
+          <TabsTrigger value="todays-visit" data-testid="tab-todays-visit">
+            <CalendarDays className="w-3.5 h-3.5 mr-1.5" />
+            Today&apos;s visit ({todaysVisits.length})
+          </TabsTrigger>
+          <TabsTrigger value="pending" data-testid="tab-pending">
+            <Clock className="w-3.5 h-3.5 mr-1.5" />
+            Pending Payment ({pending.length})
+          </TabsTrigger>
+          <TabsTrigger value="paid" data-testid="tab-paid">
+            <CircleCheck className="w-3.5 h-3.5 mr-1.5" />
+            Paid ({paid.length})
+          </TabsTrigger>
+          {showPricingTab ? (
+            <TabsTrigger value="pricing" data-testid="tab-pricing">
+              <Tags className="w-3.5 h-3.5 mr-1.5" />
+              Pricing
+            </TabsTrigger>
+          ) : null}
         </TabsList>
 
-        <TabsContent value="pending" className="space-y-3 mt-4">
+        <TabsContent value="todays-visit" className="space-y-4 mt-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium">Visits for {visitsDayLabel}</p>
+              <p className="text-xs text-muted-foreground">Use the arrows or pick a date.</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="gap-1"
+                onClick={() => {
+                  const d = new Date(`${visitsDay}T00:00:00`);
+                  d.setDate(d.getDate() - 1);
+                  setVisitsDay(format(d, "yyyy-MM-dd"));
+                }}
+                aria-label="Previous day"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                Prev
+              </Button>
+              <Input
+                type="date"
+                value={visitsDay}
+                onChange={(e) => setVisitsDay(e.target.value)}
+                className="h-9 w-[10.5rem]"
+                data-testid="billing-visits-day"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="gap-1"
+                onClick={() => {
+                  const d = new Date(`${visitsDay}T00:00:00`);
+                  d.setDate(d.getDate() + 1);
+                  setVisitsDay(format(d, "yyyy-MM-dd"));
+                }}
+                aria-label="Next day"
+              >
+                Next
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+          <BillingTodaysVisitsTab
+            rows={todaysVisits}
+            isLoading={!!token && todaysVisitsLoading}
+            isError={todaysVisitsError}
+            error={todaysVisitsErr instanceof Error ? todaysVisitsErr : null}
+          />
+        </TabsContent>
+
+        <TabsContent value="pending" className="space-y-4 mt-4">
           {isLoading ? (
             Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-32" />)
           ) : pending.length === 0 ? (
@@ -178,11 +388,17 @@ export default function BillingPage() {
           ) : pending.map((inv) => renderInvoice(inv, true))}
         </TabsContent>
 
-        <TabsContent value="paid" className="space-y-3 mt-4">
+        <TabsContent value="paid" className="space-y-4 mt-4">
           {paid.length === 0 ? (
             <Card><CardContent className="py-12 text-center text-muted-foreground">No paid invoices yet</CardContent></Card>
           ) : paid.map((inv) => renderInvoice(inv))}
         </TabsContent>
+
+        {showPricingTab ? (
+          <TabsContent value="pricing" className="space-y-4 mt-4">
+            <BillingChargeCatalogPanel token={token} />
+          </TabsContent>
+        ) : null}
       </Tabs>
 
       <Dialog open={!!payOpen} onOpenChange={() => setPayOpen(null)}>
@@ -193,7 +409,7 @@ export default function BillingPage() {
             if (payOpen) payMutation.mutate({ id: payOpen, amount: parseFloat(payAmount), method: payMethod });
           }} className="space-y-4">
             <div className="space-y-2">
-              <Label>Amount (KES)</Label>
+              <Label>Amount ({currencyCode})</Label>
               <Input type="number" step="0.01" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} required />
             </div>
             <div className="space-y-2">

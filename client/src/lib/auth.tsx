@@ -14,7 +14,7 @@ interface AuthUser {
 interface AuthContextType {
   user: AuthUser | null;
   token: string | null;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<AuthUser>;
   logout: () => void;
   isLoading: boolean;
 }
@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token, logout]);
 
-  const login = async (username: string, password: string) => {
+  const login = async (username: string, password: string): Promise<AuthUser> => {
     const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -63,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(data.token);
     setUser(data.user);
     localStorage.setItem(EHR_TOKEN_STORAGE_KEY, data.token);
+    return data.user as AuthUser;
   };
 
   return (
@@ -78,6 +79,7 @@ export function useAuth() {
   return ctx;
 }
 
+/** Prefer `@/lib/api-client` (apiGetJson / apiPostJson / apiPatchJson) for new code. */
 export function authFetch(token: string | null) {
   return (url: string, options?: RequestInit) => {
     return fetch(url, {

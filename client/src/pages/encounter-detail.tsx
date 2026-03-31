@@ -16,6 +16,7 @@ import {
   ArrowLeft, Save, CheckCircle, Thermometer, Heart as HeartIcon,
   Activity, Wind, Droplets, Weight,
 } from "lucide-react";
+import { MutedIconBox } from "@/components/muted-icon-box";
 import { format } from "date-fns";
 import type { Encounter, Patient, Vitals } from "@shared/schema";
 
@@ -273,16 +274,16 @@ export default function EncounterDetailPage() {
           {latestVitals && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
-                { icon: Thermometer, label: "Temp", value: latestVitals.temperature ? `${latestVitals.temperature}°C` : "-", color: "text-chart-4" },
-                { icon: HeartIcon, label: "BP", value: latestVitals.bloodPressureSystolic ? `${latestVitals.bloodPressureSystolic}/${latestVitals.bloodPressureDiastolic}` : "-", color: "text-destructive" },
-                { icon: Activity, label: "HR", value: latestVitals.heartRate ? `${latestVitals.heartRate} bpm` : "-", color: "text-chart-3" },
-                { icon: Wind, label: "RR", value: latestVitals.respiratoryRate ? `${latestVitals.respiratoryRate}/min` : "-", color: "text-chart-2" },
-                { icon: Droplets, label: "SpO2", value: latestVitals.oxygenSaturation ? `${latestVitals.oxygenSaturation}%` : "-", color: "text-primary" },
-                { icon: Weight, label: "Weight", value: latestVitals.weight ? `${latestVitals.weight} kg` : "-", color: "text-chart-5" },
+                { icon: Thermometer, label: "Temp", value: latestVitals.temperature ? `${latestVitals.temperature}°C` : "-" },
+                { icon: HeartIcon, label: "BP", value: latestVitals.bloodPressureSystolic ? `${latestVitals.bloodPressureSystolic}/${latestVitals.bloodPressureDiastolic}` : "-" },
+                { icon: Activity, label: "HR", value: latestVitals.heartRate ? `${latestVitals.heartRate} bpm` : "-" },
+                { icon: Wind, label: "RR", value: latestVitals.respiratoryRate ? `${latestVitals.respiratoryRate}/min` : "-" },
+                { icon: Droplets, label: "SpO2", value: latestVitals.oxygenSaturation ? `${latestVitals.oxygenSaturation}%` : "-" },
+                { icon: Weight, label: "Weight", value: latestVitals.weight ? `${latestVitals.weight} kg` : "-" },
               ].map((v) => (
                 <Card key={v.label}>
                   <CardContent className="p-4 flex items-center gap-3">
-                    <v.icon className={`w-5 h-5 ${v.color} flex-shrink-0`} />
+                    <MutedIconBox icon={v.icon} />
                     <div>
                       <p className="text-xs text-muted-foreground">{v.label}</p>
                       <p className="font-semibold text-sm">{v.value}</p>

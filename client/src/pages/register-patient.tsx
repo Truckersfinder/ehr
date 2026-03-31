@@ -9,7 +9,16 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CountrySelect } from "@/components/country-select";
+import { StateSelect } from "@/components/state-select";
+import { EmergencyContactRelationshipSelect } from "@/components/emergency-contact-relationship-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Camera, X } from "lucide-react";
 import type { Patient, User as UserType } from "@shared/schema";
@@ -26,7 +35,8 @@ const emptyForm = () => ({
   email: "",
   address: "",
   city: "",
-  country: "KE",
+  state: "",
+  country: "",
   bloodGroup: "",
   nextOfKinName: "",
   nextOfKinPhone: "",
@@ -48,7 +58,15 @@ export default function RegisterPatientPage() {
   const [formData, setFormData] = useState(emptyForm);
   const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
-  const photoInputRef = useRef<HTMLInputElement>(null);
+  const galleryPhotoInputRef = useRef<HTMLInputElement>(null);
+  const cameraPhotoInputRef = useRef<HTMLInputElement>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([]);
+  const [cameraDeviceId, setCameraDeviceId] = useState<string>("");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     return () => {
@@ -60,11 +78,11 @@ export default function RegisterPatientPage() {
     if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
     setPhotoPreviewUrl(null);
     setProfilePhotoFile(null);
-    if (photoInputRef.current) photoInputRef.current.value = "";
+    if (galleryPhotoInputRef.current) galleryPhotoInputRef.current.value = "";
+    if (cameraPhotoInputRef.current) cameraPhotoInputRef.current.value = "";
   };
 
-  const onProfilePhotoPick = (fileList: FileList | null) => {
-    const file = fileList?.[0];
+  const onProfilePhotoPick = (file: File | null | undefined) => {
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) {
       toast({ title: "File too large", description: "Profile photo must be 5 MB or less.", variant: "destructive" });
@@ -79,6 +97,89 @@ export default function RegisterPatientPage() {
     () => (user?.role === "reception" ? "/appointments" : "/patients"),
     [user?.role]
   );
+  const canUseCamera = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return !!navigator.mediaDevices?.getUserMedia;
+  }, []);
+
+  async function stopCamera() {
+    try {
+      cameraStream?.getTracks().forEach((t) => t.stop());
+    } finally {
+      setCameraStream(null);
+      if (videoRef.current) videoRef.current.srcObject = null;
+    }
+  }
+
+  async function startCamera(nextDeviceId?: string) {
+    if (!canUseCamera) {
+      setCameraError("Camera is not supported in this browser.");
+      return;
+    }
+    setCameraError(null);
+    await stopCamera();
+    const constraints: MediaStreamConstraints = {
+      video: nextDeviceId ? { deviceId: { exact: nextDeviceId } } : { facingMode: "user" },
+      audio: false,
+    };
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      setCameraStream(stream);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+      const cams = devices.filter((d) => d.kind === "videoinput");
+      setCameraDevices(cams);
+      if (!nextDeviceId) {
+        const activeTrack = stream.getVideoTracks()[0];
+        const activeId = activeTrack?.getSettings?.().deviceId;
+        if (activeId) setCameraDeviceId(activeId);
+      }
+    } catch (e: any) {
+      setCameraError(e?.message || "Unable to access camera. Please allow camera permissions.");
+      await stopCamera();
+    }
+  }
+
+  async function capturePhotoFromCamera() {
+    if (!videoRef.current || !canvasRef.current) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const w = video.videoWidth || 1280;
+    const h = video.videoHeight || 720;
+    if (!w || !h) {
+      toast({ title: "Camera not ready", description: "Please wait and try again.", variant: "destructive" });
+      return;
+    }
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, w, h);
+
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9),
+    );
+    if (!blob) {
+      toast({ title: "Capture failed", description: "Could not create image.", variant: "destructive" });
+      return;
+    }
+    const capturedFile = new File([blob], `new-patient-profile-${Date.now()}.jpg`, { type: "image/jpeg" });
+    onProfilePhotoPick(capturedFile);
+    setCameraOpen(false);
+  }
+
+  useEffect(() => {
+    if (!cameraOpen) {
+      void stopCamera();
+      setCameraError(null);
+      return;
+    }
+    void startCamera(cameraDeviceId || undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraOpen]);
 
   const { data: users = [] } = useQuery<Omit<UserType, "password">[]>({
     queryKey: ["/api/users"],
@@ -111,6 +212,7 @@ export default function RegisterPatientPage() {
         email: data.email || undefined,
         address: data.address || undefined,
         city: data.city || undefined,
+        state: data.state || undefined,
         bloodGroup: data.bloodGroup || undefined,
         nextOfKinName: data.nextOfKinName || undefined,
         nextOfKinPhone: data.nextOfKinPhone || undefined,
@@ -142,6 +244,14 @@ export default function RegisterPatientPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      if (!String(formData.country).trim()) {
+        toast({ title: "Country required", description: "Please select a country.", variant: "destructive" });
+        return;
+      }
+      if (!String(formData.state).trim()) {
+        toast({ title: "State required", description: "Please select a state / province / region.", variant: "destructive" });
+        return;
+      }
       const created = await createMutation.mutateAsync(formData);
       let photoNote: string | null = null;
       if (profilePhotoFile && token) {
@@ -175,7 +285,11 @@ export default function RegisterPatientPage() {
       }
       clearProfilePhoto();
       setFormData(emptyForm());
-      navigate(`/patients/${created.id}?chartEntry=browse`);
+      if (user?.role === "reception") {
+        navigate("/appointments");
+      } else {
+        navigate(`/patients/${created.id}?chartEntry=browse`);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to register patient";
       toast({ title: "Error", description: message, variant: "destructive" });
@@ -307,18 +421,36 @@ export default function RegisterPatientPage() {
               </div>
               <div className="flex flex-col gap-2 min-w-0">
                 <input
-                  ref={photoInputRef}
+                  ref={galleryPhotoInputRef}
                   type="file"
                   accept="image/jpeg,image/png,image/gif,image/webp"
                   className="hidden"
                   id="reg-profile-photo"
                   data-testid="reg-input-profile-photo"
-                  onChange={(e) => onProfilePhotoPick(e.target.files)}
+                  onChange={(e) => onProfilePhotoPick(e.target.files?.[0])}
                 />
+                <input ref={cameraPhotoInputRef} type="file" accept="image/*" capture="user" className="hidden" />
                 <div className="flex flex-wrap gap-2">
-                  <Button type="button" variant="secondary" size="sm" onClick={() => photoInputRef.current?.click()}>
-                    Choose photo
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="secondary" size="sm">
+                        Choose photo
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      <DropdownMenuItem
+                        onSelect={() => {
+                          if (canUseCamera) setCameraOpen(true);
+                          else cameraPhotoInputRef.current?.click();
+                        }}
+                      >
+                        Take picture
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => galleryPhotoInputRef.current?.click()}>
+                        Upload photo
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   {profilePhotoFile && (
                     <Button type="button" variant="ghost" size="sm" onClick={clearProfilePhoto} className="gap-1">
                       <X className="h-3.5 w-3.5" />
@@ -330,6 +462,56 @@ export default function RegisterPatientPage() {
             </div>
           </CardContent>
         </Card>
+
+        <Dialog open={cameraOpen} onOpenChange={setCameraOpen}>
+          <DialogContent className="sm:max-w-xl">
+            <DialogHeader>
+              <DialogTitle>Take picture</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              {cameraDevices.length > 1 && (
+                <div className="space-y-2">
+                  <Label>Camera</Label>
+                  <select
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    value={cameraDeviceId}
+                    onChange={async (e) => {
+                      const next = e.target.value;
+                      setCameraDeviceId(next);
+                      await startCamera(next);
+                    }}
+                  >
+                    {cameraDevices.map((d, idx) => (
+                      <option key={d.deviceId} value={d.deviceId}>
+                        {d.label || `Camera ${idx + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className="rounded-lg border bg-muted/30 overflow-hidden">
+                <div className="aspect-video w-full bg-black/90 flex items-center justify-center">
+                  <video ref={videoRef} className="h-full w-full object-cover" playsInline muted />
+                </div>
+              </div>
+              <canvas ref={canvasRef} className="hidden" />
+              {cameraError ? <p className="text-sm text-destructive">{cameraError}</p> : null}
+              <div className="flex justify-end gap-2 pt-1">
+                <Button type="button" variant="outline" onClick={() => setCameraOpen(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  onClick={capturePhotoFromCamera}
+                  disabled={!!cameraError || !cameraStream}
+                  data-testid="reg-profile-photo-capture"
+                >
+                  Capture
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         <Card>
           <CardHeader>
@@ -355,14 +537,34 @@ export default function RegisterPatientPage() {
                 <Label>City/Town</Label>
                 <Input value={formData.city} onChange={(e) => set({ city: e.target.value })} />
               </div>
-              <div className="space-y-2">
-                <Label>Country</Label>
-                <CountrySelect
-                  value={formData.country}
-                  onValueChange={(code) => set({ country: code })}
-                  data-testid="reg-select-country"
+              <div
+                className="space-y-2"
+                onMouseDownCapture={() => {
+                  if (!formData.country) {
+                    toast({
+                      title: "Country required",
+                      description: "Please select a country first.",
+                      variant: "destructive",
+                    });
+                  }
+                }}
+              >
+                <Label>State / province / region *</Label>
+                <StateSelect
+                  countryCode={formData.country}
+                  value={formData.state}
+                  onValueChange={(state) => set({ state })}
+                  data-testid="reg-select-state"
                 />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Country *</Label>
+              <CountrySelect
+                value={formData.country}
+                onValueChange={(code) => set({ country: code, state: "" })}
+                data-testid="reg-select-country"
+              />
             </div>
           </CardContent>
         </Card>
@@ -383,7 +585,11 @@ export default function RegisterPatientPage() {
             </div>
             <div className="space-y-2">
               <Label>Relationship</Label>
-              <Input value={formData.nextOfKinRelation} onChange={(e) => set({ nextOfKinRelation: e.target.value })} />
+              <EmergencyContactRelationshipSelect
+                value={formData.nextOfKinRelation}
+                onValueChange={(v) => set({ nextOfKinRelation: v })}
+                data-testid="reg-select-next-of-kin-relationship"
+              />
             </div>
           </CardContent>
         </Card>
@@ -423,11 +629,20 @@ export default function RegisterPatientPage() {
               </div>
               <div className="space-y-2">
                 <Label>Guarantor relationship</Label>
-                <Input
-                  value={formData.billingGuarantorRelation}
-                  onChange={(e) => set({ billingGuarantorRelation: e.target.value })}
-                  placeholder="e.g. Self, Parent, Employer"
-                />
+                <Select
+                  value={formData.billingGuarantorRelation || "__none"}
+                  onValueChange={(v) => set({ billingGuarantorRelation: v === "__none" ? "" : v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select relationship" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">— Not specified —</SelectItem>
+                    <SelectItem value="Self">Self</SelectItem>
+                    <SelectItem value="Parent">Parent</SelectItem>
+                    <SelectItem value="Employer">Employer</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <div className="space-y-2">

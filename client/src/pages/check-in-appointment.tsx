@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { CountrySelect } from "@/components/country-select";
+import { EmergencyContactRelationshipSelect } from "@/components/emergency-contact-relationship-select";
 import { ArrowLeft } from "lucide-react";
 import type { Appointment, Patient } from "@shared/schema";
 
@@ -74,7 +75,8 @@ export default function CheckInAppointmentPage() {
 
   useEffect(() => {
     if (!selectedAppt || !selectedPatient) return;
-    setPatientForm({ ...selectedPatient });
+    // Do not preselect a country in demographics edits during check-in.
+    setPatientForm({ ...selectedPatient, country: null });
     setPaymentCopay(selectedAppt.checkInCopayAmount != null ? String(selectedAppt.checkInCopayAmount) : "");
     setPaymentMethod(selectedAppt.checkInPaymentMethod ?? "");
     setPaymentReceived(selectedAppt.checkInAmountReceived != null ? String(selectedAppt.checkInAmountReceived) : "");
@@ -317,9 +319,10 @@ export default function CheckInAppointmentPage() {
                 </div>
                 <div className="space-y-1 sm:col-span-2">
                   <Label>Next of kin relation</Label>
-                  <Input
+                  <EmergencyContactRelationshipSelect
                     value={patientForm.nextOfKinRelation ?? ""}
-                    onChange={(e) => setPatientForm((f) => ({ ...f, nextOfKinRelation: e.target.value }))}
+                    onValueChange={(v) => setPatientForm((f) => ({ ...f, nextOfKinRelation: v }))}
+                    data-testid="checkin-select-next-of-kin-relationship"
                   />
                 </div>
               </div>

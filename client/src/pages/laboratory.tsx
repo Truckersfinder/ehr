@@ -1,24 +1,49 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
+import { apiGetJson, apiPatchJson } from "@/lib/api-client";
+import { queryKeys } from "@/lib/query-keys";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, AlertTriangle, Building2, Upload } from "lucide-react";
+import { AlertTriangle, Building2, Upload } from "lucide-react";
 import { format } from "date-fns";
 import { DocumentFileUpload } from "@/components/document-file-upload";
 import { labOrderStatusBadgeClass } from "@/lib/lab-order-status";
 import type { LabOrder, Patient } from "@shared/schema";
+
+type SortDir = "asc" | "desc";
+type LabSortKey = "createdAt" | "testName" | "patient" | "mrn" | "testCode" | "priority" | "status";
+
+function labOrderCreatedAtIso(v: LabOrder["createdAt"]): string {
+  if (v == null) return "";
+  return v instanceof Date ? v.toISOString() : String(v);
+}
+
+function priorityLabel(p: unknown): string {
+  const v = String(p || "").toLowerCase();
+  if (v === "stat") return "STAT";
+  if (v === "urgent") return "Urgent";
+  return "Routine";
+}
 
 export default function LaboratoryPage() {
   const [, navigate] = useLocation();
@@ -27,28 +52,18 @@ export default function LaboratoryPage() {
 
   const { user, token } = useAuth();
   const { toast } = useToast();
-  const [open, setOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState<string | null>(null);
   const [uploadResultOpen, setUploadResultOpen] = useState<string | null>(null);
   const [resultData, setResultData] = useState({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" });
-  const [formData, setFormData] = useState({ patientId: "", testName: "", testCode: "", priority: "routine" });
 
   const { data: orders = [], isLoading } = useQuery<LabOrder[]>({
-    queryKey: ["/api/lab-orders"],
-    queryFn: async () => {
-      const res = await fetch("/api/lab-orders", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.labOrders.root,
+    queryFn: () => apiGetJson<LabOrder[]>("/api/lab-orders", token),
   });
 
   const { data: patients = [] } = useQuery<Patient[]>({
-    queryKey: ["/api/patients"],
-    queryFn: async () => {
-      const res = await fetch("/api/patients", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.patients.root,
+    queryFn: () => apiGetJson<Patient[]>("/api/patients", token),
   });
 
   const patientMap = new Map(patients.map((p) => [p.id, p]));
@@ -58,52 +73,11 @@ export default function LaboratoryPage() {
     return orders.filter((o) => o.patientId === patientIdFromUrl);
   }, [orders, patientIdFromUrl]);
 
-  useEffect(() => {
-    if (patientIdFromUrl) {
-      setFormData((f) => ({ ...f, patientId: patientIdFromUrl }));
-    }
-  }, [patientIdFromUrl]);
-
-  const createMutation = useMutation({
-    mutationFn: async (data: typeof formData) => {
-      const res = await fetch("/api/lab-orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ ...data, orderedBy: user?.id, status: "ordered" }),
-      });
-      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/lab-orders"] });
-      toast({ title: "Lab order created" });
-      setOpen(false);
-    },
-    onError: (error: Error) => toast({ title: "Error", description: error.message, variant: "destructive" }),
-  });
-
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) => {
-      const res = await fetch(`/api/lab-orders/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(data),
-      });
-      const text = await res.text();
-      if (!res.ok) {
-        let message = "Failed to update lab order";
-        try {
-          const json = text ? JSON.parse(text) : {};
-          if (json && typeof json.message === "string") message = json.message;
-        } catch {
-          if (text) message = text.slice(0, 100);
-        }
-        throw new Error(message);
-      }
-      return text ? JSON.parse(text) : {};
-    },
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, unknown> }) =>
+      apiPatchJson<Record<string, unknown>>(`/api/lab-orders/${id}`, data, token),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/lab-orders"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.labOrders.root });
       toast({ title: "Lab order updated" });
       setResultOpen(null);
       setUploadResultOpen(null);
@@ -133,6 +107,106 @@ export default function LaboratoryPage() {
 
   const filterPatient = patientIdFromUrl ? patientMap.get(patientIdFromUrl) : null;
 
+  const [internalSortKey, setInternalSortKey] = useState<LabSortKey>("createdAt");
+  const [internalSortDir, setInternalSortDir] = useState<SortDir>("desc");
+  const [externalSortKey, setExternalSortKey] = useState<LabSortKey>("createdAt");
+  const [externalSortDir, setExternalSortDir] = useState<SortDir>("desc");
+
+  const sortOrders = (list: LabOrder[], key: LabSortKey, dir: SortDir) => {
+    const mult = dir === "asc" ? 1 : -1;
+    const sorted = [...list];
+    sorted.sort((a, b) => {
+      const aPt = patientMap.get(a.patientId);
+      const bPt = patientMap.get(b.patientId);
+      const aPatient = aPt ? `${aPt.firstName} ${aPt.lastName}`.trim().toLowerCase() : "";
+      const bPatient = bPt ? `${bPt.firstName} ${bPt.lastName}`.trim().toLowerCase() : "";
+      const aMrn = (aPt?.mrn ?? "").toLowerCase();
+      const bMrn = (bPt?.mrn ?? "").toLowerCase();
+      const aCreated = new Date(labOrderCreatedAtIso(a.createdAt) || 0).getTime();
+      const bCreated = new Date(labOrderCreatedAtIso(b.createdAt) || 0).getTime();
+      const aTest = (a.testName ?? "").toLowerCase();
+      const bTest = (b.testName ?? "").toLowerCase();
+      const aCode = (a.testCode ?? "").toLowerCase();
+      const bCode = (b.testCode ?? "").toLowerCase();
+      const aPrio = priorityLabel(a.priority).toLowerCase();
+      const bPrio = priorityLabel(b.priority).toLowerCase();
+      const aStatus = String(a.status ?? "").toLowerCase();
+      const bStatus = String(b.status ?? "").toLowerCase();
+
+      switch (key) {
+        case "patient":
+          return aPatient.localeCompare(bPatient) * mult;
+        case "mrn":
+          return aMrn.localeCompare(bMrn) * mult;
+        case "testName":
+          return aTest.localeCompare(bTest) * mult;
+        case "testCode":
+          return aCode.localeCompare(bCode) * mult;
+        case "priority":
+          return aPrio.localeCompare(bPrio) * mult;
+        case "status":
+          return aStatus.localeCompare(bStatus) * mult;
+        case "createdAt":
+        default:
+          return (aCreated - bCreated) * mult;
+      }
+    });
+    return sorted;
+  };
+
+  const internalSorted = useMemo(
+    () => sortOrders(internalPending, internalSortKey, internalSortDir),
+    // patientMap changes whenever patients changes; use patients as dependency via patientMap's source
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [internalPending, internalSortKey, internalSortDir, patients],
+  );
+  const externalSorted = useMemo(
+    () => sortOrders(externalPending, externalSortKey, externalSortDir),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [externalPending, externalSortKey, externalSortDir, patients],
+  );
+
+  const toggleSort = (
+    key: LabSortKey,
+    which: "internal" | "external",
+  ) => {
+    if (which === "internal") {
+      if (internalSortKey === key) {
+        setInternalSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      } else {
+        setInternalSortKey(key);
+        setInternalSortDir(key === "createdAt" ? "desc" : "asc");
+      }
+      return;
+    }
+    if (externalSortKey === key) {
+      setExternalSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setExternalSortKey(key);
+      setExternalSortDir(key === "createdAt" ? "desc" : "asc");
+    }
+  };
+
+  const sortHead = (
+    which: "internal" | "external",
+    key: LabSortKey,
+    label: string,
+    className = "",
+  ) => {
+    const activeKey = which === "internal" ? internalSortKey : externalSortKey;
+    const activeDir = which === "internal" ? internalSortDir : externalSortDir;
+    const arrow = activeKey === key ? (activeDir === "asc" ? " ▲" : " ▼") : "";
+    return (
+      <button
+        type="button"
+        onClick={() => toggleSort(key, which)}
+        className={`w-full text-left text-xs font-semibold uppercase tracking-wide hover:underline ${className}`}
+      >
+        {label}{arrow}
+      </button>
+    );
+  };
+
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto" data-testid="laboratory-page">
       {patientIdFromUrl && (
@@ -157,52 +231,6 @@ export default function LaboratoryPage() {
           <h1 className="text-2xl font-bold tracking-tight">Laboratory</h1>
           <p className="text-muted-foreground text-sm mt-1">Internal labs (collect & result) and external labs (upload results)</p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-new-lab-order"><Plus className="w-4 h-4 mr-2" /> New Lab Order</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader><DialogTitle>Create Lab Order</DialogTitle></DialogHeader>
-            <form onSubmit={(e) => { e.preventDefault(); createMutation.mutate(formData); }} className="space-y-4">
-              <div className="space-y-2">
-                <Label>Patient *</Label>
-                <Select value={formData.patientId} onValueChange={(v) => setFormData({ ...formData, patientId: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select patient" /></SelectTrigger>
-                  <SelectContent>
-                    {patients.map((p) => <SelectItem key={p.id} value={p.id}>{p.firstName} {p.lastName}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Test Name *</Label>
-                  <Input value={formData.testName} onChange={(e) => setFormData({ ...formData, testName: e.target.value })} required />
-                </div>
-                <div className="space-y-2">
-                  <Label>Test Code</Label>
-                  <Input value={formData.testCode} onChange={(e) => setFormData({ ...formData, testCode: e.target.value })} />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Priority</Label>
-                <Select value={formData.priority} onValueChange={(v) => setFormData({ ...formData, priority: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="routine">Routine</SelectItem>
-                    <SelectItem value="urgent">Urgent</SelectItem>
-                    <SelectItem value="stat">STAT</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMutation.isPending || !formData.patientId}>
-                  {createMutation.isPending ? "Creating..." : "Create Order"}
-                </Button>
-              </div>
-            </form>
-          </DialogContent>
-        </Dialog>
       </div>
 
       <Tabs defaultValue="internal" className="space-y-4">
@@ -221,45 +249,87 @@ export default function LaboratoryPage() {
             Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20" />)
           ) : internalPending.length === 0 ? (
             <Card><CardContent className="py-8 text-center text-muted-foreground">No pending internal lab orders</CardContent></Card>
-          ) : internalPending.map((order) => {
-            const pt = patientMap.get(order.patientId);
-            return (
-              <Card key={order.id} data-testid={`card-lab-order-${order.id}`}>
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-medium text-sm">{order.testName}</p>
-                        {order.priority === "urgent" && <Badge variant="destructive" className="text-[10px]">Urgent</Badge>}
-                        {order.priority === "stat" && <Badge variant="destructive" className="text-[10px]">STAT</Badge>}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {pt ? `${pt.firstName} ${pt.lastName}` : "Unknown"} - {order.testCode || "N/A"}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant="secondary" className={`text-[10px] ${labOrderStatusBadgeClass(order.status)}`}>{order.status}</Badge>
-                      {order.status === "ordered" && (
-                        <Button size="sm" variant="secondary" onClick={() => updateMutation.mutate({ id: order.id, data: { status: "collected" } })}>
-                          Mark Collected
-                        </Button>
-                      )}
-                      {order.status === "collected" && (
-                        <Button size="sm" variant="secondary" onClick={() => updateMutation.mutate({ id: order.id, data: { status: "processing" } })}>
-                          Start Processing
-                        </Button>
-                      )}
-                      {order.status === "processing" && (
-                        <Button size="sm" onClick={() => { setResultOpen(order.id); setResultData({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" }); }}>
-                          Enter Results
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+          ) : (
+            <Card>
+              <CardContent className="p-0 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-[10rem]">{sortHead("internal", "testName", "Test")}</TableHead>
+                      <TableHead className="min-w-[12rem]">{sortHead("internal", "patient", "Patient")}</TableHead>
+                      <TableHead className="w-[7rem]">{sortHead("internal", "mrn", "MRN")}</TableHead>
+                      <TableHead className="w-[7rem]">{sortHead("internal", "testCode", "Code")}</TableHead>
+                      <TableHead className="w-[7rem]">{sortHead("internal", "priority", "Priority")}</TableHead>
+                      <TableHead className="w-[7rem]">{sortHead("internal", "status", "Status")}</TableHead>
+                      <TableHead className="w-[10rem]">{sortHead("internal", "createdAt", "Ordered")}</TableHead>
+                      <TableHead className="w-[13rem] text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {internalSorted.map((order) => {
+                      const pt = patientMap.get(order.patientId);
+                      const patientName = pt ? `${pt.firstName} ${pt.lastName}` : "Unknown";
+                      const orderedAt = labOrderCreatedAtIso(order.createdAt);
+                      return (
+                        <TableRow key={order.id} data-testid={`row-internal-lab-${order.id}`}>
+                          <TableCell className="font-medium">{order.testName}</TableCell>
+                          <TableCell className="min-w-0">
+                            <span className="truncate block" title={patientName}>{patientName}</span>
+                          </TableCell>
+                          <TableCell className="text-xs font-mono text-muted-foreground">{pt?.mrn ?? "—"}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{order.testCode || "—"}</TableCell>
+                          <TableCell>
+                            {priorityLabel(order.priority) === "STAT" && <Badge variant="destructive" className="text-[10px]">STAT</Badge>}
+                            {priorityLabel(order.priority) === "Urgent" && <Badge variant="destructive" className="text-[10px]">Urgent</Badge>}
+                            {priorityLabel(order.priority) === "Routine" && <Badge variant="secondary" className="text-[10px]">Routine</Badge>}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="secondary" className={`text-[10px] ${labOrderStatusBadgeClass(order.status)}`}>
+                              {order.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+                            {orderedAt ? format(new Date(orderedAt), "yyyy-MM-dd HH:mm") : "—"}
+                          </TableCell>
+                          <TableCell className="text-right whitespace-nowrap">
+                            {order.status === "ordered" && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => updateMutation.mutate({ id: order.id, data: { status: "collected" } })}
+                              >
+                                Mark Collected
+                              </Button>
+                            )}
+                            {order.status === "collected" && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => updateMutation.mutate({ id: order.id, data: { status: "processing" } })}
+                              >
+                                Start Processing
+                              </Button>
+                            )}
+                            {order.status === "processing" && (
+                              <Button
+                                size="sm"
+                                onClick={() => {
+                                  setResultOpen(order.id);
+                                  setResultData({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" });
+                                }}
+                              >
+                                Enter Results
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="external" className="space-y-6 mt-4">
@@ -268,30 +338,68 @@ export default function LaboratoryPage() {
             Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-20" />)
           ) : externalPending.length === 0 ? (
             <Card><CardContent className="py-8 text-center text-muted-foreground">No pending external lab orders</CardContent></Card>
-          ) : externalPending.map((order) => {
-            const pt = patientMap.get(order.patientId);
-            return (
-              <Card key={order.id}>
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-medium text-sm">{order.testName}</p>
-                        {order.priority === "urgent" && <Badge variant="destructive" className="text-[10px]">Urgent</Badge>}
-                        {order.priority === "stat" && <Badge variant="destructive" className="text-[10px]">STAT</Badge>}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {pt ? `${pt.firstName} ${pt.lastName}` : "Unknown"} - {order.testCode || "N/A"}
-                      </p>
-                    </div>
-                    <Button size="sm" variant="outline" onClick={() => { setUploadResultOpen(order.id); setResultData({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" }); }}>
-                      <Upload className="w-3.5 h-3.5 mr-1.5" /> Upload result
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+          ) : (
+            <Card>
+              <CardContent className="p-0 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-[10rem]">{sortHead("external", "testName", "Test")}</TableHead>
+                      <TableHead className="min-w-[12rem]">{sortHead("external", "patient", "Patient")}</TableHead>
+                      <TableHead className="w-[7rem]">{sortHead("external", "mrn", "MRN")}</TableHead>
+                      <TableHead className="w-[7rem]">{sortHead("external", "testCode", "Code")}</TableHead>
+                      <TableHead className="w-[7rem]">{sortHead("external", "priority", "Priority")}</TableHead>
+                      <TableHead className="w-[7rem]">{sortHead("external", "status", "Status")}</TableHead>
+                      <TableHead className="w-[10rem]">{sortHead("external", "createdAt", "Ordered")}</TableHead>
+                      <TableHead className="w-[13rem] text-right">Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {externalSorted.map((order) => {
+                      const pt = patientMap.get(order.patientId);
+                      const patientName = pt ? `${pt.firstName} ${pt.lastName}` : "Unknown";
+                      const orderedAt = labOrderCreatedAtIso(order.createdAt);
+                      return (
+                        <TableRow key={order.id} data-testid={`row-external-lab-${order.id}`}>
+                          <TableCell className="font-medium">{order.testName}</TableCell>
+                          <TableCell className="min-w-0">
+                            <span className="truncate block" title={patientName}>{patientName}</span>
+                          </TableCell>
+                          <TableCell className="text-xs font-mono text-muted-foreground">{pt?.mrn ?? "—"}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{order.testCode || "—"}</TableCell>
+                          <TableCell>
+                            {priorityLabel(order.priority) === "STAT" && <Badge variant="destructive" className="text-[10px]">STAT</Badge>}
+                            {priorityLabel(order.priority) === "Urgent" && <Badge variant="destructive" className="text-[10px]">Urgent</Badge>}
+                            {priorityLabel(order.priority) === "Routine" && <Badge variant="secondary" className="text-[10px]">Routine</Badge>}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="secondary" className={`text-[10px] ${labOrderStatusBadgeClass(order.status)}`}>
+                              {order.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+                            {orderedAt ? format(new Date(orderedAt), "yyyy-MM-dd HH:mm") : "—"}
+                          </TableCell>
+                          <TableCell className="text-right whitespace-nowrap">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setUploadResultOpen(order.id);
+                                setResultData({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" });
+                              }}
+                            >
+                              <Upload className="w-3.5 h-3.5 mr-1.5" /> Upload result
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
       </Tabs>
 

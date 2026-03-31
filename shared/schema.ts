@@ -1,11 +1,11 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, date, decimal, jsonb, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, date, decimal, jsonb, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 export const userRoleEnum = pgEnum("user_role", [
   "super_admin", "facility_admin", "clinician", "nurse",
-  "lab_tech", "pharmacist", "finance", "reception"
+  "lab_tech", "pharmacist", "finance", "reception", "security",
 ]);
 
 export const users = pgTable("users", {
@@ -29,6 +29,8 @@ export const facilities = pgTable("facilities", {
   phone: text("phone"),
   email: text("email"),
   country: text("country").default("KE"),
+  /** ISO 4217 — default prices & billing UI for this facility. */
+  billingCurrency: varchar("billing_currency", { length: 3 }).notNull().default("KES"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -47,6 +49,7 @@ export const patients = pgTable("patients", {
   email: text("email"),
   address: text("address"),
   city: text("city"),
+  state: text("state"),
   country: text("country").default("KE"),
   bloodGroup: text("blood_group"),
   /** Profile image served from /uploads/… after upload */
@@ -143,6 +146,9 @@ export const encounters = pgTable("encounters", {
   appointmentId: varchar("appointment_id"),
   type: encounterTypeEnum("type").notNull().default("outpatient"),
   status: encounterStatusEnum("status").notNull().default("scheduled"),
+  /** Billing: set by finance/admin after verifying charges for a completed visit. */
+  chargesFinalizedAt: timestamp("charges_finalized_at"),
+  chargesFinalizedBy: varchar("charges_finalized_by"),
   chiefComplaint: text("chief_complaint"),
   subjective: text("subjective"),
   objective: text("objective"),
@@ -185,6 +191,8 @@ export const appointments = pgTable("appointments", {
   status: appointmentStatusEnum("status").notNull().default("scheduled"),
   reason: text("reason"),
   notes: text("notes"),
+  /** Reception / staff note when status is set to cancelled */
+  cancellationReason: text("cancellation_reason"),
   /** Captured at front-desk check-in (reception) */
   checkInCopayAmount: decimal("check_in_copay_amount"),
   checkInPaymentMethod: text("check_in_payment_method"),
@@ -253,14 +261,42 @@ export const patientDocuments = pgTable("patient_documents", {
   patientId: varchar("patient_id").notNull(),
   documentType: patientDocumentTypeEnum("document_type").notNull(),
   title: text("title").notNull(),
+  /** When document_type is patient_document: category from /api/patient-record-document-types */
+  recordDocumentType: text("record_document_type"),
   documentUrl: text("document_url"),
   labOrderId: varchar("lab_order_id"),
   uploadedBy: varchar("uploaded_by").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const followUpContactOutcomeEnum = pgEnum("follow_up_contact_outcome", [
+  "picked_up",
+  "did_not_pick_up",
+  "left_message",
+]);
+
+/** Reception contact attempts for external-order follow-up outreach. */
+export const followUpContacts = pgTable("follow_up_contacts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  patientId: varchar("patient_id").notNull(),
+  labOrderId: varchar("lab_order_id"),
+  imagingOrderId: varchar("imaging_order_id"),
+  /** When set, ties this contact to an appointment reminder call. */
+  appointmentId: varchar("appointment_id"),
+  contactedBy: varchar("contacted_by").notNull(),
+  reasonForCall: text("reason_for_call"),
+  outcome: followUpContactOutcomeEnum("outcome").notNull(),
+  discussion: text("discussion"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 export const prescriptionStatusEnum = pgEnum("prescription_status", [
   "active", "dispensed", "cancelled", "expired"
+]);
+
+export const medicationOrderTypeEnum = pgEnum("medication_order_type", [
+  "administered",
+  "prescription",
 ]);
 
 export const prescriptions = pgTable("prescriptions", {
@@ -269,6 +305,8 @@ export const prescriptions = pgTable("prescriptions", {
   patientId: varchar("patient_id").notNull(),
   prescribedBy: varchar("prescribed_by").notNull(),
   patientProblemId: varchar("patient_problem_id"),
+  /** Controls whether this order is billed to the visit (administered) or not (prescription). */
+  orderType: medicationOrderTypeEnum("order_type").notNull().default("prescription"),
   medicationName: text("medication_name").notNull(),
   dosage: text("dosage").notNull(),
   frequency: text("frequency").notNull(),
@@ -283,6 +321,62 @@ export const prescriptions = pgTable("prescriptions", {
 export const invoiceStatusEnum = pgEnum("invoice_status", [
   "draft", "pending", "paid", "partial", "cancelled"
 ]);
+
+/** Admin-configurable default prices for billing (lab, meds, imaging, problems, clinical). */
+export const billingChargeCategoryEnum = pgEnum("billing_charge_category", [
+  "lab_order",
+  "medication",
+  "imaging",
+  "problem_list",
+  "clinical_charge",
+]);
+
+/** Line items accumulated on an encounter for internal orders + visit type (excludes external orders). */
+export const visitChargeLineKindEnum = pgEnum("visit_charge_line_kind", [
+  "visit_type",
+  "lab_order",
+  "imaging_order",
+  "prescription",
+  /** Added from price list by billing staff (distinct source_id per line). */
+  "manual",
+]);
+
+export const encounterVisitCharges = pgTable(
+  "encounter_visit_charges",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    encounterId: varchar("encounter_id").notNull(),
+    patientId: varchar("patient_id").notNull(),
+    lineKind: visitChargeLineKindEnum("line_kind").notNull(),
+    /** Idempotency key: FK to order/prescription id, or sentinel for visit type. */
+    sourceId: varchar("source_id").notNull(),
+    /** User id who placed the order / authored the line (for display in visit charges). */
+    orderedByUserId: varchar("ordered_by_user_id"),
+    catalogCategory: billingChargeCategoryEnum("catalog_category").notNull(),
+    catalogItemKey: text("catalog_item_key").notNull(),
+    description: text("description").notNull(),
+    unitPrice: decimal("unit_price", { precision: 12, scale: 2 }).notNull(),
+    quantity: integer("quantity").notNull().default(1),
+    amount: decimal("amount", { precision: 12, scale: 2 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (t) => [uniqueIndex("encounter_visit_charge_enc_kind_src").on(t.encounterId, t.lineKind, t.sourceId)],
+);
+
+export const billingChargeCatalog = pgTable(
+  "billing_charge_catalog",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    category: billingChargeCategoryEnum("category").notNull(),
+    itemKey: text("item_key").notNull(),
+    label: text("label").notNull(),
+    unitPrice: decimal("unit_price", { precision: 12, scale: 2 }).notNull().default("0"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (t) => [uniqueIndex("billing_charge_catalog_cat_item").on(t.category, t.itemKey)],
+);
 
 export const invoices = pgTable("invoices", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -347,13 +441,78 @@ export const insertLabOrderSchema = createInsertSchema(labOrders).omit({ id: tru
 export const insertImagingOrderSchema = createInsertSchema(imagingOrders).omit({ id: true, createdAt: true, completedAt: true });
 export const insertImagingResultSchema = createInsertSchema(imagingResults).omit({ id: true, createdAt: true });
 export const insertPatientDocumentSchema = createInsertSchema(patientDocuments).omit({ id: true, createdAt: true });
+export const insertFollowUpContactSchema = createInsertSchema(followUpContacts).omit({ id: true, createdAt: true });
 export const insertPrescriptionSchema = createInsertSchema(prescriptions).omit({ id: true, createdAt: true, dispensedAt: true });
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true });
+export const insertBillingChargeCatalogSchema = createInsertSchema(billingChargeCatalog).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertEncounterVisitChargeSchema = createInsertSchema(encounterVisitCharges).omit({
+  id: true,
+  createdAt: true,
+});
+export const patchBillingChargeCatalogBodySchema = z.object({
+  unitPrice: z.string().min(1).max(24),
+  label: z.string().min(1).max(400).optional(),
+});
+export const createBillingChargeCatalogBodySchema = z.object({
+  category: z.enum(["lab_order", "medication", "imaging", "problem_list", "clinical_charge"]),
+  itemKey: z
+    .string()
+    .min(1)
+    .max(120)
+    .regex(/^[a-z0-9_]+$/i, "Use letters, numbers, underscores"),
+  label: z.string().min(1).max(400),
+  unitPrice: z.string().min(1).max(24),
+  sortOrder: z.number().int().optional(),
+});
+
+export const addManualVisitChargeBodySchema = z.object({
+  catalogCategory: z.enum(["lab_order", "medication", "imaging", "problem_list", "clinical_charge"]),
+  catalogItemKey: z.string().min(1).max(200),
+  quantity: z.coerce.number().int().positive().max(999).optional().default(1),
+});
+
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
 
 export const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
+});
+
+/** API: plain-text password; server hashes before insert. */
+export const createUserBodySchema = z.object({
+  username: z.string().min(1).max(100),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  firstName: z.string().min(1).max(100),
+  lastName: z.string().min(1).max(100),
+  role: z.enum([
+    "super_admin",
+    "facility_admin",
+    "clinician",
+    "nurse",
+    "lab_tech",
+    "pharmacist",
+    "finance",
+    "reception",
+    "security",
+  ]),
+  email: z
+    .preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.string().email().optional()),
+  phone: z
+    .preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.string().max(80).optional()),
+  facilityId: z.preprocess(
+    (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+    z.string().uuid().optional()
+  ),
+  isActive: z.boolean().optional().default(true),
+});
+
+/** Admin reset password for an existing user (plain password; server hashes). */
+export const resetUserPasswordBodySchema = z.object({
+  password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -388,9 +547,15 @@ export type InsertImagingResult = z.infer<typeof insertImagingResultSchema>;
 export type ImagingResult = typeof imagingResults.$inferSelect;
 export type InsertPatientDocument = z.infer<typeof insertPatientDocumentSchema>;
 export type PatientDocument = typeof patientDocuments.$inferSelect;
+export type InsertFollowUpContact = z.infer<typeof insertFollowUpContactSchema>;
+export type FollowUpContact = typeof followUpContacts.$inferSelect;
 export type InsertPrescription = z.infer<typeof insertPrescriptionSchema>;
 export type Prescription = typeof prescriptions.$inferSelect;
 export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
 export type Invoice = typeof invoices.$inferSelect;
+export type InsertBillingChargeCatalog = z.infer<typeof insertBillingChargeCatalogSchema>;
+export type BillingChargeCatalog = typeof billingChargeCatalog.$inferSelect;
+export type InsertEncounterVisitCharge = z.infer<typeof insertEncounterVisitChargeSchema>;
+export type EncounterVisitCharge = typeof encounterVisitCharges.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
 export type AuditLog = typeof auditLogs.$inferSelect;

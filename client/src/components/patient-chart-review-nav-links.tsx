@@ -1,11 +1,11 @@
 import { Link } from "wouter";
 import { cn } from "@/lib/utils";
-import { LayoutGrid, History, ShieldCheck, FileCheck, User } from "lucide-react";
+import { LayoutGrid, History, ShieldCheck, FileCheck, User, PhoneCall } from "lucide-react";
 
-export type ReviewNavActive = "overview" | "history" | "immunization" | "results" | "demographics";
+export type ReviewNavActive = "overview" | "history" | "immunization" | "results" | "patient-call" | "demographics";
 
 /**
- * Review-section navigator links (Demographics first, then Overview, History, Immunization, Results).
+ * Review-section navigator links (Demographics first, then Patient call and other review tabs).
  * Used on the patient chart and on the full-page demographics editor.
  */
 export function PatientChartReviewNavLinks({
@@ -29,6 +29,11 @@ export function PatientChartReviewNavLinks({
       <Link href={`${base}/demographics`} className="block w-full">
         <a className={itemClass("demographics")} data-testid="nav-review-demographics">
           <User className="w-4 h-4 shrink-0" /> Demographics
+        </a>
+      </Link>
+      <Link href={`${base}?tab=patient-call`} className="block w-full">
+        <a className={itemClass("patient-call")} data-testid="nav-review-patient-call">
+          <PhoneCall className="w-4 h-4 shrink-0" /> Patient call
         </a>
       </Link>
       <Link href={`${base}?tab=overview`} className="block w-full">

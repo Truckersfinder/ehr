@@ -1,18 +1,52 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
+import { apiGetJson } from "@/lib/api-client";
+import { queryKeys } from "@/lib/query-keys";
 import { appointmentStatusBadgeClass, formatAppointmentStatusLabel } from "@/lib/appointment-status";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
-  Users, Calendar, Stethoscope, FlaskConical, Receipt,
-  TrendingUp, Clock, AlertTriangle, Activity,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import type { LucideIcon } from "lucide-react";
+import {
+  Users,
+  Calendar,
+  Stethoscope,
+  FlaskConical,
+  UserRound,
+  CalendarClock,
+  HeartPulse,
+  TestTube,
+  Wallet,
+  Clock,
+  Activity,
 } from "lucide-react";
-import { format } from "date-fns";
+import { MutedIconBox } from "@/components/muted-icon-box";
+import { format, parse, startOfDay, endOfDay, subDays } from "date-fns";
 import type { Appointment, Encounter } from "@shared/schema";
 
-function StatCard({ title, value, icon: Icon, description, color }: {
-  title: string; value: number | string; icon: any; description?: string; color: string;
+type OverdueVisitRow = {
+  encounter: Encounter;
+  patientName: string;
+  clinicianName: string;
+  appointmentDate: string | null;
+};
+
+function StatCard({ title, value, icon: Icon, description }: {
+  title: string;
+  value: number | string;
+  icon: LucideIcon;
+  description?: string;
 }) {
   return (
     <Card>
@@ -23,9 +57,7 @@ function StatCard({ title, value, icon: Icon, description, color }: {
             <p className="text-3xl font-bold tracking-tight" data-testid={`stat-${title.toLowerCase().replace(/\s/g, "-")}`}>{value}</p>
             {description && <p className="text-xs text-muted-foreground mt-1">{description}</p>}
           </div>
-          <div className={`w-10 h-10 rounded-md flex items-center justify-center flex-shrink-0 ${color}`}>
-            <Icon className="w-5 h-5" />
-          </div>
+          <MutedIconBox icon={Icon} />
         </div>
       </CardContent>
     </Card>
@@ -33,33 +65,37 @@ function StatCard({ title, value, icon: Icon, description, color }: {
 }
 
 export default function DashboardPage() {
-  const { user, token } = useAuth();
+  const { token } = useAuth();
+  const [overdueStart, setOverdueStart] = useState(() => format(subDays(new Date(), 30), "yyyy-MM-dd"));
+  const [overdueEnd, setOverdueEnd] = useState(() => format(subDays(new Date(), 3), "yyyy-MM-dd"));
 
   const { data: stats, isLoading: statsLoading } = useQuery({
-    queryKey: ["/api/dashboard/stats"],
-    queryFn: async () => {
-      const res = await fetch("/api/dashboard/stats", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed to fetch stats");
-      return res.json();
-    },
+    queryKey: queryKeys.dashboard.stats,
+    queryFn: () => apiGetJson<Record<string, number>>("/api/dashboard/stats", token),
   });
 
   const { data: appointments = [] } = useQuery<Appointment[]>({
-    queryKey: ["/api/appointments"],
-    queryFn: async () => {
-      const res = await fetch("/api/appointments", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.appointments.root,
+    queryFn: () => apiGetJson<Appointment[]>("/api/appointments", token),
   });
 
-  const { data: encounters = [] } = useQuery<Encounter[]>({
-    queryKey: ["/api/encounters"],
-    queryFn: async () => {
-      const res = await fetch("/api/encounters", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+  const overdueBounds = useMemo(() => {
+    const s = parse(overdueStart, "yyyy-MM-dd", new Date());
+    const e = parse(overdueEnd, "yyyy-MM-dd", new Date());
+    return {
+      start: startOfDay(s).toISOString(),
+      end: endOfDay(e).toISOString(),
+    };
+  }, [overdueStart, overdueEnd]);
+
+  const { data: overdueEncounters = [], isLoading: overdueLoading } = useQuery<OverdueVisitRow[]>({
+    queryKey: queryKeys.dashboard.overdueVisits(overdueBounds.start, overdueBounds.end),
+    queryFn: () =>
+      apiGetJson<OverdueVisitRow[]>(
+        `/api/dashboard/overdue-visits?start=${encodeURIComponent(overdueBounds.start)}&end=${encodeURIComponent(overdueBounds.end)}`,
+        token,
+      ),
+    enabled: !!token,
   });
 
   const todayAppts = appointments.filter((a) => {
@@ -68,13 +104,13 @@ export default function DashboardPage() {
     return d.toDateString() === today.toDateString();
   });
 
-  const activeEncounters = encounters.filter((e) => e.status === "in_progress");
+  const activeEncounters = overdueEncounters;
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto" data-testid="dashboard-page">
       <div>
         <h1 className="text-2xl font-bold tracking-tight" data-testid="text-welcome">
-          Welcome back, {user?.fullName?.split(" ")[0]}
+          Department Dashboard
         </h1>
         <p className="text-muted-foreground text-sm mt-1">
           {format(new Date(), "EEEE, MMMM d, yyyy")} — Here's your daily overview
@@ -89,11 +125,11 @@ export default function DashboardPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          <StatCard title="Total Patients" value={stats?.totalPatients || 0} icon={Users} color="bg-primary/10 text-primary" />
-          <StatCard title="Today's Appointments" value={stats?.todayAppointments || 0} icon={Calendar} color="bg-chart-3/10 text-chart-3" />
-          <StatCard title="Active Encounters" value={stats?.activeEncounters || 0} icon={Stethoscope} color="bg-chart-4/10 text-chart-4" />
-          <StatCard title="Pending Lab Orders" value={stats?.pendingLabOrders || 0} icon={FlaskConical} color="bg-chart-2/10 text-chart-2" />
-          <StatCard title="Pending Invoices" value={stats?.pendingInvoices || 0} icon={Receipt} color="bg-chart-5/10 text-chart-5" />
+          <StatCard title="Total Patients" value={stats?.totalPatients || 0} icon={UserRound} />
+          <StatCard title="Today's Appointments" value={stats?.todayAppointments || 0} icon={CalendarClock} />
+          <StatCard title="Active Encounters" value={stats?.activeEncounters || 0} icon={HeartPulse} />
+          <StatCard title="Pending Lab Orders" value={stats?.pendingLabOrders || 0} icon={TestTube} />
+          <StatCard title="Pending Invoices" value={stats?.pendingInvoices || 0} icon={Wallet} />
         </div>
       )}
 
@@ -135,62 +171,67 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
             <div>
-              <h3 className="font-semibold">Active Encounters</h3>
-              <p className="text-xs text-muted-foreground">{activeEncounters.length} in progress</p>
+              <h3 className="font-semibold">Overdue open visits</h3>
+              <p className="text-xs text-muted-foreground">
+                {overdueLoading ? "Loading…" : `${activeEncounters.length} open visit(s)`}
+              </p>
             </div>
             <Activity className="w-4 h-4 text-muted-foreground" />
           </CardHeader>
           <CardContent className="space-y-3">
-            {activeEncounters.length === 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Start</Label>
+                <Input type="date" value={overdueStart} onChange={(e) => setOverdueStart(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">End</Label>
+                <Input type="date" value={overdueEnd} onChange={(e) => setOverdueEnd(e.target.value)} />
+              </div>
+            </div>
+
+            {overdueLoading ? (
+              <Skeleton className="h-36 w-full" />
+            ) : activeEncounters.length === 0 ? (
               <div className="text-center py-8">
                 <Stethoscope className="w-8 h-8 mx-auto text-muted-foreground/40 mb-2" />
-                <p className="text-sm text-muted-foreground">No active encounters right now</p>
+                <p className="text-sm text-muted-foreground">No overdue open visits in this range</p>
               </div>
             ) : (
-              activeEncounters.slice(0, 5).map((enc) => (
-                <div key={enc.id} className="flex items-center gap-3 p-3 rounded-md bg-accent/30" data-testid={`encounter-item-${enc.id}`}>
-                  <div className="w-2 h-2 rounded-full bg-chart-3 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{enc.chiefComplaint || "Clinical encounter"}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {enc.type} - {enc.visitDate ? format(new Date(enc.visitDate), "HH:mm") : ""}
-                    </p>
-                  </div>
-                  <Badge variant="secondary" className="text-[10px]">{enc.type}</Badge>
-                </div>
-              ))
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Patient name</TableHead>
+                      <TableHead>Appointment date</TableHead>
+                      <TableHead>Clinician</TableHead>
+                      <TableHead className="text-right">Type</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {activeEncounters.slice(0, 10).map((row) => (
+                      <TableRow key={row.encounter.id} data-testid={`encounter-item-${row.encounter.id}`}>
+                        <TableCell className="font-medium">{row.patientName || "—"}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                          {row.appointmentDate ? format(new Date(row.appointmentDate), "MMM d, yyyy HH:mm") : "—"}
+                        </TableCell>
+                        <TableCell className="text-sm">{row.clinicianName || "—"}</TableCell>
+                        <TableCell className="text-right">
+                          <Badge variant="secondary" className="text-[10px]">
+                            {row.encounter.type}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </CardContent>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <h3 className="font-semibold">Quick Actions</h3>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { label: "Register Patient", icon: Users, href: "/patients", color: "bg-primary/10 text-primary" },
-              { label: "New Encounter", icon: Stethoscope, href: "/encounters", color: "bg-chart-3/10 text-chart-3" },
-              { label: "Schedule Visit", icon: Calendar, href: "/appointments", color: "bg-chart-4/10 text-chart-4" },
-              { label: "Lab Orders", icon: FlaskConical, href: "/laboratory", color: "bg-chart-2/10 text-chart-2" },
-            ].map((action) => (
-              <a
-                key={action.label}
-                href={action.href}
-                className="flex flex-col items-center gap-2 p-4 rounded-md bg-accent/30 hover-elevate cursor-pointer transition-colors"
-                data-testid={`link-quick-${action.label.toLowerCase().replace(/\s/g, "-")}`}
-              >
-                <div className={`w-10 h-10 rounded-md flex items-center justify-center ${action.color}`}>
-                  <action.icon className="w-5 h-5" />
-                </div>
-                <span className="text-xs font-medium text-center">{action.label}</span>
-              </a>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      {/* Quick Actions removed (per request) */}
     </div>
   );
 }

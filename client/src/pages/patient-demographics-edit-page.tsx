@@ -8,6 +8,8 @@ import { PatientDemographicsForm } from "@/components/patient-demographics-form"
 import { PatientChartReviewNavLinks } from "@/components/patient-chart-review-nav-links";
 import type { Patient } from "@shared/schema";
 import { normalizePatientRow } from "@/lib/patient-photo";
+import { apiGetJson } from "@/lib/api-client";
+import { queryKeys } from "@/lib/query-keys";
 
 /**
  * Full-page patient demographics editor (Review → Demographics). Not a modal.
@@ -18,12 +20,9 @@ export default function PatientDemographicsEditPage() {
   const { token } = useAuth();
 
   const { data: patient, isLoading } = useQuery<Patient>({
-    queryKey: ["/api/patients", patientId],
-    queryFn: async () => {
-      const res = await fetch(`/api/patients/${patientId}`, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return normalizePatientRow(await res.json());
-    },
+    queryKey: patientId ? queryKeys.patients.detail(patientId) : queryKeys.patients.root,
+    queryFn: async () =>
+      normalizePatientRow(await apiGetJson<Patient>(`/api/patients/${patientId}`, token)),
     enabled: !!patientId && !!token,
   });
 

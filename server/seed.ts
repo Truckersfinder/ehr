@@ -1,6 +1,24 @@
 import { storage } from "./storage";
 import { hashPassword } from "./auth";
 
+/** Idempotent: creates demo Security user when DB already has facilities (e.g. after first seed). */
+export async function ensureSecurityUser() {
+  if (await storage.getUserByUsername("Security123")) return;
+  const facs = await storage.getFacilities();
+  const facility = facs[0];
+  if (!facility) return;
+  await storage.createUser({
+    username: "Security123",
+    password: hashPassword("Security123"),
+    fullName: "Security",
+    role: "security",
+    facilityId: facility.id,
+    email: "security@onehealth.ke",
+    phone: "+254700000007",
+    isActive: true,
+  });
+}
+
 export async function seedDatabase() {
   const existingAdmin = await storage.getUserByUsername("admin");
   if (existingAdmin) return;
@@ -88,6 +106,17 @@ export async function seedDatabase() {
     facilityId: facility.id,
     email: "njeri@onehealth.ke",
     phone: "+254700000006",
+    isActive: true,
+  });
+
+  await storage.createUser({
+    username: "Security123",
+    password: hashPassword("Security123"),
+    fullName: "Security",
+    role: "security",
+    facilityId: facility.id,
+    email: "security@onehealth.ke",
+    phone: "+254700000007",
     isActive: true,
   });
 

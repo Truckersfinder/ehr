@@ -32,12 +32,12 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid, User, CalendarDays, Phone, Mail, MapPin, Heart, ChevronLeft, ChevronRight, Trash2, ScrollText,
+  Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid, User, CalendarDays, Phone, PhoneCall, Mail, MapPin, Heart, ChevronLeft, ChevronRight, Trash2, ScrollText, Paperclip,
 } from "lucide-react";
 import { format } from "date-fns";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from "recharts";
 import { ChartContainer } from "@/components/ui/chart";
-import type { Patient, Encounter, Prescription, LabOrder, PatientProblem, PatientNote, FamilyMember, FamilyMemberCondition, ImagingResult, ImagingOrder, PatientDocument, Vitals, PatientAllergy, Appointment } from "@shared/schema";
+import type { Patient, Encounter, Prescription, LabOrder, PatientProblem, PatientNote, FamilyMember, FamilyMemberCondition, ImagingResult, ImagingOrder, PatientDocument, Vitals, PatientAllergy, Appointment, FollowUpContact } from "@shared/schema";
 import { normalizePatientRow } from "@/lib/patient-photo";
 import {
   mergeLatestStoryboardVitals,
@@ -56,14 +56,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { DocumentFileUpload } from "@/components/document-file-upload";
 import { VisitSummaryTab } from "@/components/visit-summary-tab";
+import { PatientCallDocumentationForm } from "@/components/patient-call-documentation-form";
 import {
   setClinicianVisitDocumentationSession,
   clearClinicianVisitDocumentationSession,
   readClinicianVisitDocumentationSession,
 } from "@/lib/clinician-visit-doc-session";
 import { cn } from "@/lib/utils";
+import { apiGetJson, apiPostJson } from "@/lib/api-client";
+import { queryKeys } from "@/lib/query-keys";
+import { getRecordDocumentTypeId, type PatientDocumentRow } from "@shared/patient-document-normalize";
 
 const ALLERGY_REACTION_TYPES = [
   "Anaphylaxis",
@@ -78,6 +81,8 @@ const ALLERGY_REACTION_TYPES = [
   "Other",
   "Not specified",
 ];
+
+const BLOOD_GROUP_OPTIONS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] as const;
 
 function safeFormatDateTime(value: unknown): string {
   if (value == null || value === "") return "—";
@@ -143,6 +148,7 @@ export default function PatientDetailPage() {
     temperature: "", bloodPressureSystolic: "", bloodPressureDiastolic: "",
     heartRate: "", respiratoryRate: "", oxygenSaturation: "", weight: "", height: "",
   });
+  const [vitalsBloodGroup, setVitalsBloodGroup] = useState("");
   const [editVitalsOpen, setEditVitalsOpen] = useState(false);
   const [editVitals, setEditVitals] = useState<Vitals | null>(null);
   const [editVitalsForm, setEditVitalsForm] = useState({
@@ -167,6 +173,7 @@ export default function PatientDetailPage() {
   const [newMedOrderForm, setNewMedOrderForm] = useState({
     medicationName: "", dosage: "", frequency: "once daily", duration: "", instructions: "",
     patientProblemId: "",
+    orderType: "prescription" as "prescription" | "administered",
   });
   const [discontinueRxOpen, setDiscontinueRxOpen] = useState(false);
   const [discontinuePrescription, setDiscontinuePrescription] = useState<Prescription | null>(null);
@@ -175,8 +182,38 @@ export default function PatientDetailPage() {
   const isClinicianOrNurse = user?.role === "clinician" || user?.role === "nurse";
   /** Full navigator only after starting a visit from Schedule (session flag). Browse/search entry = Review only. */
   const [clinVisitDocUnlocked, setClinVisitDocUnlocked] = useState(false);
-  const showVisitDocumentation = isClinicianOrNurse && clinVisitDocUnlocked && user?.role !== "reception";
-  const reviewSectionTabs = new Set(["overview", "history", "immunization", "results"]);
+  /** Billing / admin opens chart from Billing → Visit Documentation (?visitDocReview=1&encounterId=) */
+  const [billingReviewEncounterValid, setBillingReviewEncounterValid] = useState(false);
+
+  const isVisitDocumentationReviewRole =
+    user?.role === "super_admin" ||
+    user?.role === "facility_admin" ||
+    user?.role === "finance" ||
+    user?.role === "reception";
+
+  /** Prefer window/location query — wouter's useSearch() can be empty right after <Link> navigation. */
+  const billingVisitDocReviewParams = useMemo(() => {
+    const raw =
+      typeof window !== "undefined" && window.location.search && window.location.search.length > 1
+        ? window.location.search.slice(1)
+        : location.includes("?")
+          ? (location.split("?")[1] ?? "")
+          : urlSearch || "";
+    const sp = new URLSearchParams(raw.startsWith("?") ? raw.slice(1) : raw);
+    if (sp.get("visitDocReview") !== "1") return null;
+    const eid = sp.get("encounterId");
+    if (!eid) return null;
+    return { encounterId: eid };
+  }, [location, urlSearch]);
+
+  const documentationReadOnly = billingReviewEncounterValid && isVisitDocumentationReviewRole;
+
+  const showVisitDocumentation =
+    (isClinicianOrNurse && clinVisitDocUnlocked && user?.role !== "reception") || billingReviewEncounterValid;
+  const reviewSectionTabs = new Set(["overview", "history", "immunization", "results", "patient-call"]);
+  const [patientCallReasonForCall, setPatientCallReasonForCall] = useState("");
+  const [patientCallOutcome, setPatientCallOutcome] = useState<"picked_up" | "did_not_pick_up" | "left_message" | "">("");
+  const [patientCallDiscussion, setPatientCallDiscussion] = useState("");
   const [visitSummaryMeta, setVisitSummaryMeta] = useState<{ encounterId: string } | null>(null);
   const [encSessionTick, setEncSessionTick] = useState(0);
   /** Signed visit reopened from schedule — ask clinician/nurse before resuming documentation */
@@ -196,7 +233,7 @@ export default function PatientDetailPage() {
     }
   }, [id]);
 
-  const syncTabToUrl = useCallback(
+  const replaceTabInUrl = useCallback(
     (tab: string) => {
       if (!id) return;
       const url = new URL(window.location.href);
@@ -206,19 +243,29 @@ export default function PatientDetailPage() {
     [id]
   );
 
+  const pushTabInUrl = useCallback(
+    (tab: string) => {
+      if (!id) return;
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", tab);
+      window.history.pushState({}, "", url.pathname + url.search);
+    },
+    [id]
+  );
+
   const handleMainTabChange = (nextTab: string) => {
     if (nextTab === "visit-summary" && !visitSummaryMeta) {
       setMainTab("overview");
-      syncTabToUrl("overview");
+      replaceTabInUrl("overview");
       return;
     }
     if (!showVisitDocumentation && documentationTabs.has(nextTab)) {
       setMainTab("overview");
-      syncTabToUrl("overview");
+      replaceTabInUrl("overview");
       return;
     }
     setMainTab(nextTab);
-    syncTabToUrl(nextTab);
+    pushTabInUrl(nextTab);
   };
 
   /** Sync tab from URL (?tab=) when opening chart or using embedded navigator links */
@@ -233,9 +280,9 @@ export default function PatientDetailPage() {
       setMainTab(t);
     } else {
       setMainTab("overview");
-      syncTabToUrl("overview");
+      replaceTabInUrl("overview");
     }
-  }, [id, showVisitDocumentation, syncTabToUrl, documentationTabs]);
+  }, [id, showVisitDocumentation, replaceTabInUrl, documentationTabs, visitSummaryMeta, billingReviewEncounterValid]);
 
   /** Visit Summary tab: schedule-started encounter only (appointment linked), clinician/nurse */
   useEffect(() => {
@@ -278,35 +325,84 @@ export default function PatientDetailPage() {
     }
   }, [id, urlSearch]);
 
+  /** Validate ?visitDocReview=1&encounterId= for billing / reception review (read-only documentation). */
+  useEffect(() => {
+    if (!isVisitDocumentationReviewRole || !billingVisitDocReviewParams || !id || !authToken) {
+      setBillingReviewEncounterValid(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const enc = await apiGetJson<Encounter>(`/api/encounters/${billingVisitDocReviewParams.encounterId}`, authToken);
+        if (cancelled) return;
+        if (enc.patientId !== id) {
+          setBillingReviewEncounterValid(false);
+          toast({ title: "Invalid link", description: "This encounter is not for this patient.", variant: "destructive" });
+          return;
+        }
+        sessionStorage.setItem("ehr_active_encounter_id", enc.id);
+        sessionStorage.setItem("ehr_active_encounter_patient_id", id);
+        setBillingReviewEncounterValid(true);
+        window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
+      } catch {
+        if (!cancelled) {
+          setBillingReviewEncounterValid(false);
+          toast({
+            title: "Could not open visit",
+            description: "Encounter not found or you do not have access.",
+            variant: "destructive",
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isVisitDocumentationReviewRole, billingVisitDocReviewParams?.encounterId, id, authToken, toast]);
+
   useEffect(() => {
     if (!id || !authToken || !showVisitDocumentation) {
       setVisitSummaryMeta(null);
       return;
     }
-    const eid = sessionStorage.getItem("ehr_active_encounter_id");
-    const pid = sessionStorage.getItem("ehr_active_encounter_patient_id");
-    if (!eid || pid !== id) {
-      setVisitSummaryMeta(null);
-      return;
+    let eid: string | null = null;
+    if (billingReviewEncounterValid && billingVisitDocReviewParams?.encounterId) {
+      eid = billingVisitDocReviewParams.encounterId;
+    } else {
+      eid = sessionStorage.getItem("ehr_active_encounter_id");
+      const pid = sessionStorage.getItem("ehr_active_encounter_patient_id");
+      if (!eid || pid !== id) {
+        setVisitSummaryMeta(null);
+        return;
+      }
     }
     const ac = new AbortController();
     fetch(`/api/encounters/${eid}`, { headers: { Authorization: `Bearer ${authToken}` }, signal: ac.signal })
       .then((r) => (r.ok ? r.json() : null))
-      .then((enc: { appointmentId?: string | null } | null) => {
-        if (enc?.appointmentId) setVisitSummaryMeta({ encounterId: eid });
+      .then((enc: { patientId?: string } | null) => {
+        if (enc?.patientId === id) setVisitSummaryMeta({ encounterId: eid! });
         else setVisitSummaryMeta(null);
       })
       .catch(() => setVisitSummaryMeta(null));
     return () => ac.abort();
-  }, [id, authToken, showVisitDocumentation, location, encSessionTick]);
+  }, [
+    id,
+    authToken,
+    showVisitDocumentation,
+    location,
+    encSessionTick,
+    billingReviewEncounterValid,
+    billingVisitDocReviewParams?.encounterId,
+  ]);
 
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
     if (t === "visit-summary" && !visitSummaryMeta) {
       setMainTab("overview");
-      syncTabToUrl("overview");
+      replaceTabInUrl("overview");
     }
-  }, [visitSummaryMeta, syncTabToUrl]);
+  }, [visitSummaryMeta, replaceTabInUrl]);
 
   /** Clear schedule-encounter session when switching to a different patient */
   useEffect(() => {
@@ -358,17 +454,16 @@ export default function PatientDetailPage() {
     let cancelled = false;
     (async () => {
       try {
-        const apptRes = await fetch(`/api/appointments/${appointmentId}`, {
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-        if (!apptRes.ok) {
+        let appt: Appointment;
+        try {
+          appt = await apiGetJson<Appointment>(`/api/appointments/${appointmentId}`, authToken);
+        } catch {
           if (!cancelled) {
-            toast({ title: "Could not load appointment", description: apptRes.statusText, variant: "destructive" });
+            toast({ title: "Could not load appointment", description: "Request failed", variant: "destructive" });
             stripScheduleQueryParams();
           }
           return;
         }
-        const appt = (await apptRes.json()) as Appointment;
         if (cancelled) return;
         if (appt.patientId !== id) {
           toast({ title: "Invalid link", description: "This appointment is not for this patient.", variant: "destructive" });
@@ -392,24 +487,25 @@ export default function PatientDetailPage() {
           return;
         }
 
-        const res = await fetch(`/api/patients/${id}/start-from-schedule`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-          body: JSON.stringify({ appointmentId }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
+        let data: { encounter: Encounter; appointmentId: string };
+        try {
+          data = await apiPostJson<{ encounter: Encounter; appointmentId: string }>(
+            `/api/patients/${id}/start-from-schedule`,
+            { appointmentId },
+            authToken,
+          );
+        } catch (e) {
           if (!cancelled) {
+            const message = e instanceof Error ? e.message : "Request failed";
             toast({
               title: "Could not start encounter",
-              description: (err as { message?: string }).message || res.statusText,
+              description: message,
               variant: "destructive",
             });
             stripScheduleQueryParams();
           }
           return;
         }
-        const data = await res.json();
         if (cancelled) return;
         sessionStorage.setItem("ehr_active_encounter_id", data.encounter.id);
         sessionStorage.setItem("ehr_active_encounter_patient_id", id);
@@ -417,8 +513,8 @@ export default function PatientDetailPage() {
         setClinicianVisitDocumentationSession();
         setClinVisitDocUnlocked(true);
         window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
-        queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.encounters.root });
+        queryClient.invalidateQueries({ queryKey: queryKeys.appointments.root });
         toast({ title: "Encounter started", description: "Visit is in progress." });
         stripScheduleQueryParams();
       } catch (e: unknown) {
@@ -451,24 +547,19 @@ export default function PatientDetailPage() {
     if (!id || !authToken || !reopenVisitPrompt) return;
     setReopenVisitLoading(true);
     try {
-      const res = await fetch(`/api/patients/${id}/reopen-from-schedule`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ appointmentId: reopenVisitPrompt.appointmentId }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as { message?: string }).message || res.statusText);
-      }
-      const data = await res.json();
+      const data = await apiPostJson<{ encounter: Encounter; appointmentId: string }>(
+        `/api/patients/${id}/reopen-from-schedule`,
+        { appointmentId: reopenVisitPrompt.appointmentId },
+        authToken,
+      );
       sessionStorage.setItem("ehr_active_encounter_id", data.encounter.id);
       sessionStorage.setItem("ehr_active_encounter_patient_id", id);
       sessionStorage.setItem("ehr_schedule_appointment_id", data.appointmentId);
       setClinicianVisitDocumentationSession();
       setClinVisitDocUnlocked(true);
       window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
-      queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.encounters.root });
+      queryClient.invalidateQueries({ queryKey: queryKeys.appointments.root });
       skipReopenDeclineRef.current = true;
       setReopenVisitPrompt(null);
       window.setTimeout(() => {
@@ -484,32 +575,25 @@ export default function PatientDetailPage() {
   }, [id, authToken, reopenVisitPrompt, toast]);
 
   const { data: patient, isLoading } = useQuery<Patient>({
-    queryKey: ["/api/patients", id],
-    queryFn: async () => {
-      const res = await fetch(`/api/patients/${id}`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
-      return normalizePatientRow(await res.json());
-    },
+    queryKey: id ? queryKeys.patients.detail(id) : queryKeys.patients.root,
+    queryFn: async () =>
+      normalizePatientRow(await apiGetJson<Patient>(`/api/patients/${id}`, authToken)),
     enabled: !!id && !!authToken,
   });
 
+  useEffect(() => {
+    setVitalsBloodGroup(patient?.bloodGroup ?? "");
+  }, [patient?.bloodGroup]);
+
   const { data: encounters = [] } = useQuery<Encounter[]>({
-    queryKey: ["/api/encounters", `?patientId=${id}`],
-    queryFn: async () => {
-      const res = await fetch(`/api/encounters?patientId=${id}`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: id ? queryKeys.encounters.listByPatient(id) : queryKeys.encounters.root,
+    queryFn: () => apiGetJson<Encounter[]>(`/api/encounters?patientId=${id}`, authToken),
     enabled: !!id,
   });
 
   const { data: prescriptions = [] } = useQuery<Prescription[]>({
-    queryKey: ["/api/prescriptions", `?patientId=${id}`],
-    queryFn: async () => {
-      const res = await fetch(`/api/prescriptions?patientId=${id}`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: id ? queryKeys.prescriptions.list(id) : queryKeys.prescriptions.root,
+    queryFn: () => apiGetJson<Prescription[]>(`/api/prescriptions?patientId=${id}`, authToken),
     enabled: !!id,
   });
 
@@ -568,88 +652,51 @@ export default function PatientDetailPage() {
   const familyConditionsList = familyHistory?.conditions ?? [];
 
   const { data: users = [] } = useQuery<{ id: string; fullName: string; username?: string }[]>({
-    queryKey: ["/api/users"],
-    queryFn: async () => {
-      const res = await fetch("/api/users", { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.users.root,
+    queryFn: () =>
+      apiGetJson<{ id: string; fullName: string; username?: string }[]>("/api/users", authToken),
     enabled: !!authToken,
   });
   const prescriberNameById = new Map(users.map((u) => [u.id, u.fullName || u.username || "Unknown user"]));
 
   const { data: labOrders = [] } = useQuery<LabOrder[]>({
-    queryKey: ["/api/lab-orders", `?patientId=${id}`],
-    queryFn: async () => {
-      const res = await fetch(`/api/lab-orders?patientId=${id}`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: id ? queryKeys.labOrders.list(id) : queryKeys.labOrders.root,
+    queryFn: () => apiGetJson<LabOrder[]>(`/api/lab-orders?patientId=${id}`, authToken),
     enabled: !!id,
   });
 
   const { data: imagingOrders = [] } = useQuery<ImagingOrder[]>({
-    queryKey: ["/api/imaging-orders", `?patientId=${id}`],
-    queryFn: async () => {
-      const res = await fetch(`/api/imaging-orders?patientId=${id}`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: id ? queryKeys.imagingOrders.list(id) : queryKeys.imagingOrders.root,
+    queryFn: () => apiGetJson<ImagingOrder[]>(`/api/imaging-orders?patientId=${id}`, authToken),
     enabled: !!id,
   });
 
   const { data: imagingResults = [] } = useQuery<ImagingResult[]>({
-    queryKey: ["/api/imaging-results", `?patientId=${id}`],
-    queryFn: async () => {
-      const res = await fetch(`/api/imaging-results?patientId=${id}`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: id ? queryKeys.imagingResults.list(id) : queryKeys.imagingResults.root,
+    queryFn: () => apiGetJson<ImagingResult[]>(`/api/imaging-results?patientId=${id}`, authToken),
     enabled: !!id,
   });
 
   const { data: patientDocuments = [] } = useQuery<PatientDocument[]>({
-    queryKey: ["/api/patient-documents", `?patientId=${id}`],
-    queryFn: async () => {
-      const res = await fetch(`/api/patient-documents?patientId=${id}`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: id ? queryKeys.patientDocuments.list(id) : queryKeys.patientDocuments.root,
+    queryFn: () => apiGetJson<PatientDocument[]>(`/api/patient-documents?patientId=${id}`, authToken),
     enabled: !!id,
   });
 
-  const [newImagingOpen, setNewImagingOpen] = useState(false);
-  const [newImagingForm, setNewImagingForm] = useState({ modality: "X-Ray", title: "", description: "", documentUrl: "" });
+  /** Patient documents uploaded as “Vaccination / immunization record” from Uploads */
+  const vaccinationImmunizationDocuments = useMemo(
+    () =>
+      patientDocuments.filter((d) => {
+        if (d.documentType !== "patient_document") return false;
+        return getRecordDocumentTypeId(d as PatientDocumentRow) === "vaccination_record";
+      }),
+    [patientDocuments],
+  );
 
-  const addImagingMutation = useMutation({
-    mutationFn: async (data: typeof newImagingForm) => {
-      const res = await fetch("/api/imaging-results", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({
-          patientId: id,
-          modality: data.modality.trim(),
-          title: data.title.trim(),
-          description: data.description.trim() || undefined,
-          documentUrl: data.documentUrl.trim() || undefined,
-          uploadedBy: user?.id,
-          ...(readScheduleEncounterIdForPatient(id) ? { encounterId: readScheduleEncounterIdForPatient(id)! } : {}),
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Failed");
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/imaging-results", `?patientId=${id}`] });
-      invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Imaging result added" });
-      setNewImagingOpen(false);
-      setNewImagingForm({ modality: "X-Ray", title: "", description: "", documentUrl: "" });
-    },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  const { data: followUpContacts = [] } = useQuery<FollowUpContact[]>({
+    queryKey: id ? queryKeys.followUpContacts.list(id) : queryKeys.followUpContacts.root,
+    queryFn: () => apiGetJson<FollowUpContact[]>(`/api/follow-up-contacts?patientId=${id}`, authToken),
+    enabled: !!id,
   });
 
   const addProblemMutation = useMutation({
@@ -1157,6 +1204,27 @@ export default function PatientDetailPage() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const updateBloodGroupMutation = useMutation({
+    mutationFn: async (bloodGroup: string) => {
+      const res = await fetch(`/api/patients/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({ bloodGroup: bloodGroup.trim() || null }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || "Failed to update blood group");
+      }
+      return normalizePatientRow(await res.json());
+    },
+    onSuccess: (updatedPatient) => {
+      queryClient.setQueryData<Patient>(["/api/patients", id], updatedPatient);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.patients.root });
+      toast({ title: "Blood group updated" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const addAllergyMutation = useMutation({
     mutationFn: async (payload: { allergen: string; severity: "LOW" | "MEDIUM" | "HIGH"; reactionType?: string }) => {
       const res = await fetch(`/api/patients/${id}/allergies`, {
@@ -1262,7 +1330,7 @@ export default function PatientDetailPage() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/lab-orders", `?patientId=${id}`] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.labOrders.list(id!) });
       invalidateVisitSummaryForScheduleSession();
       toast({ title: "Lab order created" });
       setNewOrderOpen(false);
@@ -1295,7 +1363,7 @@ export default function PatientDetailPage() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/imaging-orders", `?patientId=${id}`] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.imagingOrders.list(id!) });
       invalidateVisitSummaryForScheduleSession();
       toast({ title: "Imaging order created" });
       setNewOrderOpen(false);
@@ -1314,6 +1382,7 @@ export default function PatientDetailPage() {
           patientId: id,
           prescribedBy: user?.id,
           patientProblemId: data.patientProblemId?.trim() || undefined,
+          orderType: data.orderType,
           medicationName: data.medicationName.trim(),
           dosage: data.dosage.trim(),
           frequency: data.frequency.trim(),
@@ -1330,13 +1399,13 @@ export default function PatientDetailPage() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/prescriptions", `?patientId=${id}`] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.prescriptions.list(id!) });
       invalidateVisitSummaryForScheduleSession();
       toast({ title: "Medication order created" });
       setNewMedOrderOpen(false);
       setNewOrderOpen(false);
       setOrderComposerType(null);
-      setNewMedOrderForm({ medicationName: "", dosage: "", frequency: "once daily", duration: "", instructions: "", patientProblemId: "" });
+      setNewMedOrderForm({ medicationName: "", dosage: "", frequency: "once daily", duration: "", instructions: "", patientProblemId: "", orderType: "prescription" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -1359,7 +1428,7 @@ export default function PatientDetailPage() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/prescriptions", `?patientId=${id}`] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.prescriptions.list(id!) });
       invalidateVisitSummaryForScheduleSession();
       toast({ title: "Medication discontinued" });
       setDiscontinueRxOpen(false);
@@ -1382,7 +1451,7 @@ export default function PatientDetailPage() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/prescriptions", `?patientId=${id}`] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.prescriptions.list(id!) });
       invalidateVisitSummaryForScheduleSession();
       toast({ title: "Medication deleted" });
     },
@@ -1402,7 +1471,7 @@ export default function PatientDetailPage() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/lab-orders", `?patientId=${id}`] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.labOrders.list(id!) });
       invalidateVisitSummaryForScheduleSession();
       toast({ title: "Order deleted" });
     },
@@ -1422,7 +1491,7 @@ export default function PatientDetailPage() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/imaging-orders", `?patientId=${id}`] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.imagingOrders.list(id!) });
       invalidateVisitSummaryForScheduleSession();
       toast({ title: "Order deleted" });
     },
@@ -1471,6 +1540,16 @@ export default function PatientDetailPage() {
   return (
     <div className="flex h-screen min-h-0 flex-1 overflow-hidden" data-testid="patient-detail-page">
       <div className="flex-1 min-w-0 h-full overflow-hidden flex flex-col">
+        {documentationReadOnly ? (
+          <div
+            className="shrink-0 border-b border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground"
+            role="status"
+            data-testid="billing-visit-doc-readonly-banner"
+          >
+            <span className="font-medium text-foreground">View only</span> — You can review visit documentation. Adding or
+            editing clinical content is disabled from this link.
+          </div>
+        ) : null}
         <Tabs value={mainTab} onValueChange={handleMainTabChange} className="flex flex-1 min-w-0 overflow-hidden">
           <nav className="w-52 flex-shrink-0 border border-border rounded-lg bg-muted/30 flex flex-col overflow-y-auto py-4">
           <div className="px-3 space-y-6">
@@ -1490,6 +1569,9 @@ export default function PatientDetailPage() {
                   </a>
                 </Link>
                 <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
+                  <TabsTrigger value="patient-call" data-testid="tab-patient-call" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
+                    <PhoneCall className="w-4 h-4 shrink-0" /> Patient call
+                  </TabsTrigger>
                   <TabsTrigger value="overview" data-testid="tab-overview" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
                     <LayoutGrid className="w-4 h-4 shrink-0" /> Overview
                   </TabsTrigger>
@@ -1798,7 +1880,11 @@ export default function PatientDetailPage() {
                     <ShieldCheck className="w-4 h-4 shrink-0" />
                     Immunization
                   </button>
-                  <p className="text-sm text-muted-foreground">Immunization history. Records can be added when immunization tracking is enabled.</p>
+                  <p className="text-sm text-muted-foreground">
+                    {vaccinationImmunizationDocuments.length > 0
+                      ? `${vaccinationImmunizationDocuments.length} uploaded vaccination / immunization document(s). Open for details or attachments.`
+                      : "Vaccination and immunization records uploaded from Uploads appear here."}
+                  </p>
                 </CardContent>
               </Card>
             </div>
@@ -1883,6 +1969,45 @@ export default function PatientDetailPage() {
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm text-muted-foreground">Document office visit vitals</span>
           </div>
+          <Card>
+            <CardContent className="p-2.5 space-y-2">
+              <h4 className="text-sm font-medium">Blood group</h4>
+              <p className="text-xs text-muted-foreground">
+                This value feeds the patient storyboard and all blood-group displays across the app.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={vitalsBloodGroup || "__none"}
+                  onValueChange={(v) => setVitalsBloodGroup(v === "__none" ? "" : v)}
+                  disabled={!canAddNote || updateBloodGroupMutation.isPending}
+                >
+                  <SelectTrigger className="w-[12rem] h-8 text-xs">
+                    <SelectValue placeholder="Not specified" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">— Not specified —</SelectItem>
+                    {BLOOD_GROUP_OPTIONS.map((g) => (
+                      <SelectItem key={g} value={g}>
+                        {g}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {canAddNote && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8 px-3 text-xs"
+                    onClick={() => updateBloodGroupMutation.mutate(vitalsBloodGroup)}
+                    disabled={updateBloodGroupMutation.isPending || (vitalsBloodGroup || "") === (patient?.bloodGroup || "")}
+                    data-testid="button-save-vitals-blood-group"
+                  >
+                    {updateBloodGroupMutation.isPending ? "Saving..." : "Save blood group"}
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
           {canAddNote && (
             <Card>
               <CardContent className="p-2.5">
@@ -2071,9 +2196,7 @@ export default function PatientDetailPage() {
             <Card key={rx.id} data-testid={`card-rx-${rx.id}`}>
               <CardContent className="py-3 px-4">
                 <div className={`flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm ${rx.status === "cancelled" ? "line-through opacity-60" : ""}`}>
-                  <a href="/pharmacy" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
-                    {rx.medicationName}
-                  </a>
+                  <span className="font-medium shrink-0">{rx.medicationName}</span>
                   <span className="shrink-0">{rx.dosage}</span>
                   <span className="text-muted-foreground shrink-0">{rx.frequency}</span>
                   {rx.duration && <span className="text-muted-foreground shrink-0">· {rx.duration}</span>}
@@ -2099,6 +2222,7 @@ export default function PatientDetailPage() {
                                 duration: rx.duration ?? "",
                                 instructions: rx.instructions ?? "",
                                 patientProblemId: rx.patientProblemId ?? "",
+                                orderType: ((rx as any).orderType === "administered" ? "administered" : "prescription"),
                               });
                               setOrderComposerType("medication");
                               setNewOrderOpen(true);
@@ -2209,6 +2333,19 @@ export default function PatientDetailPage() {
                       <a href="/laboratory" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
                         {order.testName}
                       </a>
+                      {(order as LabOrder & { documentUrl?: string }).documentUrl &&
+                        (order.status === "resulted" || order.status === "completed") && (
+                          <a
+                            href={(order as LabOrder & { documentUrl?: string }).documentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="shrink-0 text-primary hover:text-primary/80"
+                            title="View attached external result"
+                            aria-label="View attached external result"
+                          >
+                            <Paperclip className="w-4 h-4" />
+                          </a>
+                        )}
                       {order.testCode && <span className="text-muted-foreground shrink-0">{order.testCode}</span>}
                       <span className="text-muted-foreground shrink-0">{order.priority}</span>
                       {(order as LabOrder & { internalExternal?: string }).internalExternal === "external" && (
@@ -2250,6 +2387,18 @@ export default function PatientDetailPage() {
                       <a href="/upload-results" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
                         {order.title}
                       </a>
+                      {order.documentUrl && order.status === "completed" && (
+                        <a
+                          href={order.documentUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="shrink-0 text-primary hover:text-primary/80"
+                          title="View attached external result"
+                          aria-label="View attached external result"
+                        >
+                          <Paperclip className="w-4 h-4" />
+                        </a>
+                      )}
                       <span className="text-muted-foreground shrink-0">{order.modality}</span>
                       {order.internalExternal === "external" && <span className="text-muted-foreground shrink-0">External</span>}
                       <Badge variant="secondary" className={`text-[10px] ${order.status === "completed" ? "bg-chart-3/10 text-chart-3" : ""} shrink-0`}>
@@ -2389,6 +2538,7 @@ export default function PatientDetailPage() {
               encounterId={visitSummaryMeta.encounterId}
               authToken={authToken}
               prescriberNameById={prescriberNameById}
+              readOnly={documentationReadOnly}
             />
           )}
         </TabsContent>
@@ -2539,8 +2689,134 @@ export default function PatientDetailPage() {
           </Tabs>
         </TabsContent>
 
-        <TabsContent value="immunization" className="mt-4">
-          <Card><CardContent className="p-8 text-center text-muted-foreground">Immunization history. Records can be added when immunization tracking is enabled.</CardContent></Card>
+        <TabsContent value="immunization" className="mt-4 space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Records filed as <span className="font-medium text-foreground">Vaccination / immunization record</span> from{" "}
+            <Link href="/upload-results" className="text-primary underline underline-offset-2 hover:no-underline">
+              Uploads
+            </Link>{" "}
+            are listed below with any attached file.
+          </p>
+          {vaccinationImmunizationDocuments.length === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                No vaccination or immunization documents yet. Upload from Uploads and choose &quot;Vaccination / immunization record&quot; as the document type.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {vaccinationImmunizationDocuments.map((doc) => (
+                <Card key={doc.id}>
+                  <CardContent className="py-3 px-4">
+                    <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
+                      <ShieldCheck className="w-4 h-4 text-muted-foreground shrink-0" aria-hidden />
+                      <span className="font-medium shrink-0">{doc.title}</span>
+                      {doc.documentUrl && (
+                        <a
+                          href={doc.documentUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="shrink-0 text-primary hover:text-primary/80"
+                          title="View uploaded record"
+                          aria-label="View uploaded record"
+                        >
+                          <Paperclip className="w-4 h-4" />
+                        </a>
+                      )}
+                      <span className="text-muted-foreground shrink-0">Vaccination / immunization record</span>
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                      Uploaded {doc.createdAt ? format(new Date(doc.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                      {" · "}
+                      By {doc.uploadedBy ? (prescriberNameById.get(doc.uploadedBy) ?? doc.uploadedBy) : "Unknown user"}
+                    </div>
+                    {doc.documentUrl && (
+                      <a
+                        href={doc.documentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-primary underline mt-2 inline-flex items-center gap-1.5"
+                      >
+                        <Paperclip className="w-3.5 h-3.5" /> View document
+                      </a>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="patient-call" className="mt-4 space-y-4 data-[state=inactive]:hidden">
+          <Card>
+            <CardContent className="p-4 space-y-4">
+              <div>
+                <h3 className="text-base font-semibold tracking-tight">Document patient call</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Record call outcome and discussion notes for this patient.
+                </p>
+              </div>
+              {id && !documentationReadOnly ? (
+                <PatientCallDocumentationForm
+                  token={authToken ?? null}
+                  userId={user?.id}
+                  patientId={id}
+                  reasonForCall={patientCallReasonForCall}
+                  outcome={patientCallOutcome}
+                  discussion={patientCallDiscussion}
+                  onReasonForCallChange={setPatientCallReasonForCall}
+                  onOutcomeChange={setPatientCallOutcome}
+                  onDiscussionChange={setPatientCallDiscussion}
+                  onSaved={() => {
+                    setPatientCallReasonForCall("");
+                    setPatientCallOutcome("");
+                    setPatientCallDiscussion("");
+                    void queryClient.invalidateQueries({ queryKey: queryKeys.followUpContacts.list(id!) });
+                  }}
+                  saveLabel="Save call note"
+                />
+              ) : documentationReadOnly ? (
+                <p className="text-sm text-muted-foreground border rounded-md p-3 bg-muted/30">
+                  New patient calls cannot be documented in view-only mode. Use the chart from your usual workflow to add
+                  call notes.
+                </p>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <div className="space-y-2">
+            <h3 className="text-base font-semibold tracking-tight">Documented calls</h3>
+            {followUpContacts.length === 0 ? (
+              <Card>
+                <CardContent className="p-8 text-center text-muted-foreground">
+                  No patient calls documented yet.
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-2">
+                {followUpContacts.map((c) => (
+                  <Card key={c.id}>
+                    <CardContent className="p-3">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
+                          {c.outcome.replaceAll("_", " ")}
+                        </Badge>
+                        <span>{safeFormatDateTime(c.createdAt)}</span>
+                        <span>•</span>
+                        <span>By {c.contactedBy ? (prescriberNameById.get(c.contactedBy) ?? c.contactedBy) : "Unknown user"}</span>
+                      </div>
+                      <p className="mt-1 text-sm leading-snug">
+                        <span className="text-muted-foreground">Reason: </span>
+                        <span>{c.reasonForCall?.trim() ? c.reasonForCall : "—"}</span>
+                        <span className="text-muted-foreground"> • </span>
+                        <span>{c.discussion?.trim() ? c.discussion : "No discussion notes provided."}</span>
+                      </p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="allergy" className="space-y-4 mt-4 data-[state=inactive]:hidden">
@@ -2724,18 +3000,28 @@ export default function PatientDetailPage() {
               <TabsTrigger value="imaging" className="gap-2"><ImageIcon className="w-3.5 h-3.5" /> Imaging</TabsTrigger>
             </TabsList>
             <TabsContent value="labs" className="space-y-3 mt-4">
-              <p className="text-sm text-muted-foreground">Completed lab results appear here once resulted in the Laboratory or uploaded via Upload Results.</p>
+              <p className="text-sm text-muted-foreground">Completed lab results appear here once resulted in the Laboratory or uploaded via Uploads.</p>
               {labOrders.filter((o) => o.status === "resulted" || o.status === "completed").length === 0 && patientDocuments.filter((d) => d.documentType === "lab_result").length === 0 ? (
-                <Card><CardContent className="p-8 text-center text-muted-foreground">No lab results yet. Lab orders are resulted in Laboratory or upload external results via Upload Results.</CardContent></Card>
+                <Card><CardContent className="p-8 text-center text-muted-foreground">No lab results yet. Lab orders are resulted in Laboratory or upload external results via Uploads.</CardContent></Card>
               ) : (
                 <div className="space-y-3">
                   {labOrders.filter((o) => o.status === "resulted" || o.status === "completed").map((order) => (
                     <Card key={order.id}>
                       <CardContent className="py-3 px-4">
                         <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
-                          <a href="/laboratory" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
-                            {order.testName}
-                          </a>
+                          <span className="font-medium text-foreground shrink-0">{order.testName}</span>
+                          {(order as LabOrder & { documentUrl?: string }).documentUrl && (
+                            <a
+                              href={(order as LabOrder & { documentUrl?: string }).documentUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="shrink-0 text-primary hover:text-primary/80"
+                              title="View attached external result"
+                              aria-label="View attached external result"
+                            >
+                              <Paperclip className="w-4 h-4" />
+                            </a>
+                          )}
                           {order.testCode && <span className="text-muted-foreground shrink-0">{order.testCode}</span>}
                           <span className="text-muted-foreground shrink-0">Resulted</span>
                           {order.result && <span className="text-muted-foreground shrink-0">{order.result}</span>}
@@ -2749,7 +3035,14 @@ export default function PatientDetailPage() {
                           {order.referenceRange ? ` · Ref: ${order.referenceRange}` : ""}
                         </div>
                         {(order as LabOrder & { documentUrl?: string }).documentUrl && (
-                          <a href={(order as LabOrder & { documentUrl?: string }).documentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 inline-block">View document</a>
+                          <a
+                            href={(order as LabOrder & { documentUrl?: string }).documentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-primary underline mt-2 inline-flex items-center gap-1.5"
+                          >
+                            <Paperclip className="w-3.5 h-3.5" /> View document
+                          </a>
                         )}
                       </CardContent>
                     </Card>
@@ -2758,9 +3051,7 @@ export default function PatientDetailPage() {
                     <Card key={doc.id}>
                       <CardContent className="py-3 px-4">
                         <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
-                          <a href="/upload-results" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
-                            {doc.title}
-                          </a>
+                          <span className="font-medium text-foreground shrink-0">{doc.title}</span>
                           <span className="text-muted-foreground shrink-0">Uploaded lab result</span>
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
@@ -2769,7 +3060,9 @@ export default function PatientDetailPage() {
                           By {doc.uploadedBy ? (prescriberNameById.get(doc.uploadedBy) ?? doc.uploadedBy) : "Unknown user"}
                         </div>
                         {doc.documentUrl && (
-                          <a href={doc.documentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 inline-block">View document</a>
+                          <a href={doc.documentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 inline-flex items-center gap-1.5">
+                            <Paperclip className="w-3.5 h-3.5" /> View document
+                          </a>
                         )}
                       </CardContent>
                     </Card>
@@ -2778,25 +3071,56 @@ export default function PatientDetailPage() {
               )}
             </TabsContent>
             <TabsContent value="imaging" className="space-y-3 mt-4">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-muted-foreground">Scans and uploaded imaging (X-Ray, CT, MRI, etc.)</span>
-                {canOrder && (
-                  <Button size="sm" onClick={() => setNewImagingOpen(true)} data-testid="button-new-imaging">
-                    <Plus className="w-3.5 h-3.5 mr-1.5" /> Upload / Add imaging
-                  </Button>
-                )}
-              </div>
-              {imagingResults.length === 0 ? (
-                <Card><CardContent className="p-8 text-center text-muted-foreground">No imaging results. Use Upload / Add imaging to attach a scan or document.</CardContent></Card>
+              <p className="text-sm text-muted-foreground">Scans and uploaded imaging (X-Ray, CT, MRI, etc.). Results appear here after upload from Uploads or completion of an imaging order.</p>
+              {imagingResults.length === 0 && imagingOrders.filter((o) => o.status === "completed" && o.documentUrl).length === 0 ? (
+                <Card><CardContent className="p-8 text-center text-muted-foreground">No imaging results yet.</CardContent></Card>
               ) : (
                 <div className="space-y-3">
+                  {imagingOrders
+                    .filter((o) => o.status === "completed" && o.documentUrl)
+                    .map((o) => (
+                      <Card key={`order-${o.id}`}>
+                        <CardContent className="py-3 px-4">
+                          <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
+                            <span className="font-medium shrink-0">{o.title}</span>
+                            <a
+                              href={o.documentUrl!}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="shrink-0 text-primary hover:text-primary/80"
+                              title="View attached external result"
+                              aria-label="View attached external result"
+                            >
+                              <Paperclip className="w-4 h-4" />
+                            </a>
+                            <span className="text-muted-foreground shrink-0">{o.modality}</span>
+                            <span className="text-muted-foreground shrink-0">Completed</span>
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                            Completed {o.completedAt ? format(new Date(o.completedAt), "MMM d, yyyy · HH:mm") : "—"}
+                            {" · "}
+                            By {prescriberNameById.get(o.orderedBy) ?? o.orderedBy ?? "Unknown user"}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
                   {imagingResults.map((img) => (
                     <Card key={img.id}>
                       <CardContent className="py-3 px-4">
                         <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
-                          <a href="/upload-results" className="font-medium text-primary underline underline-offset-2 hover:no-underline shrink-0">
-                            {img.title}
-                          </a>
+                          <span className="font-medium shrink-0">{img.title}</span>
+                          {img.documentUrl && (
+                            <a
+                              href={img.documentUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="shrink-0 text-primary hover:text-primary/80"
+                              title="View attached result"
+                              aria-label="View attached result"
+                            >
+                              <Paperclip className="w-4 h-4" />
+                            </a>
+                          )}
                           <span className="text-muted-foreground shrink-0">{img.modality}</span>
                           {img.description && <span className="text-muted-foreground shrink-0">{img.description}</span>}
                         </div>
@@ -2806,7 +3130,9 @@ export default function PatientDetailPage() {
                           By {img.uploadedBy ? (prescriberNameById.get(img.uploadedBy) ?? img.uploadedBy) : "Unknown user"}
                         </div>
                         {img.documentUrl && (
-                          <a href={img.documentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 inline-block">View document</a>
+                          <a href={img.documentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline mt-2 inline-flex items-center gap-1.5">
+                            <Paperclip className="w-3.5 h-3.5" /> View document
+                          </a>
                         )}
                       </CardContent>
                     </Card>
@@ -3607,6 +3933,21 @@ export default function PatientDetailPage() {
                   </div>
                 </div>
                 <div className="space-y-2">
+                  <Label>Order type *</Label>
+                  <Select
+                    value={newMedOrderForm.orderType}
+                    onValueChange={(v) => setNewMedOrderForm((f) => ({ ...f, orderType: v as any }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select order type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="administered">Clinic/Hospital Administered</SelectItem>
+                      <SelectItem value="prescription">Prescription</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
                   <Label>Duration</Label>
                   <Select
                     value={DURATION_OPTIONS.includes(newMedOrderForm.duration as any) ? newMedOrderForm.duration : (newMedOrderForm.duration ? "Other" : "none")}
@@ -3750,6 +4091,21 @@ export default function PatientDetailPage() {
               </div>
             </div>
             <div className="space-y-2">
+              <Label>Order type *</Label>
+              <Select
+                value={newMedOrderForm.orderType}
+                onValueChange={(v) => setNewMedOrderForm((f) => ({ ...f, orderType: v as any }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select order type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="administered">Clinic/Hospital Administered</SelectItem>
+                  <SelectItem value="prescription">Prescription</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
               <Label>Duration</Label>
               <Select
                 value={DURATION_OPTIONS.includes(newMedOrderForm.duration as any) ? newMedOrderForm.duration : (newMedOrderForm.duration ? "Other" : "none")}
@@ -3797,63 +4153,6 @@ export default function PatientDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={newImagingOpen} onOpenChange={setNewImagingOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Upload / Add imaging result</DialogTitle></DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Modality *</Label>
-              <Select
-                value={newImagingForm.modality}
-                onValueChange={(v) => setNewImagingForm((f) => ({ ...f, modality: v }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="X-Ray">X-Ray</SelectItem>
-                  <SelectItem value="CT">CT</SelectItem>
-                  <SelectItem value="MRI">MRI</SelectItem>
-                  <SelectItem value="Ultrasound">Ultrasound</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Title *</Label>
-              <Input
-                value={newImagingForm.title}
-                onChange={(e) => setNewImagingForm((f) => ({ ...f, title: e.target.value }))}
-                placeholder="e.g. Chest X-Ray, Abdominal ultrasound"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Description</Label>
-              <Textarea
-                value={newImagingForm.description}
-                onChange={(e) => setNewImagingForm((f) => ({ ...f, description: e.target.value }))}
-                placeholder="Findings or notes"
-                rows={2}
-                className="resize-none"
-              />
-            </div>
-            <DocumentFileUpload
-              value={newImagingForm.documentUrl}
-              onChange={(url) => setNewImagingForm((f) => ({ ...f, documentUrl: url ?? "" }))}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setNewImagingOpen(false)}>Cancel</Button>
-            <Button
-              onClick={() => addImagingMutation.mutate(newImagingForm)}
-              disabled={!newImagingForm.title.trim() || addImagingMutation.isPending}
-              data-testid="button-submit-imaging"
-            >
-              {addImagingMutation.isPending ? "Adding..." : "Add imaging result"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

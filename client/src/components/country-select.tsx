@@ -1,6 +1,5 @@
 import { useMemo } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import { useAuth } from "@/lib/auth";
 import { COUNTRIES_QUERY_KEY, fetchCountries } from "@/lib/countries-api";
 import {
   Select,
@@ -16,10 +15,9 @@ export type { CountryOption };
 
 /** React Query hook for GET /api/countries (use anywhere you need the list without this Select). */
 export function useCountries(): UseQueryResult<CountryOption[], Error> {
-  const { token } = useAuth();
   return useQuery<CountryOption[]>({
     queryKey: [...COUNTRIES_QUERY_KEY],
-    queryFn: () => fetchCountries(token),
+    queryFn: () => fetchCountries(null),
     staleTime: 1000 * 60 * 60 * 24,
   });
 }

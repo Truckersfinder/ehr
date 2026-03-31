@@ -11,6 +11,7 @@ import { format } from "date-fns";
 import type {
   Appointment,
   Encounter,
+  EncounterVisitCharge,
   ImagingOrder,
   ImagingResult,
   LabOrder,
@@ -33,15 +34,28 @@ type VisitSummaryPayload = {
   notes: PatientNote[];
   imagingResults: ImagingResult[];
   allergiesDocumentedThisVisit: PatientAllergy[];
+  visitCharges?: EncounterVisitCharge[];
+  billingCurrency?: string;
 };
+
+function visitChargeLineKindLabel(kind: string): string {
+  if (kind === "visit_type") return "Visit";
+  if (kind === "lab_order") return "Lab";
+  if (kind === "imaging_order") return "Imaging";
+  if (kind === "prescription") return "Medication";
+  if (kind === "manual") return "Added";
+  return kind;
+}
 
 type Props = {
   encounterId: string;
   authToken: string | null;
   prescriberNameById: Map<string, string>;
+  /** Billing / front desk review: hide edits to patient instructions */
+  readOnly?: boolean;
 };
 
-export function VisitSummaryTab({ encounterId, authToken, prescriberNameById }: Props) {
+export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, readOnly = false }: Props) {
   const { toast } = useToast();
   const printRef = useRef<HTMLDivElement>(null);
   const [instructions, setInstructions] = useState("");
@@ -122,7 +136,11 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById }: 
     notes,
     imagingResults,
     allergiesDocumentedThisVisit = [],
+    visitCharges = [],
+    billingCurrency = "KES",
   } = data;
+
+  const visitChargeTotal = visitCharges.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
 
   return (
     <div className="space-y-4 max-w-4xl">
@@ -130,7 +148,9 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById }: 
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Visit Summary</h2>
           <p className="text-sm text-muted-foreground">
-            Read-only snapshot of this schedule visit. Edit patient instructions below.
+            {readOnly
+              ? "View-only review of this visit. Patient instructions cannot be edited from this link."
+              : "Read-only snapshot of this schedule visit. Edit patient instructions below."}
           </p>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={handlePrint} className="gap-2" data-testid="visit-summary-print">
@@ -243,6 +263,52 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById }: 
               <p>
                 <span className="text-muted-foreground">ICD codes:</span> {encounter.icdCodes}
               </p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="print:shadow-none print:border" data-testid="visit-summary-charges">
+          <CardHeader className="pb-2">
+            <h3 className="text-sm font-semibold">Visit charges</h3>
+            <p className="text-xs text-muted-foreground font-normal">
+              Internal orders and visit type from the facility price list. External lab/imaging orders are excluded.
+            </p>
+          </CardHeader>
+          <CardContent className="text-sm">
+            {visitCharges.length === 0 ? (
+              <p className="text-muted-foreground">No charge lines for this encounter yet.</p>
+            ) : (
+              <div className="space-y-2">
+                <ul className="space-y-1.5">
+                  {visitCharges.map((row) => (
+                    <li key={row.id} className="flex justify-between gap-3 text-sm border-b border-border/40 pb-1.5 last:border-0">
+                      <span className="min-w-0">
+                        <span className="text-xs text-muted-foreground mr-2">{visitChargeLineKindLabel(row.lineKind)}</span>
+                        <span>{row.description}</span>
+                        {row.quantity > 1 && (
+                          <span className="text-muted-foreground text-xs"> × {row.quantity}</span>
+                        )}
+                        {(row as any).orderedByUserId ? (
+                          <span className="text-muted-foreground text-xs">
+                            {" "}
+                            · By {prescriberNameById.get((row as any).orderedByUserId) ?? (row as any).orderedByUserId}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="shrink-0 font-medium tabular-nums">
+                        {billingCurrency} {Number(row.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex justify-between pt-2 border-t font-medium">
+                  <span>Estimated total</span>
+                  <span className="tabular-nums">
+                    {billingCurrency}{" "}
+                    {visitChargeTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -415,28 +481,36 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById }: 
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="print:hidden space-y-3">
-              <Label
-                htmlFor="patient-instructions"
-                className="text-sm font-semibold tracking-tight text-foreground block mb-1"
-              >
-                Instructions for the patient
-              </Label>
-              <Textarea
-                id="patient-instructions"
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                placeholder="Discharge instructions, follow-up, medications to take at home…"
-                className="min-h-[120px] resize-y"
-                data-testid="visit-summary-patient-instructions"
-              />
-              <Button
-                type="button"
-                onClick={() => saveInstructionsMutation.mutate(instructions)}
-                disabled={saveInstructionsMutation.isPending}
-                data-testid="visit-summary-save-instructions"
-              >
-                {saveInstructionsMutation.isPending ? "Saving…" : "Save instructions"}
-              </Button>
+              {readOnly ? (
+                <div className="text-sm whitespace-pre-wrap rounded-md border bg-muted/30 p-3 min-h-[120px]">
+                  {instructions.trim() || "—"}
+                </div>
+              ) : (
+                <>
+                  <Label
+                    htmlFor="patient-instructions"
+                    className="text-sm font-semibold tracking-tight text-foreground block mb-1"
+                  >
+                    Instructions for the patient
+                  </Label>
+                  <Textarea
+                    id="patient-instructions"
+                    value={instructions}
+                    onChange={(e) => setInstructions(e.target.value)}
+                    placeholder="Discharge instructions, follow-up, medications to take at home…"
+                    className="min-h-[120px] resize-y"
+                    data-testid="visit-summary-patient-instructions"
+                  />
+                  <Button
+                    type="button"
+                    onClick={() => saveInstructionsMutation.mutate(instructions)}
+                    disabled={saveInstructionsMutation.isPending}
+                    data-testid="visit-summary-save-instructions"
+                  >
+                    {saveInstructionsMutation.isPending ? "Saving…" : "Save instructions"}
+                  </Button>
+                </>
+              )}
             </div>
             <div className="hidden print:block text-sm whitespace-pre-wrap border-t print:border-0 pt-3 print:pt-0">
               <p className="text-xs font-semibold uppercase text-muted-foreground mb-2">Patient instructions</p>

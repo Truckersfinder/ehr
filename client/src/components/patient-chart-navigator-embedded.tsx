@@ -16,6 +16,7 @@ import {
   ClipboardList,
   FileText,
   ScrollText,
+  PhoneCall,
 } from "lucide-react";
 
 type Props = {
@@ -120,6 +121,13 @@ export function PatientChartNavigatorEmbedded({ patientId, showVisitDocumentatio
           <div className="flex flex-col gap-0.5">
             <NavLink href={`${base}/demographics`} active={onDemographicsPage} data-testid="tab-demographics-embedded">
               <User className="w-4 h-4 shrink-0" /> Demographics
+            </NavLink>
+            <NavLink
+              href={`${base}?tab=patient-call`}
+              active={!onDemographicsPage && activeTab === "patient-call"}
+              data-testid="tab-patient-call-embedded"
+            >
+              <PhoneCall className="w-4 h-4 shrink-0" /> Patient call
             </NavLink>
             <NavLink
               href={`${base}?tab=overview`}

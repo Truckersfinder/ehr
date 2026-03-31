@@ -3,10 +3,10 @@ import {
   LayoutDashboard,
   FlaskConical,
   Upload,
-  Pill,
   Receipt,
   Shield,
   CalendarDays,
+  ClipboardList,
 } from "lucide-react";
 
 export type AppNavItem = {
@@ -22,9 +22,16 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     title: "Dashboard",
     url: "/",
     icon: LayoutDashboard,
-    roles: ["super_admin", "facility_admin", "lab_tech", "pharmacist", "finance"],
+    roles: ["super_admin", "facility_admin", "lab_tech", "pharmacist", "finance", "security"],
   },
-  { title: "Appointments", url: "/appointments", icon: CalendarDays, roles: ["reception"] },
+  {
+    title: "Billing",
+    url: "/billing",
+    icon: Receipt,
+    roles: ["super_admin", "facility_admin", "finance", "reception", "security"],
+  },
+  { title: "Scheduled Appointment", url: "/appointments", icon: CalendarDays, roles: ["reception"] },
+  { title: "Patient Follow up", url: "/patient-follow-up", icon: ClipboardList, roles: ["reception"] },
   {
     title: "Laboratory",
     url: "/laboratory",
@@ -32,18 +39,11 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     roles: ["super_admin", "facility_admin", "clinician", "nurse", "lab_tech"],
   },
   {
-    title: "Upload Results",
+    title: "Uploads",
     url: "/upload-results",
     icon: Upload,
     roles: ["super_admin", "facility_admin", "clinician", "nurse", "lab_tech"],
   },
-  {
-    title: "Pharmacy",
-    url: "/pharmacy",
-    icon: Pill,
-    roles: ["super_admin", "facility_admin", "clinician", "pharmacist"],
-  },
-  /** Billing in nav for finance & reception; super_admin / facility_admin use toolbar Billing */
-  { title: "Billing", url: "/billing", icon: Receipt, roles: ["finance", "reception"] },
-  { title: "Admin", url: "/admin", icon: Shield, roles: ["super_admin", "facility_admin"] },
+  /** Security staff: Administration only (same app area as super / facility admin). */
+  { title: "Admin", url: "/admin", icon: Shield, roles: ["security"] },
 ];

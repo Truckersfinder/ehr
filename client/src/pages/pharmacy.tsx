@@ -8,6 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+import { apiGetJson, apiPatchJson } from "@/lib/api-client";
+import { queryKeys } from "@/lib/query-keys";
 import { Pill, Package, Clock } from "lucide-react";
 import { format } from "date-fns";
 import type { Prescription, Patient } from "@shared/schema";
@@ -17,37 +19,25 @@ export default function PharmacyPage() {
   const { token } = useAuth();
 
   const { data: prescriptions = [], isLoading } = useQuery<Prescription[]>({
-    queryKey: ["/api/prescriptions"],
-    queryFn: async () => {
-      const res = await fetch("/api/prescriptions", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.prescriptions.root,
+    queryFn: () => apiGetJson<Prescription[]>("/api/prescriptions", token),
   });
 
   const { data: patients = [] } = useQuery<Patient[]>({
-    queryKey: ["/api/patients"],
-    queryFn: async () => {
-      const res = await fetch("/api/patients", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.patients.root,
+    queryFn: () => apiGetJson<Patient[]>("/api/patients", token),
   });
 
   const patientMap = new Map(patients.map((p) => [p.id, p]));
 
   const dispenseMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(`/api/prescriptions/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ status: "dispensed", dispensedAt: new Date().toISOString() }),
-      });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    mutationFn: (rxId: string) =>
+      apiPatchJson<Prescription>(`/api/prescriptions/${rxId}`, {
+        status: "dispensed",
+        dispensedAt: new Date().toISOString(),
+      }, token),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/prescriptions"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.prescriptions.root });
       toast({ title: "Prescription dispensed" });
     },
   });

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
+import { apiGetJson } from "@/lib/api-client";
+import { queryKeys } from "@/lib/query-keys";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,12 +19,10 @@ export default function PatientsPage() {
   const [search, setSearch] = useState("");
 
   const { data: patients = [], isLoading } = useQuery<Patient[]>({
-    queryKey: ["/api/patients", search ? `?search=${search}` : ""],
-    queryFn: async () => {
+    queryKey: queryKeys.patients.list(search ? `?search=${search}` : ""),
+    queryFn: () => {
       const url = search ? `/api/patients?search=${encodeURIComponent(search)}` : "/api/patients";
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
+      return apiGetJson<Patient[]>(url, token);
     },
   });
 

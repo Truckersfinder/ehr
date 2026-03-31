@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
+import { apiGetJson, apiPostJson } from "@/lib/api-client";
+import { queryKeys } from "@/lib/query-keys";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
 import { Plus, Stethoscope, Search } from "lucide-react";
 import { format } from "date-fns";
-import type { Encounter, Patient, User } from "@shared/schema";
+import type { Encounter, Patient } from "@shared/schema";
 
 export default function EncountersPage() {
   const { user, token } = useAuth();
@@ -28,38 +30,25 @@ export default function EncountersPage() {
   });
 
   const { data: encounters = [], isLoading } = useQuery<Encounter[]>({
-    queryKey: ["/api/encounters"],
-    queryFn: async () => {
-      const res = await fetch("/api/encounters", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.encounters.root,
+    queryFn: () => apiGetJson<Encounter[]>("/api/encounters", token),
   });
 
   const { data: patients = [] } = useQuery<Patient[]>({
-    queryKey: ["/api/patients"],
-    queryFn: async () => {
-      const res = await fetch("/api/patients", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
+    queryKey: queryKeys.patients.root,
+    queryFn: () => apiGetJson<Patient[]>("/api/patients", token),
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: typeof formData) => {
-      const res = await fetch("/api/encounters", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          ...data, clinicianId: user?.id, status: "in_progress",
-          visitDate: new Date().toISOString(),
-        }),
-      });
-      if (!res.ok) { const err = await res.json(); throw new Error(err.message); }
-      return res.json();
-    },
+    mutationFn: (data: typeof formData) =>
+      apiPostJson<Encounter>("/api/encounters", {
+        ...data,
+        clinicianId: user?.id,
+        status: "in_progress",
+        visitDate: new Date().toISOString(),
+      }, token),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.encounters.root });
       toast({ title: "Encounter created", description: "Navigate to the encounter to add notes." });
       setOpen(false);
       navigate(`/encounters/${data.id}`);
