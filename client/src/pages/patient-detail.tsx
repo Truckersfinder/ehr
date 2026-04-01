@@ -45,6 +45,7 @@ import {
   storyboardVitalsLatestTimestamp,
 } from "@/lib/storyboard-vitals";
 import { FAMILY_RELATIONSHIPS, COMMON_INHERITED_CONDITIONS_AFRICA } from "@/lib/family-history-constants";
+import { AfricanPatientProblemSelect } from "@/components/african-patient-problem-select";
 import { DOSE_OPTIONS, FREQUENCY_OPTIONS, DURATION_OPTIONS } from "@/lib/medication-order-options";
 import { COMMON_LAB_TESTS_AFRICA } from "@/lib/common-lab-tests-africa";
 import { COMMON_MEDICATIONS_AFRICA } from "@/lib/common-medications-africa";
@@ -109,16 +110,21 @@ export default function PatientDetailPage() {
   const authToken = token ?? getStoredAuthToken();
 
   const [addProblemOpen, setAddProblemOpen] = useState(false);
-  const [newProblem, setNewProblem] = useState("");
+  const [newProblemText, setNewProblemText] = useState("");
   const [newProblemStartDate, setNewProblemStartDate] = useState("");
   const [newProblemSymptoms, setNewProblemSymptoms] = useState("");
   const [addPastProblemOpen, setAddPastProblemOpen] = useState(false);
-  const [newPastProblem, setNewPastProblem] = useState("");
+  const [newPastProblemText, setNewPastProblemText] = useState("");
   const [newPastProblemStartDate, setNewPastProblemStartDate] = useState("");
   const [newPastProblemResolution, setNewPastProblemResolution] = useState<"current" | "resolved">("resolved");
   const [editProblemOpen, setEditProblemOpen] = useState(false);
   const [editProblem, setEditProblem] = useState<PatientProblem | null>(null);
-  const [editProblemForm, setEditProblemForm] = useState({ problem: "", problemStartDate: "", symptoms: "", resolution: "resolved" as "current" | "resolved" });
+  const [editProblemForm, setEditProblemForm] = useState({
+    problemText: "",
+    problemStartDate: "",
+    symptoms: "",
+    resolution: "resolved" as "current" | "resolved",
+  });
   const [addFamilyMemberOpen, setAddFamilyMemberOpen] = useState(false);
   const [newFamilyRelationship, setNewFamilyRelationship] = useState<string>("");
   const [newFamilyRelationshipOther, setNewFamilyRelationshipOther] = useState("");
@@ -728,11 +734,11 @@ export default function PatientDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "problems"] });
       toast({ title: variables.status === "past" ? "Past problem added" : "Problem added" });
       setAddProblemOpen(false);
-      setNewProblem("");
+      setNewProblemText("");
       setNewProblemStartDate("");
       setNewProblemSymptoms("");
       setAddPastProblemOpen(false);
-      setNewPastProblem("");
+      setNewPastProblemText("");
       setNewPastProblemStartDate("");
       setNewPastProblemResolution("resolved");
     },
@@ -763,7 +769,7 @@ export default function PatientDetailPage() {
       toast({ title: "Problem updated" });
       setEditProblemOpen(false);
       setEditProblem(null);
-      setEditProblemForm({ problem: "", problemStartDate: "", symptoms: "", resolution: "resolved" });
+      setEditProblemForm({ problemText: "", problemStartDate: "", symptoms: "", resolution: "resolved" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -1895,7 +1901,14 @@ export default function PatientDetailPage() {
           <div className="flex items-center justify-between gap-2">
             <span className="text-sm text-muted-foreground">Documented problems for this patient</span>
             {canAddNote && (
-              <Button size="sm" onClick={() => setAddProblemOpen(true)} data-testid="button-add-problem">
+              <Button
+                size="sm"
+                onClick={() => {
+                  setNewProblemText("");
+                  setAddProblemOpen(true);
+                }}
+                data-testid="button-add-problem"
+              >
                 <Plus className="w-3.5 h-3.5 mr-1.5" /> Add Problem
               </Button>
             )}
@@ -1920,7 +1933,7 @@ export default function PatientDetailPage() {
                               onClick={() => {
                                 setEditProblem(p);
                                 setEditProblemForm({
-                                  problem: p.problem,
+                                  problemText: p.problem,
                                   problemStartDate: startDate ? String(startDate).slice(0, 10) : "",
                                   symptoms: symptoms ? String(symptoms) : "",
                                   resolution: "current",
@@ -2554,7 +2567,14 @@ export default function PatientDetailPage() {
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm text-muted-foreground">Current and past problems</span>
                 {canAddNote && (
-                  <Button size="sm" variant="outline" onClick={() => setAddPastProblemOpen(true)}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setNewPastProblemText("");
+                      setAddPastProblemOpen(true);
+                    }}
+                  >
                     <Plus className="w-3.5 h-3.5 mr-1.5" /> Add past problem
                   </Button>
                 )}
@@ -2592,7 +2612,7 @@ export default function PatientDetailPage() {
                                       onClick={() => {
                                         setEditProblem(p);
                                         setEditProblemForm({
-                                          problem: p.problem,
+                                          problemText: p.problem,
                                           problemStartDate: startDate ? String(startDate).slice(0, 10) : "",
                                           symptoms: sym ? String(sym) : "",
                                           resolution: (resolution === "current" ? "current" : "resolved") as "current" | "resolved",
@@ -3147,16 +3167,25 @@ export default function PatientDetailPage() {
       </Tabs>
       </div>
 
-      <Dialog open={addProblemOpen} onOpenChange={(open) => { if (!open) { setNewProblemStartDate(""); setNewProblemSymptoms(""); } setAddProblemOpen(open); }}>
+      <Dialog
+        open={addProblemOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setNewProblemStartDate("");
+            setNewProblemSymptoms("");
+            setNewProblemText("");
+          }
+          setAddProblemOpen(open);
+        }}
+      >
         <DialogContent>
           <DialogHeader><DialogTitle>Add Problem</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Problem description</Label>
-              <Input
-                value={newProblem}
-                onChange={(e) => setNewProblem(e.target.value)}
-                placeholder="e.g. Hypertension, Type 2 diabetes"
+              <Label>Problem</Label>
+              <AfricanPatientProblemSelect
+                value={newProblemText}
+                onChange={setNewProblemText}
                 data-testid="input-problem"
               />
             </div>
@@ -3183,12 +3212,12 @@ export default function PatientDetailPage() {
             <Button variant="secondary" onClick={() => setAddProblemOpen(false)}>Cancel</Button>
             <Button
               onClick={() => addProblemMutation.mutate({
-                problem: newProblem,
+                problem: newProblemText,
                 status: "active",
                 problemStartDate: newProblemStartDate.trim() || undefined,
                 symptoms: newProblemSymptoms.trim() || undefined,
               })}
-              disabled={!newProblem.trim() || addProblemMutation.isPending}
+              disabled={!newProblemText.trim() || addProblemMutation.isPending}
               data-testid="button-submit-problem"
             >
               {addProblemMutation.isPending ? "Adding..." : "Add Problem"}
@@ -3197,16 +3226,25 @@ export default function PatientDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={addPastProblemOpen} onOpenChange={(open) => { setAddPastProblemOpen(open); if (!open) { setNewPastProblemStartDate(""); setNewPastProblemResolution("resolved"); } }}>
+      <Dialog
+        open={addPastProblemOpen}
+        onOpenChange={(open) => {
+          setAddPastProblemOpen(open);
+          if (!open) {
+            setNewPastProblemStartDate("");
+            setNewPastProblemResolution("resolved");
+            setNewPastProblemText("");
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader><DialogTitle>Add past problem</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Past problem description</Label>
-              <Input
-                value={newPastProblem}
-                onChange={(e) => setNewPastProblem(e.target.value)}
-                placeholder="e.g. Resolved UTI, Childhood asthma"
+              <Label>Past problem</Label>
+              <AfricanPatientProblemSelect
+                value={newPastProblemText}
+                onChange={setNewPastProblemText}
               />
             </div>
             <div className="space-y-2">
@@ -3234,12 +3272,12 @@ export default function PatientDetailPage() {
             <Button variant="secondary" onClick={() => setAddPastProblemOpen(false)}>Cancel</Button>
             <Button
               onClick={() => addProblemMutation.mutate({
-                problem: newPastProblem,
+                problem: newPastProblemText,
                 status: "past",
                 problemStartDate: newPastProblemStartDate.trim() || undefined,
                 resolution: newPastProblemResolution,
               })}
-              disabled={!newPastProblem.trim() || addProblemMutation.isPending}
+              disabled={!newPastProblemText.trim() || addProblemMutation.isPending}
             >
               {addProblemMutation.isPending ? "Adding..." : "Add past problem"}
             </Button>
@@ -3247,16 +3285,24 @@ export default function PatientDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={editProblemOpen} onOpenChange={(open) => { if (!open) { setEditProblem(null); setEditProblemForm({ problem: "", problemStartDate: "", symptoms: "", resolution: "resolved" }); } setEditProblemOpen(open); }}>
+      <Dialog
+        open={editProblemOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditProblem(null);
+            setEditProblemForm({ problemText: "", problemStartDate: "", symptoms: "", resolution: "resolved" });
+          }
+          setEditProblemOpen(open);
+        }}
+      >
         <DialogContent>
           <DialogHeader><DialogTitle>Edit problem</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Problem description</Label>
-              <Input
-                value={editProblemForm.problem}
-                onChange={(e) => setEditProblemForm((f) => ({ ...f, problem: e.target.value }))}
-                placeholder="e.g. Hypertension"
+              <Label>Problem</Label>
+              <AfricanPatientProblemSelect
+                value={editProblemForm.problemText}
+                onChange={(v) => setEditProblemForm((f) => ({ ...f, problemText: v }))}
               />
             </div>
             <div className="space-y-2">
@@ -3295,13 +3341,13 @@ export default function PatientDetailPage() {
             <Button
               onClick={() => editProblem && updateProblemMutation.mutate({
                 problemId: editProblem.id,
-                problem: editProblemForm.problem,
+                problem: editProblemForm.problemText,
                 problemStartDate: editProblemForm.problemStartDate.trim() || undefined,
                 symptoms: editProblemForm.symptoms,
                 resolution: editProblemForm.resolution,
                 status: editProblemForm.resolution === "resolved" ? "past" : undefined,
               })}
-              disabled={!editProblem || !editProblemForm.problem.trim() || updateProblemMutation.isPending}
+              disabled={!editProblem || !editProblemForm.problemText.trim() || updateProblemMutation.isPending}
             >
               {updateProblemMutation.isPending ? "Saving..." : "Save changes"}
             </Button>
