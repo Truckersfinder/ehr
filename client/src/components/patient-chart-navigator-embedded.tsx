@@ -18,6 +18,15 @@ import {
   ScrollText,
   PhoneCall,
 } from "lucide-react";
+import {
+  PATIENT_CHART_FORMS_CONSENT_TAB,
+  patientChartReviewHref as chartReviewHrefFromTab,
+} from "@/components/patient-chart-review-constants";
+import {
+  getPatientChartReviewNav,
+  getPatientChartVisitDocNav,
+  visitDocActivityIdToTab,
+} from "@/lib/patient-chart-activity-ui";
 
 type Props = {
   patientId: string;
@@ -40,7 +49,7 @@ function NavLink({
     <Link href={href} className="block w-full">
       <a
         className={cn(
-          "inline-flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 h-auto text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          "flex w-full min-w-0 items-center justify-start gap-2 rounded-md px-3 py-2 h-auto text-sm font-medium text-left ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
           "bg-transparent hover:bg-accent text-foreground",
           active && "bg-accent"
         )}
@@ -56,6 +65,27 @@ function NavLink({
  * Review + Visit documentation links shown beside toolbar routes when a patient
  * chart is active (session). Navigates to the patient chart with ?tab=…
  */
+function reviewActivityIdToTab(id: string): string {
+  switch (id) {
+    case "pc_demographics":
+      return "demographics";
+    case "pc_patient_call":
+      return "patient-call";
+    case "pc_overview":
+      return "overview";
+    case "pc_history":
+      return "history";
+    case "pc_immunization":
+      return "immunization";
+    case "pc_results":
+      return "results";
+    case "pc_forms_consent":
+      return PATIENT_CHART_FORMS_CONSENT_TAB;
+    default:
+      return "overview";
+  }
+}
+
 export function PatientChartNavigatorEmbedded({ patientId, showVisitDocumentation }: Props) {
   const [location] = useLocation();
   const { token, user } = useAuth();
@@ -67,6 +97,11 @@ export function PatientChartNavigatorEmbedded({ patientId, showVisitDocumentatio
   const activeTab = search || "overview";
   const pathOnly = location.split("?")[0];
   const onDemographicsPage = pathOnly === `/patients/${patientId}/demographics`;
+  const onFormsConsentTab =
+    pathOnly === `/patients/${patientId}` && activeTab === PATIENT_CHART_FORMS_CONSENT_TAB;
+
+  const reviewNavItems = getPatientChartReviewNav(user);
+  const visitDocNavItems = getPatientChartVisitDocNav(user);
 
   const base = `/patients/${patientId}`;
 
@@ -119,44 +154,38 @@ export function PatientChartNavigatorEmbedded({ patientId, showVisitDocumentatio
             Review
           </p>
           <div className="flex flex-col gap-0.5">
-            <NavLink href={`${base}/demographics`} active={onDemographicsPage} data-testid="tab-demographics-embedded">
-              <User className="w-4 h-4 shrink-0" /> Demographics
-            </NavLink>
-            <NavLink
-              href={`${base}?tab=patient-call`}
-              active={!onDemographicsPage && activeTab === "patient-call"}
-              data-testid="tab-patient-call-embedded"
-            >
-              <PhoneCall className="w-4 h-4 shrink-0" /> Patient call
-            </NavLink>
-            <NavLink
-              href={`${base}?tab=overview`}
-              active={!onDemographicsPage && activeTab === "overview"}
-              data-testid="tab-overview-embedded"
-            >
-              <LayoutGrid className="w-4 h-4 shrink-0" /> Overview
-            </NavLink>
-            <NavLink
-              href={`${base}?tab=history`}
-              active={!onDemographicsPage && activeTab === "history"}
-              data-testid="tab-history-embedded"
-            >
-              <History className="w-4 h-4 shrink-0" /> History
-            </NavLink>
-            <NavLink
-              href={`${base}?tab=immunization`}
-              active={!onDemographicsPage && activeTab === "immunization"}
-              data-testid="tab-immunization-embedded"
-            >
-              <ShieldCheck className="w-4 h-4 shrink-0" /> Immunization
-            </NavLink>
-            <NavLink
-              href={`${base}?tab=results`}
-              active={!onDemographicsPage && activeTab === "results"}
-              data-testid="tab-results-embedded"
-            >
-              <FileCheck className="w-4 h-4 shrink-0" /> Results
-            </NavLink>
+            {reviewNavItems.map((entry) => {
+              const tab = reviewActivityIdToTab(entry.id);
+              const href = chartReviewHrefFromTab(patientId, tab);
+              const active =
+                tab === "demographics"
+                  ? onDemographicsPage
+                  : !onDemographicsPage && (tab === PATIENT_CHART_FORMS_CONSENT_TAB ? onFormsConsentTab : activeTab === tab);
+              const Icon =
+                entry.id === "pc_demographics"
+                  ? User
+                  : entry.id === "pc_patient_call"
+                    ? PhoneCall
+                    : entry.id === "pc_overview"
+                      ? LayoutGrid
+                      : entry.id === "pc_history"
+                        ? History
+                        : entry.id === "pc_immunization"
+                          ? ShieldCheck
+                          : entry.id === "pc_results"
+                            ? FileCheck
+                            : FileText;
+              return (
+                <NavLink
+                  key={entry.id}
+                  href={href}
+                  active={active}
+                  data-testid={`tab-${entry.id.replace(/^pc_/, "")}-embedded`}
+                >
+                  <Icon className="w-4 h-4 shrink-0" /> {entry.label}
+                </NavLink>
+              );
+            })}
           </div>
         </div>
         {docSectionVisible && (
@@ -165,43 +194,57 @@ export function PatientChartNavigatorEmbedded({ patientId, showVisitDocumentatio
               Visit documentation
             </p>
             <div className="flex flex-col gap-0.5">
-              <NavLink href={`${base}?tab=allergy`} active={activeTab === "allergy"} data-testid="tab-allergy-embedded">
-                <AlertTriangle className="w-4 h-4 shrink-0" /> Allergy
-              </NavLink>
-              <NavLink href={`${base}?tab=problems`} active={activeTab === "problems"} data-testid="tab-problems-embedded">
-                <ListChecks className="w-4 h-4 shrink-0" /> Problems List
-              </NavLink>
-              <NavLink href={`${base}?tab=vitals`} active={activeTab === "vitals"} data-testid="tab-vitals-embedded">
-                <Activity className="w-4 h-4 shrink-0" /> Vitals
-              </NavLink>
-              <NavLink
-                href={`${base}?tab=medication`}
-                active={activeTab === "medication"}
-                data-testid="tab-medication-embedded"
-              >
-                <Pill className="w-4 h-4 shrink-0" /> Medication
-              </NavLink>
-              <NavLink href={`${base}?tab=orders`} active={activeTab === "orders"} data-testid="tab-orders-embedded">
-                <ClipboardList className="w-4 h-4 shrink-0" /> Orders
-              </NavLink>
-              <NavLink href={`${base}?tab=notes`} active={activeTab === "notes"} data-testid="tab-notes-embedded">
-                <FileText className="w-4 h-4 shrink-0" /> Notes
-              </NavLink>
+              {visitDocNavItems
+                .filter((entry) => entry.id !== "pc_visit_summary")
+                .map((entry) => {
+                  const tab = visitDocActivityIdToTab(entry.id);
+                  const href = `${base}?tab=${encodeURIComponent(tab)}`;
+                  const Icon =
+                    entry.id === "pc_allergy"
+                      ? AlertTriangle
+                      : entry.id === "pc_problems"
+                        ? ListChecks
+                        : entry.id === "pc_vitals"
+                          ? Activity
+                          : entry.id === "pc_medication"
+                            ? Pill
+                            : entry.id === "pc_orders"
+                              ? ClipboardList
+                              : FileText;
+                  return (
+                    <NavLink
+                      key={entry.id}
+                      href={href}
+                      active={activeTab === tab}
+                      data-testid={`tab-${tab}-embedded`}
+                    >
+                      <Icon className="w-4 h-4 shrink-0" /> {entry.label}
+                    </NavLink>
+                  );
+                })}
             </div>
-            {showVisitSummaryLink && (
-              <div className="mt-4">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Visit Summary</p>
-                <div className="flex flex-col gap-0.5">
-                  <NavLink
-                    href={`${base}?tab=visit-summary`}
-                    active={activeTab === "visit-summary"}
-                    data-testid="tab-visit-summary-embedded"
-                  >
-                    <ScrollText className="w-4 h-4 shrink-0" /> Visit Summary
-                  </NavLink>
-                </div>
-              </div>
-            )}
+            {showVisitSummaryLink ? (
+              (() => {
+                const vs = visitDocNavItems.find((e) => e.id === "pc_visit_summary");
+                if (!vs) return null;
+                return (
+                  <div className="mt-4">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">
+                      Visit Summary
+                    </p>
+                    <div className="flex flex-col gap-0.5">
+                      <NavLink
+                        href={`${base}?tab=visit-summary`}
+                        active={activeTab === "visit-summary"}
+                        data-testid="tab-visit-summary-embedded"
+                      >
+                        <ScrollText className="w-4 h-4 shrink-0" /> {vs.label}
+                      </NavLink>
+                    </div>
+                  </div>
+                );
+              })()
+            ) : null}
           </div>
         )}
       </div>

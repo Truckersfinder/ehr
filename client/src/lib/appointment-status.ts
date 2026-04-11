@@ -19,3 +19,9 @@ export function appointmentStatusBadgeClass(status: string): string {
 export function formatAppointmentStatusLabel(status: string): string {
   return status.replace(/_/g, " ");
 }
+
+/** Active admission row: display is not the underlying appointment status (e.g. checked_in). */
+export const ADMITTED_PATIENT_STATUS_LABEL = "Admitted";
+
+export const ADMITTED_PATIENT_STATUS_BADGE_CLASS =
+  "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200";

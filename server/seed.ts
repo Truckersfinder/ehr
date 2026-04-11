@@ -10,7 +10,7 @@ export async function ensureSecurityUser() {
   await storage.createUser({
     username: "Security123",
     password: hashPassword("Security123"),
-    fullName: "Security",
+    fullName: "Systems administrator",
     role: "security",
     facilityId: facility.id,
     email: "security@onehealth.ke",
@@ -46,7 +46,7 @@ export async function seedDatabase() {
   const admin = await storage.createUser({
     username: "admin",
     password: hashPassword("admin123"),
-    fullName: "System Administrator",
+    fullName: "Clinic Administrator",
     role: "super_admin",
     facilityId: facility.id,
     email: "admin@onehealth.ke",
@@ -88,17 +88,6 @@ export async function seedDatabase() {
   });
 
   await storage.createUser({
-    username: "pharmacist",
-    password: hashPassword("pharm123"),
-    fullName: "Peter Kamau",
-    role: "pharmacist",
-    facilityId: facility.id,
-    email: "kamau@onehealth.ke",
-    phone: "+254700000005",
-    isActive: true,
-  });
-
-  await storage.createUser({
     username: "reception",
     password: hashPassword("reception123"),
     fullName: "Faith Njeri",
@@ -112,7 +101,7 @@ export async function seedDatabase() {
   await storage.createUser({
     username: "Security123",
     password: hashPassword("Security123"),
-    fullName: "Security",
+    fullName: "Systems administrator",
     role: "security",
     facilityId: facility.id,
     email: "security@onehealth.ke",

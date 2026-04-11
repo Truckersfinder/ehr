@@ -2,6 +2,10 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+/** Default styling for all `<TableHead>` labels (uppercase, tracking, muted). */
+export const TABLE_HEADER_CELL_CLASS =
+  "text-xs font-semibold uppercase tracking-wider text-muted-foreground";
+
 const Table = React.forwardRef<
   HTMLTableElement,
   React.HTMLAttributes<HTMLTableElement>
@@ -73,7 +77,8 @@ const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      "h-12 px-4 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0",
+      "h-12 px-4 text-left align-middle [&:has([role=checkbox])]:pr-0",
+      TABLE_HEADER_CELL_CLASS,
       className
     )}
     {...props}

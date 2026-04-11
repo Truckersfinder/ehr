@@ -19,11 +19,13 @@ import { CountrySelect } from "@/components/country-select";
 import { EmergencyContactRelationshipSelect } from "@/components/emergency-contact-relationship-select";
 import { ArrowLeft } from "lucide-react";
 import type { Appointment, Patient } from "@shared/schema";
+import { useTranslation } from "react-i18next";
 
 /**
  * Full-page check-in flow (replaces the former modal on Appointments).
  */
 export default function CheckInAppointmentPage() {
+  const { t, i18n } = useTranslation();
   const [, params] = useRoute("/appointments/check-in/:appointmentId");
   const appointmentId = params?.appointmentId;
   const [, navigate] = useLocation();
@@ -136,10 +138,14 @@ export default function CheckInAppointmentPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       queryClient.invalidateQueries({ queryKey: ["/api/patients"] });
-      toast({ title: "Patient checked in", description: "Clinician and nurse schedules now show Checked in." });
+      toast({
+        title: i18n.t("pages.checkIn.toastCheckedIn"),
+        description: i18n.t("pages.checkIn.toastCheckedInDesc"),
+      });
       navigate("/appointments");
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: i18n.t("pages.checkIn.toastError"), description: e.message, variant: "destructive" }),
   });
 
   const loading = apptLoading || patientLoading;
@@ -148,9 +154,9 @@ export default function CheckInAppointmentPage() {
   if (!appointmentId) {
     return (
       <div className="p-6">
-        <p className="text-muted-foreground">Invalid link.</p>
-        <Button variant="link" className="px-0 mt-2" onClick={goBack}>
-          Back to appointments
+        <p className="text-muted-foreground">{t("pages.checkIn.invalidLink")}</p>
+        <Button variant="ghost" className="px-0 mt-2 justify-start" onClick={goBack}>
+          {t("pages.checkIn.backToAppointments")}
         </Button>
       </div>
     );
@@ -160,10 +166,10 @@ export default function CheckInAppointmentPage() {
     return (
       <div className="p-6 max-w-lg">
         <p className="text-destructive">
-          {apptError ? "Could not load this appointment." : "Could not load patient for this appointment."}
+          {apptError ? t("pages.checkIn.couldNotLoadAppointment") : t("pages.checkIn.couldNotLoadPatient")}
         </p>
         <Button variant="outline" className="mt-4" onClick={goBack}>
-          Back to appointments
+          {t("pages.checkIn.backToAppointments")}
         </Button>
       </div>
     );
@@ -173,11 +179,11 @@ export default function CheckInAppointmentPage() {
     return (
       <div className="p-6 max-w-lg space-y-4">
         <p className="text-muted-foreground">
-          This appointment can’t be checked in (status: <strong>{selectedAppt.status}</strong>). Only{" "}
-          <strong>scheduled</strong> or <strong>confirmed</strong> visits can be checked in here.
+          {t("pages.checkIn.cannotCheckInPrefix")} <strong>{selectedAppt.status}</strong>
+          {t("pages.checkIn.cannotCheckInSuffix")}
         </p>
         <Button variant="outline" onClick={goBack}>
-          Back to appointments
+          {t("pages.checkIn.backToAppointments")}
         </Button>
       </div>
     );
@@ -188,41 +194,41 @@ export default function CheckInAppointmentPage() {
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" variant="ghost" size="sm" onClick={goBack} data-testid="check-in-back">
           <ArrowLeft className="w-4 h-4 mr-2" />
-          Back
+          {t("pages.checkIn.back")}
         </Button>
       </div>
 
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Check in:  verify patient information & payment</h1>
+        <h1 className="text-2xl font-bold tracking-tight">{t("pages.checkIn.heading")}</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Confirm demographics and payment, then complete check-in.
+          {t("pages.checkIn.subheading")}
         </p>
       </div>
 
       {loading ? (
-        <p className="text-muted-foreground py-8">Loading…</p>
+        <p className="text-muted-foreground py-8">{t("pages.checkIn.loading")}</p>
       ) : selectedPatient ? (
         <>
           <div className="space-y-6">
             <div>
-              <h2 className="text-sm font-semibold mb-3 border-b pb-2">Patient demographics (editable)</h2>
+              <h2 className="text-sm font-semibold mb-3 border-b pb-2">{t("pages.checkIn.sectionDemographics")}</h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label>First name</Label>
+                  <Label>{t("pages.checkIn.firstName")}</Label>
                   <Input
                     value={patientForm.firstName ?? ""}
                     onChange={(e) => setPatientForm((f) => ({ ...f, firstName: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>Last name</Label>
+                  <Label>{t("pages.checkIn.lastName")}</Label>
                   <Input
                     value={patientForm.lastName ?? ""}
                     onChange={(e) => setPatientForm((f) => ({ ...f, lastName: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>Date of birth</Label>
+                  <Label>{t("pages.checkIn.dateOfBirth")}</Label>
                   <Input
                     type="date"
                     value={patientForm.dateOfBirth ? String(patientForm.dateOfBirth).slice(0, 10) : ""}
@@ -230,7 +236,7 @@ export default function CheckInAppointmentPage() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>Gender</Label>
+                  <Label>{t("pages.checkIn.gender")}</Label>
                   <Select
                     value={patientForm.gender ?? "male"}
                     onValueChange={(v) => setPatientForm((f) => ({ ...f, gender: v as Patient["gender"] }))}
@@ -239,21 +245,21 @@ export default function CheckInAppointmentPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="male">Male</SelectItem>
-                      <SelectItem value="female">Female</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
+                      <SelectItem value="male">{t("pages.checkIn.genderMale")}</SelectItem>
+                      <SelectItem value="female">{t("pages.checkIn.genderFemale")}</SelectItem>
+                      <SelectItem value="other">{t("pages.checkIn.genderOther")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <Label>Phone</Label>
+                  <Label>{t("pages.checkIn.phone")}</Label>
                   <Input
                     value={patientForm.phone ?? ""}
                     onChange={(e) => setPatientForm((f) => ({ ...f, phone: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>Email</Label>
+                  <Label>{t("pages.checkIn.email")}</Label>
                   <Input
                     value={patientForm.email ?? ""}
                     onChange={(e) => setPatientForm((f) => ({ ...f, email: e.target.value }))}

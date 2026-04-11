@@ -22,11 +22,22 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/lib/auth";
-import { appointmentStatusBadgeClass, formatAppointmentStatusLabel } from "@/lib/appointment-status";
+import {
+  ADMITTED_PATIENT_STATUS_BADGE_CLASS,
+  ADMITTED_PATIENT_STATUS_LABEL,
+  appointmentStatusBadgeClass,
+  formatAppointmentStatusLabel,
+} from "@/lib/appointment-status";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ChevronLeft, ChevronRight, CalendarClock, UserCheck, XCircle } from "lucide-react";
 import type { Appointment, Patient, User as UserType, CommonVisitReason } from "@shared/schema";
+import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
+import { EmptyState } from "@/components/empty-state";
+import { excludeAppointmentsWithActiveAdmission } from "@/lib/exclude-admitted-appointments";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableGridHeaderButton } from "@/components/ui/sortable-table-head";
+import { useTranslation } from "react-i18next";
 
 /** Match saved reason text to a common-reason option (exact or "Label - detail" style). */
 function matchingCommonVisitReasonLabel(
@@ -52,8 +63,9 @@ type SortKey =
   | "clinician"
   | "duration"
   | "status"
-  | "reason"
-  | "notes";
+  | "reason";
+
+type AdmittedSortKey = "patient" | "mrn" | "clinician" | "status" | "reason" | "bed" | "admittedAt";
 
 type ApptRow = Appointment & {
   patientName: string;
@@ -61,7 +73,21 @@ type ApptRow = Appointment & {
   clinicianName: string;
 };
 
+type ActiveAdmissionRow = {
+  id: string;
+  patientId: string;
+  appointmentId: string | null;
+  bedId: string;
+  bedName: string;
+  admittedAt: string | Date | null;
+  clinicianId: string;
+  scheduledDate: string | Date;
+  status: string;
+  reason: string | null;
+};
+
 export default function ReceptionAppointmentsPage() {
+  const { t } = useTranslation();
   const [, navigate] = useLocation();
   const { token } = useAuth();
   const { toast } = useToast();
@@ -69,8 +95,12 @@ export default function ReceptionAppointmentsPage() {
   const [viewingDate, setViewingDate] = useState(() => new Date(today.getFullYear(), today.getMonth(), today.getDate()));
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>("time");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const { sortKey, sortDir, toggleSort } = useTableSort<SortKey>("time", "asc");
+  const {
+    sortKey: admittedSortKey,
+    sortDir: admittedSortDir,
+    toggleSort: toggleAdmittedSort,
+  } = useTableSort<AdmittedSortKey>("admittedAt", "desc");
   const [rescheduleOpen, setRescheduleOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -80,7 +110,6 @@ export default function ReceptionAppointmentsPage() {
     scheduledTime: "09:00",
     duration: 30,
     reason: "",
-    notes: "",
   });
 
   const viewingDayStart = startOfDay(viewingDate).toISOString();
@@ -109,6 +138,28 @@ export default function ReceptionAppointmentsPage() {
       return res.json();
     },
   });
+
+  const { data: admissions = [], isLoading: admissionsLoading } = useQuery<ActiveAdmissionRow[]>({
+    queryKey: ["/api/admissions/active"],
+    queryFn: async () => {
+      const res = await fetch("/api/admissions/active", { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!token,
+  });
+
+  /** Overnight walk-ins: show under Admitted Patients only, not in this table. */
+  const appointmentsForSchedule = useMemo(
+    () => excludeAppointmentsWithActiveAdmission(appointments, admissions),
+    [appointments, admissions],
+  );
+
+  useEffect(() => {
+    if (selectedId && !appointmentsForSchedule.some((a) => a.id === selectedId)) {
+      setSelectedId(null);
+    }
+  }, [selectedId, appointmentsForSchedule]);
 
   const { data: patients = [] } = useQuery<Patient[]>({
     queryKey: ["/api/patients"],
@@ -161,7 +212,7 @@ export default function ReceptionAppointmentsPage() {
   const clinicians = users.filter((u) => u.role === "clinician");
 
   const rows: ApptRow[] = useMemo(() => {
-    return appointments.map((apt) => {
+    return appointmentsForSchedule.map((apt) => {
       const p = patientMap.get(apt.patientId);
       const c = userMap.get(apt.clinicianId);
       return {
@@ -171,7 +222,7 @@ export default function ReceptionAppointmentsPage() {
         clinicianName: c?.fullName ?? "—",
       };
     });
-  }, [appointments, patientMap, userMap]);
+  }, [appointmentsForSchedule, patientMap, userMap]);
 
   const sortedRows = useMemo(() => {
     const mult = sortDir === "asc" ? 1 : -1;
@@ -200,9 +251,6 @@ export default function ReceptionAppointmentsPage() {
         case "reason":
           cmp = (a.reason ?? "").localeCompare(b.reason ?? "");
           break;
-        case "notes":
-          cmp = (a.notes ?? "").localeCompare(b.notes ?? "");
-          break;
         default:
           cmp = 0;
       }
@@ -211,7 +259,7 @@ export default function ReceptionAppointmentsPage() {
     return list;
   }, [rows, sortKey, sortDir]);
 
-  const selectedAppt = selectedId ? appointments.find((a) => a.id === selectedId) : undefined;
+  const selectedAppt = selectedId ? appointmentsForSchedule.find((a) => a.id === selectedId) : undefined;
   const selectedPatient = selectedAppt ? patientMap.get(selectedAppt.patientId) : undefined;
 
   const canStartCheckIn =
@@ -237,7 +285,6 @@ export default function ReceptionAppointmentsPage() {
       scheduledTime: format(d, "HH:mm"),
       duration: selectedAppt.duration ?? 30,
       reason: selectedAppt.reason ?? "",
-      notes: selectedAppt.notes ?? "",
     });
   }, [rescheduleOpen, selectedAppt]);
 
@@ -257,7 +304,6 @@ export default function ReceptionAppointmentsPage() {
           clinicianId: rescheduleForm.clinicianId,
           duration: rescheduleForm.duration,
           reason: rescheduleForm.reason.trim() || null,
-          notes: rescheduleForm.notes.trim() || null,
           status: "scheduled",
         },
       },
@@ -301,24 +347,46 @@ export default function ReceptionAppointmentsPage() {
     );
   };
 
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else {
-      setSortKey(key);
-      setSortDir(key === "time" ? "asc" : "asc");
-    }
-  };
-
-  const headerBtn = (key: SortKey, label: string, className = "") => (
-    <button
-      type="button"
-      onClick={() => toggleSort(key)}
-      className={`text-left font-semibold text-xs uppercase tracking-wide text-foreground hover:bg-muted/80 px-2 py-2 border-r border-border last:border-r-0 w-full whitespace-nowrap ${className}`}
-    >
-      {label}
-      {sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
-    </button>
-  );
+  const sortedAdmissions = useMemo(() => {
+    const list = [...admissions];
+    const mult = admittedSortDir === "asc" ? 1 : -1;
+    list.sort((a, b) => {
+      const pA = patientMap.get(a.patientId);
+      const pB = patientMap.get(b.patientId);
+      const cA = userMap.get(a.clinicianId);
+      const cB = userMap.get(b.clinicianId);
+      const patientName = (p: Patient | undefined) => (p ? `${p.firstName} ${p.lastName}` : "—");
+      let cmp = 0;
+      switch (admittedSortKey) {
+        case "patient":
+          cmp = patientName(pA).localeCompare(patientName(pB));
+          break;
+        case "mrn":
+          cmp = (pA?.mrn ?? "").localeCompare(pB?.mrn ?? "");
+          break;
+        case "clinician":
+          cmp = (cA?.fullName ?? "").localeCompare(cB?.fullName ?? "");
+          break;
+        case "status":
+          cmp = a.status.localeCompare(b.status);
+          break;
+        case "reason":
+          cmp = (a.reason ?? "").localeCompare(b.reason ?? "");
+          break;
+        case "bed":
+          cmp = a.bedName.localeCompare(b.bedName);
+          break;
+        case "admittedAt":
+          cmp =
+            new Date(a.admittedAt ?? 0).getTime() - new Date(b.admittedAt ?? 0).getTime();
+          break;
+        default:
+          cmp = 0;
+      }
+      return cmp * mult;
+    });
+    return list;
+  }, [admissions, admittedSortKey, admittedSortDir, patientMap, userMap]);
 
   const goToCheckIn = () => {
     if (!selectedAppt || !selectedPatient) return;
@@ -332,7 +400,7 @@ export default function ReceptionAppointmentsPage() {
     <div className="p-4 md:p-6 space-y-4 max-w-[1600px] mx-auto" data-testid="reception-appointments-page">
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Appointments</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t("pages.appointments.title")}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-1.5 justify-end w-full sm:w-auto">
           <Button
@@ -341,7 +409,7 @@ export default function ReceptionAppointmentsPage() {
             size="sm"
             className="h-8 w-8 min-h-8 p-0 shrink-0 [&_svg]:size-3.5"
             onClick={() => setViewingDate((d) => subDays(d, 1))}
-            aria-label="Previous day"
+            aria-label={t("pages.receptionAppointments.previousDay")}
           >
             <ChevronLeft />
           </Button>
@@ -349,7 +417,7 @@ export default function ReceptionAppointmentsPage() {
             <PopoverTrigger asChild>
               <Button type="button" variant="outline" size="sm" className="min-w-[168px] h-8 text-xs">
                 {format(viewingDate, "EEE, MMM d, yyyy")}
-                {isToday && <span className="text-muted-foreground ml-1">(today)</span>}
+                {isToday && <span className="text-muted-foreground ml-1">{t("pages.receptionAppointments.today")}</span>}
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="end">
@@ -370,7 +438,7 @@ export default function ReceptionAppointmentsPage() {
             size="sm"
             className="h-8 w-8 min-h-8 p-0 shrink-0 [&_svg]:size-3.5"
             onClick={() => setViewingDate((d) => addDays(d, 1))}
-            aria-label="Next day"
+            aria-label={t("pages.receptionAppointments.nextDay")}
           >
             <ChevronRight />
           </Button>
@@ -380,7 +448,7 @@ export default function ReceptionAppointmentsPage() {
       <Dialog open={rescheduleOpen} onOpenChange={setRescheduleOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Reschedule appointment</DialogTitle>
+            <DialogTitle>{t("pages.receptionAppointments.rescheduleAppointment")}</DialogTitle>
           </DialogHeader>
           <form
             className="space-y-4"
@@ -447,7 +515,7 @@ export default function ReceptionAppointmentsPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Visit reason</Label>
+              <Label>{APPOINTMENT_REASON_FOR_VISIT_LABEL}</Label>
               <Select
                 value={matchingCommonVisitReasonLabel(rescheduleForm.reason, visitReasons)}
                 onValueChange={(v) => setRescheduleForm((f) => ({ ...f, reason: v }))}
@@ -469,16 +537,6 @@ export default function ReceptionAppointmentsPage() {
                 className="resize-none"
                 placeholder="Reason for visit…"
                 rows={2}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Appointment note</Label>
-              <Textarea
-                value={rescheduleForm.notes}
-                onChange={(e) => setRescheduleForm((f) => ({ ...f, notes: e.target.value }))}
-                className="resize-none"
-                placeholder="Note for this appointment"
-                rows={3}
               />
             </div>
             <div className="flex justify-end gap-2 pt-2">
@@ -538,17 +596,22 @@ export default function ReceptionAppointmentsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Card className="border-2 shadow-sm">
+      <Card className="border-2 shadow-sm" data-testid="reception-same-day-visits">
         <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
-          <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-            <p className="min-w-0 text-sm text-muted-foreground">
-              {sortedRows.length} appointment{sortedRows.length !== 1 ? "s" : ""} · Selected:{" "}
-              {selectedPatient ? `${selectedPatient.firstName} ${selectedPatient.lastName}` : "—"}
-            </p>
+          <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">Same Day Visits</p>
+              <p className="text-xs text-muted-foreground">
+                Outpatient appointments for the day you are viewing. Select a row to reschedule, cancel, or check in.
+              </p>
+            </div>
             <div
               className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:w-auto"
               data-testid="reception-appt-actions"
             >
+              <Badge variant="secondary" className="text-[10px]">
+                {sortedRows.length} appointment{sortedRows.length !== 1 ? "s" : ""}
+              </Badge>
               <Button
                 type="button"
                 variant="outline"
@@ -591,19 +654,61 @@ export default function ReceptionAppointmentsPage() {
           {isLoading ? (
             <p className="p-8 text-center text-muted-foreground">Loading…</p>
           ) : (
-            <div className="min-w-[900px]">
+            <div className="min-w-[780px]">
               <div
-                className="grid grid-cols-[5.5rem_1fr_6.5rem_1fr_4rem_6.5rem_1fr_1fr] bg-muted/60 border-b border-border"
+                className="grid grid-cols-[5.5rem_1fr_6.5rem_1fr_4rem_6.5rem_1fr] bg-muted/60 border-b border-border"
                 role="row"
               >
-                {headerBtn("time", "Time")}
-                {headerBtn("patient", "Patient")}
-                {headerBtn("mrn", "MRN")}
-                {headerBtn("clinician", "Clinician")}
-                {headerBtn("duration", "Dur.", "text-center")}
-                {headerBtn("status", "Status")}
-                {headerBtn("reason", "Reason")}
-                {headerBtn("notes", "APT note")}
+                <SortableGridHeaderButton
+                  active={sortKey === "time"}
+                  sortDir={sortDir}
+                  onSort={() => toggleSort("time")}
+                >
+                  Time
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={sortKey === "patient"}
+                  sortDir={sortDir}
+                  onSort={() => toggleSort("patient")}
+                >
+                  Patient
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={sortKey === "mrn"}
+                  sortDir={sortDir}
+                  onSort={() => toggleSort("mrn")}
+                >
+                  MRN
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={sortKey === "clinician"}
+                  sortDir={sortDir}
+                  onSort={() => toggleSort("clinician")}
+                >
+                  Clinician
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={sortKey === "duration"}
+                  sortDir={sortDir}
+                  onSort={() => toggleSort("duration")}
+                  className="justify-center"
+                >
+                  Dur.
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={sortKey === "status"}
+                  sortDir={sortDir}
+                  onSort={() => toggleSort("status")}
+                >
+                  Status
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={sortKey === "reason"}
+                  sortDir={sortDir}
+                  onSort={() => toggleSort("reason")}
+                >
+                  {APPOINTMENT_REASON_FOR_VISIT_LABEL}
+                </SortableGridHeaderButton>
               </div>
               {sortedRows.length === 0 ? (
                 <div className="p-12 text-center text-muted-foreground text-sm">No appointments on this day.</div>
@@ -621,7 +726,7 @@ export default function ReceptionAppointmentsPage() {
                         navigate(`/patients/${apt.patientId}?tab=overview&chartEntry=browse`);
                       }}
                       title="Double-click to open patient chart"
-                      className={`grid grid-cols-[5.5rem_1fr_6.5rem_1fr_4rem_6.5rem_1fr_1fr] w-full text-left text-xs font-mono border-b border-border last:border-b-0 hover:bg-muted/30 ${
+                      className={`grid grid-cols-[5.5rem_1fr_6.5rem_1fr_4rem_6.5rem_1fr] w-full text-left text-xs font-mono border-b border-border last:border-b-0 hover:bg-muted/30 ${
                         selected ? "bg-primary/10 ring-1 ring-inset ring-primary/30" : "bg-background"
                       }`}
                       data-testid={`reception-appt-row-${apt.id}`}
@@ -638,16 +743,130 @@ export default function ReceptionAppointmentsPage() {
                           {formatAppointmentStatusLabel(apt.status)}
                         </Badge>
                       </span>
-                      <span className="px-2 py-2 border-r border-border/80 truncate" title={apt.reason ?? ""}>
+                      <span className="px-2 py-2 truncate" title={apt.reason ?? ""}>
                         {apt.reason || "—"}
-                      </span>
-                      <span className="px-2 py-2 truncate" title={apt.notes ?? ""}>
-                        {apt.notes || "—"}
                       </span>
                     </button>
                   );
                 })
               )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-2 shadow-sm" data-testid="reception-admitted-patients">
+        <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
+          <div className="flex w-full min-w-0 items-center justify-between gap-3 flex-wrap">
+            <div>
+              <p className="text-sm font-semibold">Admitted Patients</p>
+              <p className="text-xs text-muted-foreground">Overnight visits remain here until discharged.</p>
+            </div>
+            <Badge variant="secondary" className="text-[10px]">
+              {admissions.length} Admissions
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto rounded-b-xl p-0">
+          {admissionsLoading ? (
+            <p className="p-8 text-center text-muted-foreground text-sm">Loading…</p>
+          ) : admissions.length === 0 ? (
+            <div className="p-4">
+              <EmptyState title="No admitted patients" description="Overnight walk-ins appear here until discharged." />
+            </div>
+          ) : (
+            <div className="min-w-[1180px]">
+              <div
+                className="grid grid-cols-[minmax(0,1.2fr)_6.5rem_minmax(0,1fr)_5.75rem_minmax(0,1.2fr)_minmax(5rem,7rem)_minmax(9.5rem,11rem)] bg-muted/60 border-b border-border"
+                role="row"
+              >
+                <SortableGridHeaderButton
+                  active={admittedSortKey === "patient"}
+                  sortDir={admittedSortDir}
+                  onSort={() => toggleAdmittedSort("patient")}
+                >
+                  Patient
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={admittedSortKey === "mrn"}
+                  sortDir={admittedSortDir}
+                  onSort={() => toggleAdmittedSort("mrn")}
+                >
+                  MRN
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={admittedSortKey === "clinician"}
+                  sortDir={admittedSortDir}
+                  onSort={() => toggleAdmittedSort("clinician")}
+                >
+                  Clinician
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={admittedSortKey === "status"}
+                  sortDir={admittedSortDir}
+                  onSort={() => toggleAdmittedSort("status")}
+                >
+                  Status
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={admittedSortKey === "reason"}
+                  sortDir={admittedSortDir}
+                  onSort={() => toggleAdmittedSort("reason")}
+                >
+                  {APPOINTMENT_REASON_FOR_VISIT_LABEL}
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={admittedSortKey === "bed"}
+                  sortDir={admittedSortDir}
+                  onSort={() => toggleAdmittedSort("bed")}
+                >
+                  Bed / Room
+                </SortableGridHeaderButton>
+                <SortableGridHeaderButton
+                  active={admittedSortKey === "admittedAt"}
+                  sortDir={admittedSortDir}
+                  onSort={() => toggleAdmittedSort("admittedAt")}
+                >
+                  Admission Date
+                </SortableGridHeaderButton>
+              </div>
+              {sortedAdmissions.map((a) => {
+                const p = patientMap.get(a.patientId);
+                const clinician = userMap.get(a.clinicianId);
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => navigate(`/patients/${a.patientId}?tab=overview&chartEntry=browse`)}
+                    className="grid grid-cols-[minmax(0,1.2fr)_6.5rem_minmax(0,1fr)_5.75rem_minmax(0,1.2fr)_minmax(5rem,7rem)_minmax(9.5rem,11rem)] w-full min-w-0 text-left text-xs border-b border-border last:border-b-0 hover:bg-muted/30 bg-background items-center"
+                  >
+                    <span className="px-2 py-2 border-r border-border/80 min-w-0 truncate">
+                      {p ? `${p.firstName} ${p.lastName}` : "—"}
+                    </span>
+                    <span className="px-2 py-2 border-r border-border/80 text-muted-foreground min-w-0 truncate">
+                      {p?.mrn ?? "—"}
+                    </span>
+                    <span className="px-2 py-2 border-r border-border/80 min-w-0 truncate">
+                      {clinician?.fullName ?? "—"}
+                    </span>
+                    <span className="px-2 py-2 border-r border-border/80 whitespace-nowrap">
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] font-medium border ${ADMITTED_PATIENT_STATUS_BADGE_CLASS}`}
+                      >
+                        {ADMITTED_PATIENT_STATUS_LABEL}
+                      </Badge>
+                    </span>
+                    <span className="px-2 py-2 border-r border-border/80 min-w-0 truncate" title={a.reason ?? ""}>
+                      {a.reason || "—"}
+                    </span>
+                    <span className="px-2 py-2 border-r border-border/80 min-w-0 truncate">{a.bedName}</span>
+                    <span className="px-2 py-2 min-w-0 truncate whitespace-nowrap">
+                      {a.admittedAt ? format(new Date(a.admittedAt), "MMMM d, yyyy") : "—"}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </CardContent>

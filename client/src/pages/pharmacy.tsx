@@ -11,10 +11,17 @@ import { useAuth } from "@/lib/auth";
 import { apiGetJson, apiPatchJson } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import { Pill, Package, Clock } from "lucide-react";
+import {
+  SidebarTabsNavLayout,
+  SIDEBAR_TABS_LIST_CLASS,
+  SIDEBAR_TABS_TRIGGER_CLASS,
+} from "@/components/sidebar-tabs-nav";
 import { format } from "date-fns";
 import type { Prescription, Patient } from "@shared/schema";
+import { useTranslation } from "react-i18next";
 
 export default function PharmacyPage() {
+  const { t, i18n } = useTranslation();
   const { toast } = useToast();
   const { token } = useAuth();
 
@@ -38,7 +45,7 @@ export default function PharmacyPage() {
       }, token),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.prescriptions.root });
-      toast({ title: "Prescription dispensed" });
+      toast({ title: i18n.t("pages.pharmacy.toastDispensed") });
     },
   });
 
@@ -64,17 +71,18 @@ export default function PharmacyPage() {
                 <Badge variant="secondary" className={`text-[10px] ${statusColors[rx.status]}`}>{rx.status}</Badge>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                {pt ? `${pt.firstName} ${pt.lastName}` : "Unknown"} - {rx.frequency} for {rx.duration}
+                {pt ? `${pt.firstName} ${pt.lastName}` : t("pages.pharmacy.unknownPatient")} —{" "}
+                {t("pages.pharmacy.frequencyDuration", { frequency: rx.frequency, duration: rx.duration })}
               </p>
               {rx.instructions && <p className="text-xs text-muted-foreground mt-1">{rx.instructions}</p>}
               <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground flex-wrap">
-                {rx.quantity && <span>Qty: {rx.quantity}</span>}
+                {rx.quantity && <span>{t("pages.pharmacy.qty", { qty: rx.quantity })}</span>}
                 <span>{rx.createdAt ? format(new Date(rx.createdAt), "MMM d, yyyy") : ""}</span>
               </div>
             </div>
             {showDispense && rx.status === "active" && (
               <Button size="sm" onClick={() => dispenseMutation.mutate(rx.id)} disabled={dispenseMutation.isPending} data-testid={`button-dispense-${rx.id}`}>
-                <Package className="w-3.5 h-3.5 mr-1.5" /> Dispense
+                <Package className="w-3.5 h-3.5 mr-1.5" /> {t("pages.pharmacy.dispense")}
               </Button>
             )}
           </div>
@@ -86,36 +94,40 @@ export default function PharmacyPage() {
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto" data-testid="pharmacy-page">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Pharmacy</h1>
-        <p className="text-muted-foreground text-sm mt-1">{active.length} active prescriptions to dispense</p>
+        <h1 className="text-2xl font-bold tracking-tight">{t("pages.pharmacy.title")}</h1>
+        <p className="text-muted-foreground text-sm mt-1">{t("pages.pharmacy.subtitle", { count: active.length })}</p>
       </div>
 
       <Tabs defaultValue="active">
-        <TabsList>
-          <TabsTrigger value="active">
-            <Clock className="w-3.5 h-3.5 mr-1.5" /> Active ({active.length})
-          </TabsTrigger>
-          <TabsTrigger value="dispensed">
-            <Package className="w-3.5 h-3.5 mr-1.5" /> Dispensed ({dispensed.length})
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="active" className="space-y-3 mt-4">
+        <SidebarTabsNavLayout
+          sidebar={
+            <TabsList className={SIDEBAR_TABS_LIST_CLASS}>
+              <TabsTrigger value="active" className={SIDEBAR_TABS_TRIGGER_CLASS}>
+                <Clock className="w-3.5 h-3.5 shrink-0" /> {t("pages.pharmacy.tabActive", { count: active.length })}
+              </TabsTrigger>
+              <TabsTrigger value="dispensed" className={SIDEBAR_TABS_TRIGGER_CLASS}>
+                <Package className="w-3.5 h-3.5 shrink-0" /> {t("pages.pharmacy.tabDispensed", { count: dispensed.length })}
+              </TabsTrigger>
+            </TabsList>
+          }
+        >
+        <TabsContent value="active" className="mt-0 space-y-3 focus-visible:outline-none">
           {isLoading ? (
             Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20" />)
           ) : active.length === 0 ? (
             <Card><CardContent className="py-12 text-center text-muted-foreground">
               <Pill className="w-10 h-10 mx-auto text-muted-foreground/30 mb-3" />
-              No pending prescriptions
+              {t("pages.pharmacy.emptyActive")}
             </CardContent></Card>
           ) : active.map((rx) => renderPrescription(rx, true))}
         </TabsContent>
 
-        <TabsContent value="dispensed" className="space-y-3 mt-4">
+        <TabsContent value="dispensed" className="mt-0 space-y-3 focus-visible:outline-none">
           {dispensed.length === 0 ? (
-            <Card><CardContent className="py-12 text-center text-muted-foreground">No dispensed prescriptions yet</CardContent></Card>
+            <Card><CardContent className="py-12 text-center text-muted-foreground">{t("pages.pharmacy.emptyDispensed")}</CardContent></Card>
           ) : dispensed.map((rx) => renderPrescription(rx))}
         </TabsContent>
+        </SidebarTabsNavLayout>
       </Tabs>
     </div>
   );

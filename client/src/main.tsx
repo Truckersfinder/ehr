@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { installDevApiFetchShim } from "@/lib/dev-api-fetch";
+import "@/lib/i18n";
 import App from "./App";
 import "./index.css";
 

@@ -1,4 +1,6 @@
 import express, { type Express } from "express";
+import { z } from "zod";
+import { randomUUID } from "crypto";
 import { createServer, type Server } from "http";
 import path from "path";
 import fs from "fs";
@@ -10,21 +12,73 @@ import {
   loginSchema,
   createUserBodySchema,
   resetUserPasswordBodySchema,
+  createClinicalFormBodySchema,
+  updateClinicalFormBodySchema,
+  type ClinicalFormField,
   insertPatientSchema,
+  type User,
   insertEncounterSchema,
   insertVitalsSchema,
   insertAppointmentSchema,
+  createBedBodySchema,
+  bedStatusReasonBodySchema,
+  bedRestoreBodySchema,
   insertLabOrderSchema,
   insertImagingOrderSchema,
   insertImagingResultSchema,
   insertPatientDocumentSchema,
   insertPrescriptionSchema,
+  insertMedicationAdministrationSchema,
+  insertEncounterMedicationAdministrationSchema,
   insertInvoiceSchema,
   insertFollowUpContactSchema,
   patchBillingChargeCatalogBodySchema,
   createBillingChargeCatalogBodySchema,
   addManualVisitChargeBodySchema,
+  clinicalFormSubmitAnswersBodySchema,
+  patchOrganizationSettingsBodySchema,
+  patchRoleCapabilityBodySchema,
+  patchUiTableColumnBodySchema,
+  postUiTableCustomColumnBodySchema,
+  putUiTableColumnOrderBodySchema,
+  deleteUiTableColumnQuerySchema,
+  patchUiActivityLayoutBodySchema,
 } from "@shared/schema";
+import {
+  inferClinicalFormPrefill,
+  validateAndNormalizeClinicalFormAnswers,
+  formatPatientDateOfBirthForFormPrefill,
+} from "@shared/clinical-form-fill";
+import { mergeSystemFieldsIntoClinicalFormTemplate } from "@shared/clinical-form-system-fields";
+import { clinicalTemplateKindFromRow, normalizeClinicalFormTemplateKind } from "@shared/clinical-form-template-kind";
+import {
+  validateConsentPatientSignature,
+  fieldsForPublicConsentQrValidation,
+  excludeLegacyPatientSignOffFieldsFromQrConsent,
+  legacyPatientSignOffFieldIds,
+  isLegacyPatientSignOffTemplateField,
+} from "@shared/consent-patient-signature";
+import {
+  computeEffectiveCapabilities,
+  computeEffectiveTableColumns,
+  computeTableColumnLayoutForAdmin,
+  ROLE_CAPABILITY_DEFINITIONS,
+  ADMIN_TABLE_COLUMN_REGISTRY,
+  tableKeysForCapabilities,
+} from "@shared/role-capabilities-registry";
+import {
+  ADMIN_ACTIVITIES_ORDER,
+  computeActivityUiForRole,
+  normalizeUiActivityLayoutRowContext,
+  TOOLBAR_UNIFIED_ACTIVITY_ORDER,
+  PATIENT_CHART_REVIEW_ORDER,
+  PATIENT_CHART_VISIT_DOC_ORDER,
+} from "@shared/application-ui";
+import {
+  fullSyncActivityLayoutsFromCapabilities,
+  syncCapabilitiesFromActivityLayoutPatch,
+} from "./activity-capability-sync";
+import { getMedsAdminCounts } from "./meds-admin-counts";
 
 /** Create patient: never take legacy free-text `allergies` from the request (autofill / stray JSON). Use structured patient_allergies + clinical workflow instead. */
 const insertPatientCreateSchema = insertPatientSchema.omit({ allergies: true, profilePhotoUrl: true });
@@ -54,8 +108,31 @@ import {
   syncPrescriptionVisitCharge,
   applyManualCatalogCharge,
 } from "./visit-charge-service";
+const MEDICATION_ROUTES = ["oral", "injection", "iv"] as const;
+type MedicationRouteId = (typeof MEDICATION_ROUTES)[number];
 
 const uploadsDir = ensureUploadsDir();
+
+function mapAdminClinicalFormBodyFieldsToStored(
+  parsedFields: z.infer<typeof createClinicalFormBodySchema>["fields"],
+  kind: z.infer<typeof createClinicalFormBodySchema>["kind"],
+): ClinicalFormField[] {
+  const raw: ClinicalFormField[] = parsedFields.map((f) => ({
+    id: f.id?.trim() || `f_${randomUUID().replace(/-/g, "").slice(0, 12)}`,
+    label: f.label.trim(),
+    type: f.type,
+    required: f.required ?? false,
+    ...(f.type === "select" && f.options?.length ? { options: f.options.map((o) => o.trim()) } : {}),
+  }));
+  return mergeSystemFieldsIntoClinicalFormTemplate(normalizeClinicalFormTemplateKind(kind), raw);
+}
+
+function mergeStoredClinicalFormFieldsForApi(
+  fields: ClinicalFormField[] | undefined,
+  kind: "form" | "consent",
+): ClinicalFormField[] {
+  return mergeSystemFieldsIntoClinicalFormTemplate(kind, Array.isArray(fields) ? fields : []);
+}
 
 const chargeCatalogUpload = multer({
   storage: multer.memoryStorage(),
@@ -98,6 +175,38 @@ const profilePhotoUpload = multer({
   },
 });
 
+async function buildAuthUserResponse(user: User) {
+  const { password, ...safeUser } = user;
+  const overrides = await storage.getRoleCapabilityOverridesForRole(user.role);
+  const capabilities = computeEffectiveCapabilities(user.role, overrides);
+  const activityLayoutRows = await storage.listUiActivityLayoutForRole(user.role);
+  const activityUi = computeActivityUiForRole(user.role, capabilities, activityLayoutRows);
+  let organization: {
+    facilityId: string;
+    name: string;
+    patientIdentifierLabel: string;
+    defaultCountry: string;
+    billingCurrency: string;
+    logoUrl: string | null;
+    timeZone: string;
+  } | null = null;
+  if (user.facilityId) {
+    const fac = await storage.getFacility(user.facilityId);
+    if (fac) {
+      organization = {
+        facilityId: fac.id,
+        name: fac.name,
+        patientIdentifierLabel: fac.patientIdentifierLabel ?? "MRN",
+        defaultCountry: fac.country ?? "KE",
+        billingCurrency: fac.billingCurrency ?? "KES",
+        logoUrl: fac.logoUrl ?? null,
+        timeZone: (fac as any).timeZone ?? (fac as any).time_zone ?? "UTC",
+      };
+    }
+  }
+  return { ...safeUser, capabilities, organization, activityUi };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -110,6 +219,581 @@ export async function registerRoutes(
   await storage.ensureVisitChargeCatalogKeys();
   await storage.ensureVisitChargeLineKindManualEnum();
   await storage.ensureEncounterChargeFinalizationColumns();
+  await storage.ensurePrescriptionRouteColumn();
+  await storage.ensurePrescriptionRateColumn();
+  await storage.ensureEncounterMedicationAdministrationsTable();
+  await storage.ensureBedsAndBedAssignmentsTables();
+  await storage.ensureClinicalFormsTable();
+  await storage.ensureFacilityOrganizationAndRoleTables();
+
+  app.get("/api/meds-admin-counts", authMiddleware as any, async (req: any, res) => {
+    try {
+      const appointmentIds = String(req.query.appointmentIds ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const admissionIds = String(req.query.admissionIds ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const data = await getMedsAdminCounts({ appointmentIds, admissionIds });
+      return res.json(data);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  /** Base URL for patient-facing form links (QR). Set `APP_BASE_URL` in production. */
+  const patientFillAppBaseUrl = (req: any) => {
+    const env = process.env.APP_BASE_URL?.replace(/\/$/, "");
+    if (env) return env;
+    const host = req.get("x-forwarded-host") || req.get("host");
+    const proto = req.get("x-forwarded-proto") || req.protocol || "https";
+    return `${proto}://${host}`;
+  };
+
+  /** Published forms & consent templates for point-of-care (read-only list; any authenticated staff). */
+  app.get("/api/clinical-form-templates", authMiddleware as any, async (_req: any, res: any) => {
+    try {
+      const rows = (await storage.getClinicalForms()).filter((r: any) => (r as any).isActive !== false);
+      return res.json(
+        rows.map((r) => {
+          const kind = clinicalTemplateKindFromRow(r as { templateKind?: unknown; template_kind?: unknown });
+          const fieldCount = mergeStoredClinicalFormFieldsForApi(
+            (r as { fields?: ClinicalFormField[] }).fields,
+            kind,
+          ).length;
+          return {
+            id: r.id,
+            title: r.title,
+            description: r.description ?? null,
+            fieldCount,
+            kind,
+            updatedAt: r.updatedAt ?? null,
+          };
+        }),
+      );
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get(
+    "/api/patients/:patientId/clinical-form-completions",
+    authMiddleware as any,
+    async (req: any, res: any) => {
+      try {
+        const { patientId } = req.params;
+        const p = await storage.getPatient(patientId);
+        if (!p) return res.status(404).json({ message: "Patient not found" });
+        const rows = await storage.listCompletedClinicalFormsForPatient(patientId);
+        return res.json(
+          rows.map((r) => ({
+            ...r,
+            completedAt: r.completedAt.toISOString(),
+            createdAt: r.createdAt?.toISOString() ?? null,
+          })),
+        );
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get(
+    "/api/patients/:patientId/procedure-consents/pending-patient-signature",
+    authMiddleware as any,
+    async (req: any, res: any) => {
+      try {
+        const { patientId } = req.params;
+        const p = await storage.getPatient(patientId);
+        if (!p) return res.status(404).json({ message: "Patient not found" });
+        const rows = await storage.listProcedureConsentsNeedingPatientSignature(patientId);
+        return res.json(
+          rows.map((r) => ({
+            ...r,
+            clinicianSignedAt: r.clinicianSignedAt.toISOString(),
+            createdAt: r.createdAt?.toISOString() ?? null,
+          })),
+        );
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/patients/:patientId/procedure-consents/:completionId/qr-session",
+    authMiddleware as any,
+    async (req: any, res: any) => {
+      try {
+        const { patientId, completionId } = req.params;
+        const p = await storage.getPatient(patientId);
+        if (!p) return res.status(404).json({ message: "Patient not found" });
+        const existing = await storage.getClinicalFormCompletionForPatientById(patientId, completionId);
+        if (!existing) return res.status(404).json({ message: "Completion not found" });
+        if (!existing.completion.providerSignedAt) {
+          return res.status(400).json({ message: "Clinician signature is required before patient signature." });
+        }
+        if (existing.completion.completedAt) {
+          return res.status(400).json({ message: "This consent is already completed." });
+        }
+        const created = await storage.createProcedureConsentPatientQrSession({ patientId, completionId });
+        if (!created) return res.status(404).json({ message: "Could not create QR session." });
+        const base = patientFillAppBaseUrl(req);
+        const fillUrl = `${base}/p/clinical-form/${encodeURIComponent(created.token)}`;
+        return res.json({
+          token: created.token,
+          fillUrl,
+          expiresAt: created.expiresAt.toISOString(),
+        });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get(
+    "/api/patients/:patientId/clinical-form-completions/:completionId",
+    authMiddleware as any,
+    async (req: any, res: any) => {
+      try {
+        const { patientId, completionId } = req.params;
+        const patient = await storage.getPatient(patientId);
+        if (!patient) return res.status(404).json({ message: "Patient not found" });
+        const result = await storage.getCompletedClinicalFormCompletionForPatient(patientId, completionId);
+        if (!result) return res.status(404).json({ message: "Completion not found" });
+        const { completion, form } = result;
+        const templateKind = (form as { templateKind?: string }).templateKind === "consent" ? "consent" : "form";
+        const fields = mergeStoredClinicalFormFieldsForApi(form.fields, templateKind);
+        return res.json({
+          completion: {
+            id: completion.id,
+            completedAt: completion.completedAt!.toISOString(),
+            completionMode: completion.completionMode,
+            answers: completion.answers ?? {},
+          },
+          form: {
+            id: form.id,
+            title: form.title,
+            description: form.description,
+            fields,
+            templateKind,
+          },
+        });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get(
+    "/api/patients/:patientId/clinical-forms/:formId/fill-context",
+    authMiddleware as any,
+    async (req: any, res: any) => {
+      try {
+        const { patientId, formId } = req.params;
+        const patient = await storage.getPatient(patientId);
+        if (!patient) return res.status(404).json({ message: "Patient not found" });
+        const form = await storage.getClinicalFormById(formId);
+        if (!form) return res.status(404).json({ message: "Form not found" });
+        const templateKind = (form as { templateKind?: string }).templateKind === "consent" ? "consent" : "form";
+        const fields = mergeStoredClinicalFormFieldsForApi(form.fields, templateKind);
+        const dob = formatPatientDateOfBirthForFormPrefill(patient.dateOfBirth);
+        const prefill = inferClinicalFormPrefill(fields, {
+          patientIdentifier: patient.mrn,
+          firstName: patient.firstName,
+          lastName: patient.lastName,
+          dateOfBirth: dob,
+        });
+        return res.json({
+          form: {
+            id: form.id,
+            title: form.title,
+            description: form.description,
+            fields,
+            templateKind,
+          },
+          patient: {
+            id: patient.id,
+            patientIdentifierLabel: "MRN",
+            patientIdentifier: patient.mrn,
+            firstName: patient.firstName,
+            lastName: patient.lastName,
+            dateOfBirth: dob,
+          },
+          prefill,
+        });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/patients/:patientId/clinical-forms/:formId/submit",
+    authMiddleware as any,
+    async (req: any, res: any) => {
+      try {
+        const parsed = clinicalFormSubmitAnswersBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+        }
+        const { patientId, formId } = req.params;
+        const patient = await storage.getPatient(patientId);
+        if (!patient) return res.status(404).json({ message: "Patient not found" });
+        const form = await storage.getClinicalFormById(formId);
+        if (!form) return res.status(404).json({ message: "Form not found" });
+        const templateKind = (form as { templateKind?: string }).templateKind === "consent" ? "consent" : "form";
+        let fields = mergeStoredClinicalFormFieldsForApi(form.fields, templateKind);
+        // Patient sign-off fields are only collected on the patient QR step for Procedure Consents.
+        if (templateKind === "consent") {
+          const role = String(req.user?.role ?? "");
+          const isClinician = role === "clinician" || role === "nurse";
+          fields = fields.map((f) => {
+            if (f.id === "sys_provider_attestation") return { ...f, required: false };
+            if (isLegacyPatientSignOffTemplateField(f)) return { ...f, required: false };
+            return f;
+          });
+        }
+        const norm = validateAndNormalizeClinicalFormAnswers(fields, parsed.data.answers);
+        if (!norm.ok) return res.status(400).json({ message: norm.message });
+        if (templateKind === "consent") {
+          const role = String(req.user?.role ?? "");
+          const isClinician = role === "clinician" || role === "nurse";
+          if (isClinician) {
+            const ct = String(norm.answers["sys_consent_type"] ?? "");
+            if (ct === "Procedure Consent") {
+              const procedureName = String(norm.answers["sys_procedure_name"] ?? "").trim();
+              const performingClinician = String(norm.answers["sys_performing_clinician"] ?? "").trim();
+              const risks = String(norm.answers["sys_procedure_risks_benefits"] ?? "").trim();
+              if (!procedureName) return res.status(400).json({ message: "Procedure Name is required." });
+              if (!performingClinician) return res.status(400).json({ message: "Performing Clinician is required." });
+              if (!risks) return res.status(400).json({ message: "Procedure Risk and Benefits is required." });
+            } else {
+              // Administrative Consent: do not store procedure-only clinician fields.
+              delete norm.answers["sys_procedure_name"];
+              delete norm.answers["sys_performing_clinician"];
+              delete norm.answers["sys_procedure_risks_benefits"];
+            }
+            // Patient sign-off is collected later; clear it if it came in.
+            delete norm.answers["sys_provider_attestation"];
+            delete (norm.answers as any)["sys_patient_signature"];
+            const created = await storage.createClinicianSignedProcedureConsentCompletion({
+              patientId,
+              formId,
+              answers: norm.answers,
+              clinicianUserId: req.user.id,
+            });
+            return res.status(201).json({
+              id: created.id,
+              providerSignedAt: created.providerSignedAt ? created.providerSignedAt.toISOString() : undefined,
+            });
+          }
+        }
+
+        // Regular form/consent completion (staff-assisted).
+        if (templateKind === "consent") {
+          delete norm.answers["sys_procedure_name"];
+          delete norm.answers["sys_performing_clinician"];
+          delete norm.answers["sys_procedure_risks_benefits"];
+          delete norm.answers["sys_provider_attestation"];
+          delete (norm.answers as any)["sys_patient_signature"];
+          // Also remove any legacy/template patient sign-off fields from being stored on staff-assisted completion.
+          for (const f of fields) {
+            if (isLegacyPatientSignOffTemplateField(f)) {
+              delete (norm.answers as any)[f.id];
+            }
+          }
+        }
+        const created = await storage.createStaffAssistedClinicalFormCompletion({
+          patientId,
+          formId,
+          answers: norm.answers,
+          completedByUserId: req.user.id,
+        });
+        return res.status(201).json({
+          id: created.id,
+          completedAt: created.completedAt ? created.completedAt.toISOString() : undefined,
+        });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/patients/:patientId/clinical-forms/:formId/qr-session",
+    authMiddleware as any,
+    async (req: any, res: any) => {
+      try {
+        const { patientId, formId } = req.params;
+        const patient = await storage.getPatient(patientId);
+        if (!patient) return res.status(404).json({ message: "Patient not found" });
+        const form = await storage.getClinicalFormById(formId);
+        if (!form) return res.status(404).json({ message: "Form not found" });
+        await storage.deletePendingQrCompletionsForPatientForm(patientId, formId);
+        const { token, expiresAt } = await storage.createPendingQrFormCompletion({ patientId, formId });
+        const base = patientFillAppBaseUrl(req);
+        const fillUrl = `${base}/p/clinical-form/${encodeURIComponent(token)}`;
+        return res.json({
+          token,
+          fillUrl,
+          expiresAt: expiresAt.toISOString(),
+        });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get("/api/public/clinical-form-session/:token", async (req: any, res: any) => {
+    try {
+      const token = req.params.token as string;
+      const row = await storage.getClinicalFormCompletionByQrToken(token);
+      if (!row) return res.status(404).json({ message: "Invalid or expired link" });
+      if (row.completedAt) return res.status(410).json({ message: "This form has already been submitted" });
+      if (row.qrExpiresAt && new Date(row.qrExpiresAt).getTime() < Date.now()) {
+        return res.status(410).json({ message: "This link has expired" });
+      }
+      const form = await storage.getClinicalFormById(row.formId);
+      if (!form) return res.status(404).json({ message: "Form not found" });
+      const patient = await storage.getPatient(row.patientId);
+      if (!patient) return res.status(404).json({ message: "Patient not found" });
+      const templateKind = (form as { templateKind?: string }).templateKind === "consent" ? "consent" : "form";
+      const fieldsMerged = mergeStoredClinicalFormFieldsForApi(form.fields, templateKind);
+      const legacySignOffIds =
+        templateKind === "consent" ? legacyPatientSignOffFieldIds(fieldsMerged) : [];
+      const fields =
+        templateKind === "consent"
+          ? excludeLegacyPatientSignOffFieldsFromQrConsent(fieldsMerged)
+          : fieldsMerged;
+      const dob = formatPatientDateOfBirthForFormPrefill(patient.dateOfBirth);
+      const prefill = inferClinicalFormPrefill(fieldsMerged, {
+        patientIdentifier: patient.mrn,
+        firstName: patient.firstName,
+        lastName: patient.lastName,
+        dateOfBirth: dob,
+      });
+      // Carry clinician/staff-entered answers into the patient QR experience.
+      // (Patient sign-off fields remain editable; client will disable the rest.)
+      const carried = (row.answers ?? {}) as Record<string, string | number | boolean>;
+      const mergedPrefill = { ...prefill, ...carried } as Record<string, string | number | boolean>;
+      for (const id of legacySignOffIds) {
+        delete mergedPrefill[id];
+      }
+      return res.json({
+        sessionId: row.id,
+        patientId: patient.id,
+        form: {
+          id: form.id,
+          title: form.title,
+          description: form.description,
+          fields,
+          templateKind,
+        },
+        patient: {
+          patientIdentifierLabel: "MRN",
+          patientIdentifier: patient.mrn,
+          firstName: patient.firstName,
+          lastName: patient.lastName,
+          dateOfBirth: dob,
+        },
+        prefill: mergedPrefill,
+        expiresAt: row.qrExpiresAt ? new Date(row.qrExpiresAt).toISOString() : null,
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/public/clinical-form-session/:token/submit", async (req: any, res: any) => {
+    try {
+      const token = req.params.token as string;
+      const parsed = clinicalFormSubmitAnswersBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      }
+      const row = await storage.getClinicalFormCompletionByQrToken(token);
+      if (!row) return res.status(404).json({ message: "Invalid or expired link" });
+      if (row.completedAt) return res.status(410).json({ message: "This form has already been submitted" });
+      if (row.qrExpiresAt && new Date(row.qrExpiresAt).getTime() < Date.now()) {
+        return res.status(410).json({ message: "This link has expired" });
+      }
+      const form = await storage.getClinicalFormById(row.formId);
+      if (!form) return res.status(404).json({ message: "Form not found" });
+      const templateKind = (form as { templateKind?: string }).templateKind === "consent" ? "consent" : "form";
+      const fields = mergeStoredClinicalFormFieldsForApi(form.fields, templateKind);
+      const validationFields: ClinicalFormField[] =
+        templateKind === "consent" ? fieldsForPublicConsentQrValidation(fields) : fields;
+      const norm = validateAndNormalizeClinicalFormAnswers(validationFields, parsed.data.answers);
+      if (!norm.ok) return res.status(400).json({ message: norm.message });
+      if (templateKind === "consent") {
+        const sigOk = validateConsentPatientSignature(norm.answers as any);
+        if (!sigOk.ok) return res.status(400).json({ message: sigOk.message });
+        // Patient cannot change clinician-only fields.
+        delete norm.answers["sys_procedure_name"];
+        delete norm.answers["sys_performing_clinician"];
+        delete norm.answers["sys_procedure_risks_benefits"];
+      }
+      const updated = await storage.completeClinicalFormPatientCompletion(row.id, {
+        answers: norm.answers,
+        completedByUserId: null,
+      });
+      if (!updated) return res.status(500).json({ message: "Could not save submission" });
+      return res.json({
+        id: updated.id,
+        completedAt: updated.completedAt ? updated.completedAt.toISOString() : undefined,
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get(
+    "/api/admin/forms",
+    authMiddleware as any,
+    requireRole("security", "super_admin") as any,
+    async (_req: any, res: any) => {
+    try {
+      const rows = await storage.getClinicalForms();
+      return res.json(
+        rows.map((r) => ({
+          ...r,
+          templateKind: clinicalTemplateKindFromRow(r as { templateKind?: unknown; template_kind?: unknown }),
+          fields: mergeStoredClinicalFormFieldsForApi(
+            (r as { fields?: ClinicalFormField[] }).fields,
+            clinicalTemplateKindFromRow(r as { templateKind?: unknown; template_kind?: unknown }),
+          ),
+        })),
+      );
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post(
+    "/api/admin/forms",
+    authMiddleware as any,
+    requireRole("security", "super_admin") as any,
+    async (req: any, res: any) => {
+    try {
+      const parsed = createClinicalFormBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid form definition", errors: parsed.error.flatten() });
+      }
+      const fields = mapAdminClinicalFormBodyFieldsToStored(parsed.data.fields, parsed.data.kind);
+      const created = await storage.createClinicalForm({
+        title: parsed.data.title.trim(),
+        description: parsed.data.description?.trim() || null,
+        fields,
+        templateKind: normalizeClinicalFormTemplateKind(parsed.data.kind),
+        createdByUserId: req.user.id,
+      });
+      await storage.createAuditLog({
+        userId: req.user.id,
+        action: "CREATE_CLINICAL_FORM",
+        resource: "clinical_form",
+        resourceId: created.id,
+        details: `Created ${parsed.data.kind} template "${created.title}" (${fields.length} field(s))`,
+      });
+      return res.status(201).json({
+        ...created,
+        templateKind: clinicalTemplateKindFromRow(created as { templateKind?: unknown; template_kind?: unknown }),
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/forms/:id", authMiddleware as any, requireRole("security") as any, async (req: any, res: any) => {
+    try {
+      const form = await storage.getClinicalFormById(String(req.params.id || ""));
+      if (!form) return res.status(404).json({ message: "Not found" });
+      return res.json({
+        ...form,
+        templateKind: clinicalTemplateKindFromRow(form as { templateKind?: unknown; template_kind?: unknown }),
+        fields: mergeStoredClinicalFormFieldsForApi(
+          form.fields,
+          clinicalTemplateKindFromRow(form as { templateKind?: unknown; template_kind?: unknown }),
+        ),
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch(
+    "/api/admin/forms/:id",
+    authMiddleware as any,
+    requireRole("security") as any,
+    async (req: any, res: any) => {
+      try {
+        const id = String(req.params.id || "");
+        const existing = await storage.getClinicalFormById(id);
+        if (!existing) return res.status(404).json({ message: "Not found" });
+        const parsed = updateClinicalFormBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid form definition", errors: parsed.error.flatten() });
+        }
+        const fields = mapAdminClinicalFormBodyFieldsToStored(parsed.data.fields, parsed.data.kind);
+        const updated = await storage.updateClinicalForm(id, {
+          title: parsed.data.title.trim(),
+          description: parsed.data.description?.trim() || null,
+          fields,
+          templateKind: normalizeClinicalFormTemplateKind(parsed.data.kind),
+        });
+        if (!updated) return res.status(404).json({ message: "Not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "UPDATE_CLINICAL_FORM",
+          resource: "clinical_form",
+          resourceId: updated.id,
+          details: `Updated ${parsed.data.kind} template "${updated.title}" (${fields.length} field(s))`,
+        });
+        return res.json({
+          ...updated,
+          templateKind: clinicalTemplateKindFromRow(updated as { templateKind?: unknown; template_kind?: unknown }),
+        });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  const setClinicalFormStatusBodySchema = z.object({ isActive: z.boolean() });
+
+  app.patch(
+    "/api/admin/forms/:id/status",
+    authMiddleware as any,
+    requireRole("security", "super_admin") as any,
+    async (req: any, res: any) => {
+      try {
+        const id = String(req.params.id || "");
+        const existing = await storage.getClinicalFormById(id);
+        if (!existing) return res.status(404).json({ message: "Not found" });
+        const parsed = setClinicalFormStatusBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+        }
+        const updated = await storage.setClinicalFormActive(id, parsed.data.isActive);
+        if (!updated) return res.status(404).json({ message: "Not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: parsed.data.isActive ? "ACTIVATE_CLINICAL_FORM" : "DEACTIVATE_CLINICAL_FORM",
+          resource: "clinical_form",
+          resourceId: updated.id,
+          details: `${parsed.data.isActive ? "Activated" : "Deactivated"} template "${updated.title}"`,
+        });
+        return res.json({
+          ...updated,
+          templateKind: clinicalTemplateKindFromRow(updated as { templateKind?: unknown; template_kind?: unknown }),
+        });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
 
   app.post("/api/upload", authMiddleware as any, upload.single("file"), (req: any, res: any) => {
     try {
@@ -168,8 +852,8 @@ export async function registerRoutes(
       }
       const token = generateToken({ id: user.id, username: user.username, role: user.role, fullName: user.fullName });
       await storage.createAuditLog({ userId: user.id, action: "LOGIN", resource: "auth", details: "User logged in" });
-      const { password, ...safeUser } = user;
-      return res.json({ token, user: safeUser });
+      const me = await buildAuthUserResponse(user);
+      return res.json({ token, user: me });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
@@ -179,8 +863,7 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.user.id);
       if (!user) return res.status(404).json({ message: "User not found" });
-      const { password, ...safeUser } = user;
-      return res.json(safeUser);
+      return res.json(await buildAuthUserResponse(user));
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
@@ -228,7 +911,7 @@ export async function registerRoutes(
   app.get(
     "/api/billing/revenue-stats",
     authMiddleware as any,
-    requireRole("super_admin", "facility_admin", "finance") as any,
+    requireRole("super_admin") as any,
     async (req: any, res) => {
       try {
         const start = typeof req.query.start === "string" ? req.query.start.trim() : "";
@@ -249,6 +932,19 @@ export async function registerRoutes(
       const users = await storage.getUsers();
       const safeUsers = users.map(({ password, ...u }) => u);
       return res.json(safeUsers);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  /** Clinician list for procedural consent dropdowns. */
+  app.get("/api/clinicians", authMiddleware as any, async (_req, res) => {
+    try {
+      const users = await storage.getUsers();
+      const clinicians = users
+        .filter((u: any) => String(u.role) === "clinician" && (u as any).isActive !== false)
+        .map((u: any) => ({ id: u.id, fullName: u.fullName ?? u.username ?? u.id }));
+      return res.json(clinicians);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
@@ -332,6 +1028,381 @@ export async function registerRoutes(
     try {
       const facs = await storage.getFacilities();
       return res.json(facs);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/facility/organization-settings", authMiddleware as any, requireRole("security") as any, async (req: any, res) => {
+    try {
+      const user = await storage.getUser(req.user.id);
+      if (!user?.facilityId) return res.status(400).json({ message: "Your account is not linked to a facility" });
+      const fac = await storage.getFacility(user.facilityId);
+      if (!fac) return res.status(404).json({ message: "Facility not found" });
+      return res.json({
+        id: fac.id,
+        name: fac.name,
+        code: fac.code,
+        billingCurrency: fac.billingCurrency,
+        patientIdentifierLabel: fac.patientIdentifierLabel ?? "MRN",
+        country: fac.country ?? "KE",
+        timeZone: (fac as any).timeZone ?? (fac as any).time_zone ?? "UTC",
+        logoUrl: fac.logoUrl ?? null,
+        address: fac.address ?? null,
+        phone: fac.phone ?? null,
+        email: fac.email ?? null,
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch(
+    "/api/facility/organization-settings",
+    authMiddleware as any,
+    requireRole("security") as any,
+    async (req: any, res) => {
+      try {
+        const parsed = patchOrganizationSettingsBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+        }
+        const user = await storage.getUser(req.user.id);
+        if (!user?.facilityId) return res.status(400).json({ message: "Your account is not linked to a facility" });
+        const body = parsed.data;
+        const update: Record<string, unknown> = {};
+        if (body.name !== undefined) update.name = body.name;
+        if (body.billingCurrency !== undefined) update.billingCurrency = body.billingCurrency;
+        if (body.patientIdentifierLabel !== undefined) update.patientIdentifierLabel = body.patientIdentifierLabel;
+        if (body.country !== undefined) update.country = body.country;
+        if (body.timeZone !== undefined) update.timeZone = body.timeZone;
+        if (body.logoUrl !== undefined) update.logoUrl = body.logoUrl === "" || body.logoUrl === null ? null : body.logoUrl;
+        const updated = await storage.updateFacility(user.facilityId, update as any);
+        if (!updated) return res.status(404).json({ message: "Facility not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "UPDATE_ORGANIZATION_SETTINGS",
+          resource: "facility",
+          resourceId: user.facilityId,
+          details: JSON.stringify(update),
+        });
+        return res.json(updated);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/facility/organization-logo",
+    authMiddleware as any,
+    requireRole("security") as any,
+    upload.single("logo"),
+    async (req: any, res) => {
+      try {
+        const user = await storage.getUser(req.user.id);
+        if (!user?.facilityId) return res.status(400).json({ message: "Your account is not linked to a facility" });
+        const file = req.file as Express.Multer.File | undefined;
+        if (!file) return res.status(400).json({ message: "No file uploaded" });
+        const logoUrl = `/uploads/${file.filename}`;
+        await storage.updateFacility(user.facilityId, { logoUrl } as any);
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "UPDATE_ORGANIZATION_LOGO",
+          resource: "facility",
+          resourceId: user.facilityId,
+          details: logoUrl,
+        });
+        return res.json({ logoUrl });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get("/api/admin/role-capabilities", authMiddleware as any, requireRole("security") as any, async (_req: any, res) => {
+    try {
+      const roles = [
+        "super_admin",
+        "clinician",
+        "nurse",
+        "lab_tech",
+        "reception",
+        "security",
+      ] as const;
+      const matrix: Record<string, Record<string, boolean>> = {};
+      for (const role of roles) {
+        const ov = await storage.getRoleCapabilityOverridesForRole(role);
+        const caps = new Set(computeEffectiveCapabilities(role, ov));
+        matrix[role] = {};
+        for (const def of ROLE_CAPABILITY_DEFINITIONS) {
+          matrix[role][def.id] = caps.has(def.id);
+        }
+      }
+      return res.json({ definitions: ROLE_CAPABILITY_DEFINITIONS, roles: [...roles], matrix });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/admin/role-capabilities", authMiddleware as any, requireRole("security") as any, async (req: any, res) => {
+    try {
+      const parsed = patchRoleCapabilityBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      }
+      await storage.upsertRoleCapabilityOverride(parsed.data.role, parsed.data.capabilityId, parsed.data.allowed);
+      await fullSyncActivityLayoutsFromCapabilities(storage, parsed.data.role);
+      await storage.createAuditLog({
+        userId: req.user.id,
+        action: "UPDATE_ROLE_CAPABILITY",
+        resource: "role_capability",
+        resourceId: `${parsed.data.role}:${parsed.data.capabilityId}`,
+        details: String(parsed.data.allowed),
+      });
+      return res.json({ ok: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/systems-dashboard", authMiddleware as any, requireRole("security") as any, async (_req: any, res) => {
+    try {
+      const snapshot = await storage.getSystemsDashboardSnapshot();
+      return res.json(snapshot);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/application-config", authMiddleware as any, requireRole("security") as any, async (_req: any, res) => {
+    try {
+      const layoutRows = await storage.listUiActivityLayout();
+      const tableKeys = Object.entries(ADMIN_TABLE_COLUMN_REGISTRY)
+        .filter(([, v]) => v.includeInApplicationConfig !== false)
+        .map(([k]) => k);
+      const rolesForTableMatrix = [
+        "super_admin",
+        "clinician",
+        "nurse",
+        "lab_tech",
+        "reception",
+        "security",
+      ] as const;
+      const tableKeysByRole: Record<string, string[]> = {};
+      const capabilitiesByRole: Record<string, string[]> = {};
+      for (const role of rolesForTableMatrix) {
+        const ov = await storage.getRoleCapabilityOverridesForRole(role);
+        const caps = computeEffectiveCapabilities(role, ov);
+        tableKeysByRole[role] = tableKeysForCapabilities(caps);
+        capabilitiesByRole[role] = caps;
+      }
+      return res.json({
+        layoutRows,
+        tableKeys,
+        tableKeysByRole,
+        capabilitiesByRole,
+        activityCatalog: {
+          toolbar: TOOLBAR_UNIFIED_ACTIVITY_ORDER,
+          patient_chart_review: PATIENT_CHART_REVIEW_ORDER,
+          patient_chart_visit_doc: PATIENT_CHART_VISIT_DOC_ORDER,
+          admin_activities: ADMIN_ACTIVITIES_ORDER,
+        },
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/admin/ui-activity-layout", authMiddleware as any, requireRole("security") as any, async (req: any, res) => {
+    try {
+      const parsed = patchUiActivityLayoutBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      }
+      const d = parsed.data;
+      await storage.upsertUiActivityLayout({
+        role: d.role,
+        context: d.context,
+        activityId: d.activityId,
+        labelOverride: d.labelOverride === "" ? null : d.labelOverride,
+        sortOrder: d.sortOrder,
+        hidden: d.hidden,
+        readOnly: d.readOnly,
+      });
+      const actCtx = normalizeUiActivityLayoutRowContext(d.context);
+      await syncCapabilitiesFromActivityLayoutPatch(storage, {
+        role: d.role,
+        context: actCtx,
+        activityId: d.activityId,
+        hidden: d.hidden,
+      });
+      await fullSyncActivityLayoutsFromCapabilities(storage, d.role);
+      await storage.createAuditLog({
+        userId: req.user.id,
+        action: "UPDATE_UI_ACTIVITY_LAYOUT",
+        resource: "ui_activity_layout",
+        resourceId: `${d.role}:${d.context}:${d.activityId}`,
+        details: JSON.stringify({
+          hidden: d.hidden,
+          sortOrder: d.sortOrder,
+          label: d.labelOverride,
+          readOnly: d.readOnly,
+        }),
+      });
+      return res.json({ ok: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/ui-table-columns", authMiddleware as any, requireRole("security") as any, async (req: any, res) => {
+    try {
+      const tableKey = typeof req.query.tableKey === "string" ? req.query.tableKey : "admin_users";
+      const role = typeof req.query.role === "string" ? req.query.role : "super_admin";
+      const reg = ADMIN_TABLE_COLUMN_REGISTRY[tableKey];
+      if (!reg) return res.status(404).json({ message: "Unknown table key" });
+      const all = await storage.listUiTableColumnOverrides();
+      const overrides = all.filter((r) => r.tableKey === tableKey);
+      const layout = computeTableColumnLayoutForAdmin(tableKey, role, all);
+      return res.json({ tableKey, role, registry: reg, overrides, layout });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  /** Column layout for the signed-in user's role (hide/rename from Systems Admin). */
+  app.get("/api/ui-table-columns/effective", authMiddleware as any, async (req: any, res) => {
+    try {
+      const tableKey = typeof req.query.tableKey === "string" ? req.query.tableKey : "admin_users";
+      const reg = ADMIN_TABLE_COLUMN_REGISTRY[tableKey];
+      if (!reg) return res.status(404).json({ message: "Unknown table key" });
+      const all = await storage.listUiTableColumnOverrides();
+      const role = req.user.role as string;
+      const cols = computeEffectiveTableColumns(tableKey, role, all);
+      return res.json({
+        tableKey,
+        role,
+        columns: cols.filter((c) => !c.hidden).map(({ id, label }) => ({ id, label })),
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/admin/ui-table-columns", authMiddleware as any, requireRole("security") as any, async (req: any, res) => {
+    try {
+      const parsed = patchUiTableColumnBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      }
+      await storage.upsertUiTableColumnOverride(parsed.data);
+      await storage.createAuditLog({
+        userId: req.user.id,
+        action: "UPDATE_UI_TABLE_COLUMN",
+        resource: "ui_table_column",
+        resourceId: `${parsed.data.role}:${parsed.data.tableKey}:${parsed.data.columnId}`,
+        details: JSON.stringify({ hidden: parsed.data.hidden, label: parsed.data.label, sortOrder: parsed.data.sortOrder }),
+      });
+      return res.json({ ok: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/admin/ui-table-columns/custom", authMiddleware as any, requireRole("security") as any, async (req: any, res) => {
+    try {
+      const parsed = postUiTableCustomColumnBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      }
+      const { role, tableKey, label } = parsed.data;
+      const reg = ADMIN_TABLE_COLUMN_REGISTRY[tableKey];
+      if (!reg || reg.includeInApplicationConfig === false) {
+        return res.status(400).json({ message: "Invalid table key" });
+      }
+      const all = await storage.listUiTableColumnOverrides();
+      const layout = computeTableColumnLayoutForAdmin(tableKey, role, all);
+      const maxSort = layout.reduce((m, r) => Math.max(m, r.sortOrder), -1);
+      const columnId = `custom_${randomUUID().replace(/-/g, "")}`;
+      await storage.upsertUiTableColumnOverride({
+        role,
+        tableKey,
+        columnId,
+        hidden: false,
+        label: label.trim(),
+        sortOrder: maxSort + 10,
+      });
+      await storage.createAuditLog({
+        userId: req.user.id,
+        action: "CREATE_UI_TABLE_CUSTOM_COLUMN",
+        resource: "ui_table_column",
+        resourceId: `${role}:${tableKey}:${columnId}`,
+        details: JSON.stringify({ label }),
+      });
+      return res.json({ ok: true, columnId });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.put("/api/admin/ui-table-columns/order", authMiddleware as any, requireRole("security") as any, async (req: any, res) => {
+    try {
+      const parsed = putUiTableColumnOrderBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+      }
+      const { role, tableKey, orderedColumnIds } = parsed.data;
+      const reg = ADMIN_TABLE_COLUMN_REGISTRY[tableKey];
+      if (!reg || reg.includeInApplicationConfig === false) {
+        return res.status(400).json({ message: "Invalid table key" });
+      }
+      const all = await storage.listUiTableColumnOverrides();
+      const layout = computeTableColumnLayoutForAdmin(tableKey, role, all);
+      const allowed = new Set(layout.map((c) => c.id));
+      if (orderedColumnIds.length !== allowed.size) {
+        return res.status(400).json({ message: "Column order must include every column exactly once" });
+      }
+      for (const id of orderedColumnIds) {
+        if (!allowed.has(id)) return res.status(400).json({ message: `Unknown column id: ${id}` });
+      }
+      await storage.setUiTableColumnOrder(role, tableKey, orderedColumnIds);
+      await storage.createAuditLog({
+        userId: req.user.id,
+        action: "REORDER_UI_TABLE_COLUMNS",
+        resource: "ui_table_column",
+        resourceId: `${role}:${tableKey}`,
+        details: JSON.stringify({ orderedColumnIds }),
+      });
+      return res.json({ ok: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/admin/ui-table-columns", authMiddleware as any, requireRole("security") as any, async (req: any, res) => {
+    try {
+      const parsed = deleteUiTableColumnQuerySchema.safeParse({
+        role: req.query.role,
+        tableKey: req.query.tableKey,
+        columnId: req.query.columnId,
+      });
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid query", errors: parsed.error.flatten() });
+      }
+      const { role, tableKey, columnId } = parsed.data;
+      if (!columnId.startsWith("custom_")) {
+        return res.status(400).json({ message: "Only custom columns can be removed" });
+      }
+      await storage.deleteUiTableColumnOverride(role, tableKey, columnId);
+      await storage.createAuditLog({
+        userId: req.user.id,
+        action: "DELETE_UI_TABLE_CUSTOM_COLUMN",
+        resource: "ui_table_column",
+        resourceId: `${role}:${tableKey}:${columnId}`,
+        details: "{}",
+      });
+      return res.json({ ok: true });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }
@@ -422,16 +1493,7 @@ export async function registerRoutes(
   app.patch(
     "/api/patients/:id",
     authMiddleware as any,
-    requireRole(
-      "super_admin",
-      "facility_admin",
-      "clinician",
-      "nurse",
-      "lab_tech",
-      "pharmacist",
-      "finance",
-      "reception",
-    ) as any,
+    requireRole("super_admin", "clinician", "nurse", "lab_tech", "reception") as any,
     async (req: any, res) => {
       try {
         const updated = await storage.updatePatient(req.params.id, req.body);
@@ -447,16 +1509,7 @@ export async function registerRoutes(
   app.post(
     "/api/patients/:patientId/profile-photo",
     authMiddleware as any,
-    requireRole(
-      "super_admin",
-      "facility_admin",
-      "clinician",
-      "nurse",
-      "lab_tech",
-      "pharmacist",
-      "finance",
-      "reception",
-    ) as any,
+    requireRole("super_admin", "clinician", "nurse", "lab_tech", "reception") as any,
     (req: any, res: any, next: any) => {
       profilePhotoUpload.single("photo")(req, res, (err: unknown) => {
         if (err) {
@@ -976,7 +2029,7 @@ export async function registerRoutes(
   app.post(
     "/api/patients/:patientId/start-from-schedule",
     authMiddleware as any,
-    requireRole("clinician", "nurse", "reception", "super_admin", "facility_admin") as any,
+    requireRole("clinician", "nurse", "reception", "super_admin") as any,
     async (req: any, res) => {
       try {
         const patientId = req.params.patientId;
@@ -1015,6 +2068,12 @@ export async function registerRoutes(
           resource: "encounter",
           resourceId: encounter.id,
         });
+        // If this appointment is an admission, link the encounter to the active bed assignment.
+        try {
+          await storage.attachEncounterToActiveAdmission(appt.id, encounter.id);
+        } catch {
+          // ignore; admission workflow can still continue without the link
+        }
         return res.status(201).json({ encounter, appointmentId: appt.id });
       } catch (error: any) {
         return res.status(500).json({ message: error.message });
@@ -1062,6 +2121,56 @@ export async function registerRoutes(
     }
   );
 
+  /** Open patient chart from Admitted Patients list: create or resume an inpatient encounter for this admission. */
+  app.post(
+    "/api/patients/:patientId/start-from-admission",
+    authMiddleware as any,
+    requireRole("clinician", "nurse") as any,
+    async (req: any, res) => {
+      try {
+        const patientId = req.params.patientId as string;
+        const admissionId = req.body?.admissionId as string | undefined;
+        if (!admissionId || typeof admissionId !== "string") {
+          return res.status(400).json({ message: "admissionId is required" });
+        }
+        const admission = await storage.getBedAssignment(admissionId);
+        if (!admission || admission.patientId !== patientId) {
+          return res.status(404).json({ message: "Admission not found for this patient" });
+        }
+
+        let encounter: any = null;
+        if ((admission as any).encounterId) {
+          encounter = await storage.getEncounter((admission as any).encounterId as string);
+        }
+        if (!encounter) {
+          // Create a new inpatient encounter and attach it to the admission.
+          encounter = await storage.createEncounter({
+            patientId,
+            clinicianId: (req.user?.id as string) ?? admission.admittedBy,
+            facilityId: req.user.facilityId ?? undefined,
+            appointmentId: admission.appointmentId ?? undefined,
+            type: "inpatient",
+            status: "in_progress",
+            chiefComplaint: undefined,
+            visitDate: new Date(),
+          });
+          await storage.attachEncounterToBedAssignment(admission.id, encounter.id);
+          await storage.createAuditLog({
+            userId: req.user.id,
+            action: "START_ENCOUNTER_FROM_ADMISSION",
+            resource: "encounter",
+            resourceId: encounter.id,
+            details: `Admission ${admission.id}`,
+          });
+        }
+
+        return res.status(201).json({ encounter, admissionId: admission.id });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
   app.post("/api/encounters", authMiddleware as any, async (req: any, res) => {
     try {
       const parsed = insertEncounterSchema.safeParse(req.body);
@@ -1087,7 +2196,7 @@ export async function registerRoutes(
     }
   });
 
-  const billingChargeRoles = ["super_admin", "facility_admin", "finance"] as const;
+  const billingChargeRoles = ["super_admin"] as const;
 
   app.post(
     "/api/encounters/:id/visit-charges/manual",
@@ -1185,7 +2294,7 @@ export async function registerRoutes(
   app.get(
     "/api/encounters/:id/visit-summary",
     authMiddleware as any,
-    requireRole("clinician", "nurse", "super_admin", "facility_admin", "finance", "reception") as any,
+    requireRole("clinician", "nurse", "super_admin", "reception") as any,
     async (req, res) => {
     try {
       const data = await storage.getVisitSummaryForEncounter(req.params.id);
@@ -1225,6 +2334,495 @@ export async function registerRoutes(
       return res.status(500).json({ message: error.message });
     }
   });
+
+  /** Bed Management (admin). */
+  app.get(
+    "/api/beds",
+    authMiddleware as any,
+    requireRole("super_admin", "security") as any,
+    async (req: any, res) => {
+      try {
+        const facilityId = typeof req.query?.facilityId === "string" ? req.query.facilityId : undefined;
+        const list = await storage.getBeds(facilityId);
+        const occupied = await storage.getOccupiedBedIds(undefined);
+        const patientByBed = await storage.getActivePatientDisplayByBedId(facilityId);
+        return res.json(
+          list.map((b) => ({
+            ...b,
+            notes: b.notes ?? null,
+            inUse: occupied.has(b.id),
+            activePatientName: patientByBed.get(b.id) ?? null,
+          })),
+        );
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
+  app.post(
+    "/api/beds",
+    authMiddleware as any,
+    requireRole("super_admin", "security") as any,
+    async (req: any, res) => {
+      try {
+        const parsed = createBedBodySchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ message: "Invalid bed data", errors: parsed.error.flatten() });
+        const notesTrimmed = parsed.data.notes.trim();
+        const notesForDb = notesTrimmed.length > 0 ? notesTrimmed : null;
+        const created = await storage.createBed({
+          name: parsed.data.name.trim(),
+          notes: notesForDb,
+          ...(parsed.data.facilityId ? { facilityId: parsed.data.facilityId } : {}),
+          status: "open",
+          statusReason: null,
+          isActive: true,
+        });
+        const detailParts = [`name: ${created.name}`];
+        if (notesForDb) detailParts.push(`notes: ${notesForDb}`);
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "CREATE_BED",
+          resource: "bed",
+          resourceId: created.id,
+          details: detailParts.join(" · "),
+        });
+        return res.status(201).json({ ...created, notes: created.notes ?? null, inUse: false });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
+  const patchBedAdminBodySchema = z.object({
+    name: z.string().trim().min(1).max(500).optional(),
+    notes: z.union([z.string(), z.null()]).optional(),
+  });
+
+  app.patch(
+    "/api/beds/:id",
+    authMiddleware as any,
+    requireRole("super_admin", "security") as any,
+    async (req: any, res) => {
+      try {
+        const parsed = patchBedAdminBodySchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ message: "Invalid bed data", errors: parsed.error.flatten() });
+        const payload: Record<string, unknown> = {};
+        if (parsed.data.name !== undefined) payload.name = parsed.data.name.trim();
+        if (parsed.data.notes !== undefined) payload.notes = parsed.data.notes === null ? null : parsed.data.notes.trim();
+        if (Object.keys(payload).length === 0) {
+          return res.status(400).json({ message: "No allowed fields to update" });
+        }
+        const updated = await storage.updateBed(req.params.id, payload as any);
+        if (!updated) return res.status(404).json({ message: "Bed not found" });
+        const occupied = await storage.getOccupiedBedIds(undefined);
+        await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_BED", resource: "bed", resourceId: req.params.id });
+        return res.json({ ...updated, notes: updated.notes ?? null, inUse: occupied.has(updated.id) });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
+  app.post(
+    "/api/beds/:id/hold",
+    authMiddleware as any,
+    requireRole("super_admin", "security") as any,
+    async (req: any, res) => {
+      try {
+        const parsed = bedStatusReasonBodySchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten() });
+        const updated = await storage.setBedOnHold(req.params.id, parsed.data.reason);
+        if (!updated) return res.status(404).json({ message: "Bed not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "HOLD_BED",
+          resource: "bed",
+          resourceId: req.params.id,
+          details: parsed.data.reason.trim(),
+        });
+        const occupied = await storage.getOccupiedBedIds(undefined);
+        return res.json({ ...updated, inUse: occupied.has(updated.id) });
+      } catch (error: any) {
+        const msg = error?.message ?? "Failed";
+        const code = msg.includes("not found") ? 404 : 400;
+        return res.status(code).json({ message: msg });
+      }
+    }
+  );
+
+  app.post(
+    "/api/beds/:id/remove",
+    authMiddleware as any,
+    requireRole("super_admin", "security") as any,
+    async (req: any, res) => {
+      try {
+        const parsed = bedStatusReasonBodySchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten() });
+        const updated = await storage.setBedRemoved(req.params.id, parsed.data.reason);
+        if (!updated) return res.status(404).json({ message: "Bed not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "REMOVE_BED",
+          resource: "bed",
+          resourceId: req.params.id,
+          details: parsed.data.reason.trim(),
+        });
+        return res.json({ ...updated, inUse: false });
+      } catch (error: any) {
+        const msg = error?.message ?? "Failed";
+        const code = msg.includes("not found") ? 404 : 400;
+        return res.status(code).json({ message: msg });
+      }
+    }
+  );
+
+  app.post(
+    "/api/beds/:id/restore",
+    authMiddleware as any,
+    requireRole("super_admin", "security") as any,
+    async (req: any, res) => {
+      try {
+        const parsed = bedRestoreBodySchema.safeParse(req.body ?? {});
+        if (!parsed.success) return res.status(400).json({ message: "Invalid request", errors: parsed.error.flatten() });
+        const updated = await storage.setBedRestoredToOpen(req.params.id);
+        if (!updated) return res.status(404).json({ message: "Bed not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "RESTORE_BED",
+          resource: "bed",
+          resourceId: req.params.id,
+          details: parsed.data.reason?.trim() || "Restored to open",
+        });
+        const occupied = await storage.getOccupiedBedIds(undefined);
+        return res.json({ ...updated, inUse: occupied.has(updated.id) });
+      } catch (error: any) {
+        const msg = error?.message ?? "Failed";
+        const code = msg.includes("not found") ? 404 : 400;
+        return res.status(code).json({ message: msg });
+      }
+    }
+  );
+
+  /** Available beds for admissions (only empty beds). */
+  app.get(
+    "/api/beds/available",
+    authMiddleware as any,
+    requireRole("reception", "nurse", "clinician", "super_admin") as any,
+    async (req: any, res) => {
+      try {
+        const facilityId = typeof req.query?.facilityId === "string" ? req.query.facilityId : undefined;
+        const list = await storage.getAvailableBeds(facilityId);
+        return res.json(list);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
+  /** Admissions / active admitted patients. */
+  app.get(
+    "/api/admissions/active",
+    authMiddleware as any,
+    requireRole("reception", "nurse", "clinician", "super_admin") as any,
+    async (req: any, res) => {
+      try {
+        const facilityId = typeof req.query?.facilityId === "string" ? req.query.facilityId : undefined;
+        const list = await storage.getActiveAdmissions(facilityId);
+        return res.json(list);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
+  /** Recently discharged admissions (default last 14 days). */
+  app.get(
+    "/api/admissions/recent",
+    authMiddleware as any,
+    requireRole("nurse", "clinician", "super_admin") as any,
+    async (req: any, res) => {
+      try {
+        const facilityId = typeof req.query?.facilityId === "string" ? req.query.facilityId : undefined;
+        const list = await storage.getRecentDischargedAdmissions(facilityId, 14);
+        return res.json(list);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get(
+    "/api/patients/:id/admission",
+    authMiddleware as any,
+    requireRole("reception", "nurse", "clinician", "super_admin") as any,
+    async (req: any, res) => {
+      try {
+        const row = await storage.getActiveBedAssignmentByPatientId(req.params.id);
+        return res.json(row ?? null);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
+  app.post(
+    "/api/admissions",
+    authMiddleware as any,
+    requireRole("reception") as any,
+    async (req: any, res) => {
+      try {
+        const bedId = typeof req.body?.bedId === "string" ? req.body.bedId.trim() : "";
+        const patientId = typeof req.body?.patientId === "string" ? req.body.patientId.trim() : "";
+        const appointmentId = typeof req.body?.appointmentId === "string" ? req.body.appointmentId.trim() : undefined;
+        if (!bedId || !patientId) return res.status(400).json({ message: "bedId and patientId are required" });
+        const created = await storage.createBedAssignment({
+          bedId,
+          patientId,
+          appointmentId,
+          admittedBy: req.user.id,
+        } as any);
+        await storage.createAuditLog({ userId: req.user.id, action: "ADMIT_PATIENT", resource: "bed_assignment", resourceId: created.id });
+        return res.status(201).json(created);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
+  app.post(
+    "/api/admissions/:id/discharge",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const dischargeReason = typeof req.body?.dischargeReason === "string" ? req.body.dischargeReason.trim() : "";
+        const dischargeNotes = typeof req.body?.dischargeNotes === "string" ? req.body.dischargeNotes.trim() : null;
+        const causeOfDeath = typeof req.body?.causeOfDeath === "string" ? req.body.causeOfDeath.trim() : "";
+        const timeOfDeathRaw = req.body?.timeOfDeath;
+        const timeOfDeath =
+          typeof timeOfDeathRaw === "string" && timeOfDeathRaw.trim()
+            ? new Date(timeOfDeathRaw.trim())
+            : null;
+        if (!dischargeReason) return res.status(400).json({ message: "Discharge reason is required" });
+        if (dischargeReason === "deceased") {
+          if (!causeOfDeath) return res.status(400).json({ message: "Cause of death is required" });
+          if (!timeOfDeath || Number.isNaN(timeOfDeath.getTime())) {
+            return res.status(400).json({ message: "Time of death is required" });
+          }
+        }
+        const assignment = await storage.getBedAssignment(req.params.id);
+        if (!assignment) return res.status(404).json({ message: "Admission not found" });
+        const updated = await storage.dischargeBedAssignment(req.params.id, {
+          dischargedBy: req.user.id,
+          dischargeReason,
+          dischargeNotes,
+          causeOfDeath: dischargeReason === "deceased" ? causeOfDeath : null,
+          timeOfDeath: dischargeReason === "deceased" ? timeOfDeath : null,
+        });
+        if (assignment.appointmentId) {
+          try {
+            await storage.updateAppointment(assignment.appointmentId, { status: "completed" as any });
+          } catch {
+            // ignore; discharge still succeeds
+          }
+        }
+        if (assignment.encounterId) {
+          try {
+            await storage.updateEncounter(assignment.encounterId, { status: "completed" as any });
+          } catch {
+            // ignore
+          }
+        }
+        await storage.createAuditLog({ userId: req.user.id, action: "DISCHARGE_PATIENT", resource: "bed_assignment", resourceId: req.params.id });
+        return res.json(updated);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    }
+  );
+
+  /** Admission documentation: admission-scoped orders & medications (inpatient). */
+  app.get(
+    "/api/admissions/:id/lab-orders",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const admission = await storage.getBedAssignment(req.params.id);
+        if (!admission) return res.status(404).json({ message: "Admission not found" });
+        const rows = await storage.getAdmissionLabOrders(admission.id);
+        return res.json(rows);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/admissions/:id/lab-orders",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const admission = await storage.getBedAssignment(req.params.id);
+        if (!admission) return res.status(404).json({ message: "Admission not found" });
+        if ((admission as any).dischargedAt) return res.status(409).json({ message: "Admission is discharged" });
+        const parsed = insertLabOrderSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ message: "Invalid order", errors: parsed.error.flatten() });
+        if (parsed.data.patientId !== admission.patientId) {
+          return res.status(400).json({ message: "patientId does not match admission" });
+        }
+        const created = await storage.createLabOrder({
+          ...parsed.data,
+          admissionId: admission.id,
+        } as any);
+        await storage.createAuditLog({ userId: req.user.id, action: "CREATE_ADMISSION_LAB_ORDER", resource: "lab_order", resourceId: created.id });
+        return res.status(201).json(created);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get(
+    "/api/admissions/:id/imaging-orders",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const admission = await storage.getBedAssignment(req.params.id);
+        if (!admission) return res.status(404).json({ message: "Admission not found" });
+        const rows = await storage.getAdmissionImagingOrders(admission.id);
+        return res.json(rows);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/admissions/:id/imaging-orders",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const admission = await storage.getBedAssignment(req.params.id);
+        if (!admission) return res.status(404).json({ message: "Admission not found" });
+        if ((admission as any).dischargedAt) return res.status(409).json({ message: "Admission is discharged" });
+        const parsed = insertImagingOrderSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ message: "Invalid order", errors: parsed.error.flatten() });
+        if (parsed.data.patientId !== admission.patientId) {
+          return res.status(400).json({ message: "patientId does not match admission" });
+        }
+        const created = await storage.createImagingOrder({
+          ...parsed.data,
+          admissionId: admission.id,
+        } as any);
+        await storage.createAuditLog({ userId: req.user.id, action: "CREATE_ADMISSION_IMAGING_ORDER", resource: "imaging_order", resourceId: created.id });
+        return res.status(201).json(created);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get(
+    "/api/admissions/:id/medications",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const admission = await storage.getBedAssignment(req.params.id);
+        if (!admission) return res.status(404).json({ message: "Admission not found" });
+        const rows = await storage.getAdmissionPrescriptions(admission.id);
+        return res.json(rows);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/admissions/:id/medications",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const admission = await storage.getBedAssignment(req.params.id);
+        if (!admission) return res.status(404).json({ message: "Admission not found" });
+        if ((admission as any).dischargedAt) return res.status(409).json({ message: "Admission is discharged" });
+        const parsed = insertPrescriptionSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ message: "Invalid medication order", errors: parsed.error.flatten() });
+        if (parsed.data.patientId !== admission.patientId) {
+          return res.status(400).json({ message: "patientId does not match admission" });
+        }
+        if (parsed.data.orderType === "administered") {
+          const route = String((parsed.data as any).route ?? "").trim().toLowerCase() as MedicationRouteId | "";
+          const ok = (MEDICATION_ROUTES as readonly string[]).includes(route);
+          if (!route || !ok) {
+            return res.status(400).json({ message: "Route is required for administered medication orders" });
+          }
+          if (route === "iv") {
+            const rate = String((parsed.data as any).rate ?? "").trim();
+            if (!rate) {
+              return res.status(400).json({ message: "Rate is required for IV administered medication orders" });
+            }
+          }
+        }
+        const created = await storage.createPrescription({
+          ...parsed.data,
+          admissionId: admission.id,
+        } as any);
+        await storage.createAuditLog({ userId: req.user.id, action: "CREATE_ADMISSION_MEDICATION_ORDER", resource: "prescription", resourceId: created.id });
+        return res.status(201).json(created);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get(
+    "/api/admissions/:id/medication-administrations",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const admission = await storage.getBedAssignment(req.params.id);
+        if (!admission) return res.status(404).json({ message: "Admission not found" });
+        const rows = await storage.getMedicationAdministrations(admission.id);
+        return res.json(rows);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/admissions/:id/medication-administrations",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const admission = await storage.getBedAssignment(req.params.id);
+        if (!admission) return res.status(404).json({ message: "Admission not found" });
+        if ((admission as any).dischargedAt) return res.status(409).json({ message: "Admission is discharged" });
+        const parsed = insertMedicationAdministrationSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ message: "Invalid administration", errors: parsed.error.flatten() });
+        if (parsed.data.admissionId !== admission.id || parsed.data.patientId !== admission.patientId) {
+          return res.status(400).json({ message: "Admission/patient mismatch" });
+        }
+        const created = await storage.createMedicationAdministration({
+          ...parsed.data,
+          administeredBy: req.user.id,
+        });
+        await storage.createAuditLog({ userId: req.user.id, action: "ADMINISTER_MEDICATION", resource: "medication_administration", resourceId: created.id });
+        return res.status(201).json(created);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
 
   app.get("/api/appointments", authMiddleware as any, async (req, res) => {
     try {
@@ -1490,6 +3088,19 @@ export async function registerRoutes(
       if (body.orderType != null) {
         body.orderType = String(body.orderType).toLowerCase() === "administered" ? "administered" : "prescription";
       }
+      if (body.orderType === "administered") {
+        const route = String(body.route ?? "").trim().toLowerCase() as MedicationRouteId | "";
+        const ok = (MEDICATION_ROUTES as readonly string[]).includes(route);
+        if (!route || !ok) {
+          return res.status(400).json({ message: "Route is required for administered medication orders" });
+        }
+        if (route === "iv") {
+          const rate = String(body.rate ?? "").trim();
+          if (!rate) {
+            return res.status(400).json({ message: "Rate is required for IV administered medication orders" });
+          }
+        }
+      }
       const rx = await storage.createPrescription(body);
       await applyPrescriptionCharge(rx);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_PRESCRIPTION", resource: "prescription", resourceId: rx.id });
@@ -1504,6 +3115,19 @@ export async function registerRoutes(
       const body = { ...req.body };
       if ((body as any).orderType != null) {
         (body as any).orderType = String((body as any).orderType).toLowerCase() === "administered" ? "administered" : "prescription";
+      }
+      if ((body as any).orderType === "administered") {
+        const route = String((body as any).route ?? "").trim().toLowerCase() as MedicationRouteId | "";
+        const ok = (MEDICATION_ROUTES as readonly string[]).includes(route);
+        if (!route || !ok) {
+          return res.status(400).json({ message: "Route is required for administered medication orders" });
+        }
+        if (route === "iv") {
+          const rate = String((body as any).rate ?? "").trim();
+          if (!rate) {
+            return res.status(400).json({ message: "Rate is required for IV administered medication orders" });
+          }
+        }
       }
       const updated = await storage.updatePrescription(req.params.id, body);
       if (!updated) return res.status(404).json({ message: "Prescription not found" });
@@ -1525,6 +3149,52 @@ export async function registerRoutes(
       return res.status(500).json({ message: error.message });
     }
   });
+
+  app.get(
+    "/api/encounters/:id/medication-administrations",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const enc = await storage.getEncounter(req.params.id);
+        if (!enc) return res.status(404).json({ message: "Encounter not found" });
+        const rows = await storage.getEncounterMedicationAdministrations(enc.id);
+        return res.json(rows);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.post(
+    "/api/encounters/:id/medication-administrations",
+    authMiddleware as any,
+    requireRole("nurse", "clinician") as any,
+    async (req: any, res) => {
+      try {
+        const enc = await storage.getEncounter(req.params.id);
+        if (!enc) return res.status(404).json({ message: "Encounter not found" });
+        const parsed = insertEncounterMedicationAdministrationSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ message: "Invalid administration", errors: parsed.error.flatten() });
+        if (parsed.data.encounterId !== enc.id || parsed.data.patientId !== enc.patientId) {
+          return res.status(400).json({ message: "Encounter/patient mismatch" });
+        }
+        const created = await storage.createEncounterMedicationAdministration({
+          ...parsed.data,
+          administeredBy: req.user.id,
+        });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "ADMINISTER_MEDICATION",
+          resource: "encounter_medication_administration",
+          resourceId: created.id,
+        });
+        return res.status(201).json(created);
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
 
   app.get("/api/invoices", authMiddleware as any, async (req, res) => {
     try {
@@ -1603,7 +3273,7 @@ export async function registerRoutes(
       }
       const canEdit =
         !!facilityId &&
-        (user.role === "super_admin" || user.role === "facility_admin" || user.role === "finance");
+        user.role === "super_admin";
       return res.json({
         facilityId,
         billingCurrency: fac.billingCurrency || "KES",
@@ -1766,7 +3436,7 @@ export async function registerRoutes(
   app.get(
     "/api/audit-logs",
     authMiddleware as any,
-    requireRole("super_admin", "facility_admin", "security") as any,
+    requireRole("super_admin", "security") as any,
     async (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 100;

@@ -21,9 +21,27 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Upload, Search, PhoneCall, CalendarClock, Banknote, Phone } from "lucide-react";
+import {
+  SidebarTabsNavLayout,
+  SIDEBAR_TABS_LIST_CLASS,
+  SIDEBAR_TABS_TRIGGER_CLASS,
+} from "@/components/sidebar-tabs-nav";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Upload,
+  Search,
+  PhoneCall,
+  CalendarClock,
+  Banknote,
+  Phone,
+} from "lucide-react";
 import { PatientCallDocumentationForm } from "@/components/patient-call-documentation-form";
 import type { Appointment, FollowUpContact, ImagingOrder, Invoice, LabOrder, Patient } from "@shared/schema";
+import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
+import { useOrgTimeZone } from "@/hooks/use-org-timezone";
+import { formatInOrgTimeZone } from "@/lib/org-timezone";
 
 type FollowUpRow =
   | {
@@ -60,6 +78,7 @@ function orderFollowUpKey(r: FollowUpRow): string {
 export default function PatientFollowUpPage() {
   const [location, navigate] = useLocation();
   const { user, token } = useAuth();
+  const orgTz = useOrgTimeZone();
   const { currencyCode } = useBillingCurrency(token);
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<
@@ -320,19 +339,34 @@ export default function PatientFollowUpPage() {
   const sortHeader = (
     key: "patient" | "mrn" | "phone" | "orderDate" | "orderType" | "orderName" | "calledOn",
     label: string,
-    thClassName?: string
-  ) => (
-    <TableHead className={cn("whitespace-nowrap", thClassName)}>
-      <button
-        type="button"
-        onClick={() => toggleSort(key)}
-        className="-mx-1 inline-flex items-center rounded-md px-1 py-0.5 font-medium text-muted-foreground hover:bg-muted/80 hover:text-foreground"
-      >
-        {label}
-        {sortKey === key ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
-      </button>
-    </TableHead>
-  );
+    thClassName?: string,
+  ) => {
+    const active = sortKey === key;
+    return (
+      <TableHead className={cn("whitespace-nowrap", thClassName)}>
+        <button
+          type="button"
+          onClick={() => toggleSort(key)}
+          className={cn(
+            "-mx-2 inline-flex min-h-10 w-full max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors",
+            "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          )}
+          aria-sort={active ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+        >
+          <span className="truncate">{label}</span>
+          {active ? (
+            sortDir === "asc" ? (
+              <ArrowUp className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+            ) : (
+              <ArrowDown className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+            )
+          ) : (
+            <ArrowUpDown className="h-3.5 w-3.5 shrink-0 opacity-40" aria-hidden />
+          )}
+        </button>
+      </TableHead>
+    );
+  };
 
   const openUpload = (row: FollowUpRow) => {
     const params = new URLSearchParams();
@@ -396,39 +430,29 @@ export default function PatientFollowUpPage() {
             // ignore
           }
         }}
-        className="space-y-4"
       >
-        <TabsList className="grid w-full max-w-3xl grid-cols-3 h-auto gap-1 p-1">
-          <TabsTrigger
-            value="orders"
-            className="text-xs sm:text-sm py-2 px-2 whitespace-normal leading-tight"
-            data-testid="tab-follow-up-orders"
-          >
-            <span className="hidden sm:inline">Order Follow up </span>
-            <span className="sm:hidden">Orders </span>
-            <span className="text-muted-foreground">({filtered.length})</span>
-          </TabsTrigger>
-          <TabsTrigger
-            value="appointments"
-            className="text-xs sm:text-sm py-2 px-2 whitespace-normal leading-tight"
-            data-testid="tab-follow-up-appointments"
-          >
-            <span className="hidden sm:inline">Appointment reminder </span>
-            <span className="sm:hidden">Reminder </span>
-            <span className="text-muted-foreground">({appointmentReminders.length})</span>
-          </TabsTrigger>
-          <TabsTrigger
-            value="payments"
-            className="text-xs sm:text-sm py-2 px-2 whitespace-normal leading-tight"
-            data-testid="tab-follow-up-payments"
-          >
-            <span className="hidden sm:inline">Outstanding payment </span>
-            <span className="sm:hidden">Pay </span>
-            <span className="text-muted-foreground">({outstandingPayments.length})</span>
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="orders" className="space-y-3 mt-4 focus-visible:outline-none">
+        <SidebarTabsNavLayout
+          sidebar={
+            <TabsList className={SIDEBAR_TABS_LIST_CLASS}>
+              <TabsTrigger value="orders" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-follow-up-orders">
+                <span className="hidden sm:inline">Order follow up </span>
+                <span className="sm:hidden">Orders </span>
+                <span className="text-muted-foreground shrink-0">({filtered.length})</span>
+              </TabsTrigger>
+              <TabsTrigger value="appointments" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-follow-up-appointments">
+                <span className="hidden sm:inline">Appointment reminder </span>
+                <span className="sm:hidden">Reminder </span>
+                <span className="text-muted-foreground shrink-0">({appointmentReminders.length})</span>
+              </TabsTrigger>
+              <TabsTrigger value="payments" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-follow-up-payments">
+                <span className="hidden sm:inline">Outstanding payment </span>
+                <span className="sm:hidden">Pay </span>
+                <span className="text-muted-foreground shrink-0">({outstandingPayments.length})</span>
+              </TabsTrigger>
+            </TabsList>
+          }
+        >
+        <TabsContent value="orders" className="mt-0 space-y-3 focus-visible:outline-none">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <p className="text-sm text-muted-foreground">
               External lab / imaging orders awaiting outside results.
@@ -490,7 +514,7 @@ export default function PatientFollowUpPage() {
                             </span>
                           </TableCell>
                           <TableCell className="text-xs font-mono whitespace-nowrap">
-                            {format(new Date(r.createdAt), "yyyy-MM-dd HH:mm")}
+                            {formatInOrgTimeZone(r.createdAt, "yyyy-MM-dd HH:mm", orgTz)}
                           </TableCell>
                           <TableCell>
                             <Badge variant="secondary" className="text-[10px] capitalize">
@@ -507,11 +531,11 @@ export default function PatientFollowUpPage() {
                               <button
                                 type="button"
                                 className="text-primary text-xs font-mono underline underline-offset-1 hover:text-primary/80 text-left"
-                                title={format(new Date(lastCall.createdAt), "yyyy-MM-dd HH:mm")}
+                                title={formatInOrgTimeZone(lastCall.createdAt, "yyyy-MM-dd HH:mm", orgTz)}
                                 onClick={() => setLastCallDetail(lastCall)}
                                 data-testid={`follow-up-called-on-${r.kind}-${r.kind === "lab" ? r.labOrderId : r.imagingOrderId}`}
                               >
-                                {format(new Date(lastCall.createdAt), "yyyy-MM-dd HH:mm")}
+                                {formatInOrgTimeZone(lastCall.createdAt, "yyyy-MM-dd HH:mm", orgTz)}
                               </button>
                             ) : (
                               <span className="text-muted-foreground">—</span>
@@ -552,7 +576,7 @@ export default function PatientFollowUpPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="appointments" className="space-y-3 mt-4 focus-visible:outline-none">
+        <TabsContent value="appointments" className="mt-0 space-y-3 focus-visible:outline-none">
           <div className="flex items-start gap-2">
             <CalendarClock className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" aria-hidden />
             <p className="text-sm text-muted-foreground">
@@ -584,7 +608,7 @@ export default function PatientFollowUpPage() {
                       <TableHead className="min-w-[8rem]">Phone</TableHead>
                       <TableHead className="w-[5rem] text-right">Duration</TableHead>
                       <TableHead className="min-w-[8rem]">Clinician</TableHead>
-                      <TableHead className="min-w-[8rem]">Reason</TableHead>
+                      <TableHead className="min-w-[8rem]">{APPOINTMENT_REASON_FOR_VISIT_LABEL}</TableHead>
                       <TableHead className="w-[8rem]">Call status</TableHead>
                       <TableHead className="min-w-[9rem] text-right">Actions</TableHead>
                     </TableRow>
@@ -600,7 +624,7 @@ export default function PatientFollowUpPage() {
                       return (
                         <TableRow key={a.id}>
                           <TableCell className="text-xs font-mono whitespace-nowrap">
-                            {format(new Date(a.scheduledDate), "yyyy-MM-dd HH:mm")}
+                            {formatInOrgTimeZone(a.scheduledDate, "yyyy-MM-dd HH:mm", orgTz)}
                           </TableCell>
                           <TableCell className="font-medium">{patientName}</TableCell>
                           <TableCell className="text-xs font-mono text-muted-foreground">{mrn}</TableCell>
@@ -655,7 +679,7 @@ export default function PatientFollowUpPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="payments" className="space-y-3 mt-4 focus-visible:outline-none">
+        <TabsContent value="payments" className="mt-0 space-y-3 focus-visible:outline-none">
         <div className="flex items-start gap-2">
           <Banknote className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" aria-hidden />
           <p className="text-sm text-muted-foreground">
@@ -741,6 +765,7 @@ export default function PatientFollowUpPage() {
           </CardContent>
         </Card>
         </TabsContent>
+        </SidebarTabsNavLayout>
       </Tabs>
 
       <Dialog
@@ -762,7 +787,7 @@ export default function PatientFollowUpPage() {
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Called on</p>
                 <p className="font-mono mt-1">
                   {lastCallDetail.createdAt
-                    ? format(new Date(lastCallDetail.createdAt), "yyyy-MM-dd HH:mm")
+                    ? formatInOrgTimeZone(lastCallDetail.createdAt, "yyyy-MM-dd HH:mm", orgTz)
                     : "—"}
                 </p>
               </div>
@@ -891,7 +916,7 @@ export default function PatientFollowUpPage() {
                 <>
                   Document the call for{" "}
                   <strong>
-                    {format(new Date(appointmentForCall.scheduledDate), "MMM d, yyyy HH:mm")}
+                    {formatInOrgTimeZone(appointmentForCall.scheduledDate, "MMM d, yyyy HH:mm", orgTz)}
                   </strong>
                   {patientMap.get(appointmentForCall.patientId) && (
                     <>

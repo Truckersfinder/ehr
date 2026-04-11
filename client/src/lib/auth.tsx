@@ -9,6 +9,26 @@ interface AuthUser {
   email?: string;
   phone?: string;
   facilityId?: string;
+  /** Effective capability ids (navigation, admin, activities) after role overrides. */
+  capabilities?: string[];
+  organization?: {
+    facilityId: string;
+    name: string;
+    patientIdentifierLabel: string;
+    defaultCountry: string;
+    billingCurrency: string;
+    logoUrl: string | null;
+    timeZone?: string;
+  };
+  /** Per-role UI: nav labels/order, toolbar, patient chart (from Application configuration). */
+  activityUi?: {
+    headerNav: { id: string; label: string }[];
+    toolbar: { id: string; label: string }[];
+    patientChartReview: { id: string; label: string }[];
+    patientChartVisitDoc: { id: string; label: string }[];
+    /** Administration → Administrative (Facilities, Audit, …) — from Application configuration. */
+    adminActivities: { id: string; label: string }[];
+  };
 }
 
 interface AuthContextType {
@@ -50,11 +70,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token, logout]);
 
   const login = async (username: string, password: string): Promise<AuthUser> => {
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+    } catch {
+      throw new Error(
+        "Cannot reach the server. From the project root run npm run dev, then open http://127.0.0.1:3000. " +
+          "If you start Vite alone (e.g. port 5173), the API must still be running on port 3000.",
+      );
+    }
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.message || "Login failed");

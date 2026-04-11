@@ -31,14 +31,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useOrgTimeZone } from "@/hooks/use-org-timezone";
 import {
   Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid, User, CalendarDays, Phone, PhoneCall, Mail, MapPin, Heart, ChevronLeft, ChevronRight, Trash2, ScrollText, Paperclip,
 } from "lucide-react";
 import { format } from "date-fns";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from "recharts";
 import { ChartContainer } from "@/components/ui/chart";
-import type { Patient, Encounter, Prescription, LabOrder, PatientProblem, PatientNote, FamilyMember, FamilyMemberCondition, ImagingResult, ImagingOrder, PatientDocument, Vitals, PatientAllergy, Appointment, FollowUpContact } from "@shared/schema";
+import type { Patient, Encounter, Prescription, EncounterMedicationAdministration, LabOrder, PatientProblem, PatientNote, FamilyMember, FamilyMemberCondition, ImagingResult, ImagingOrder, PatientDocument, Vitals, PatientAllergy, Appointment, FollowUpContact } from "@shared/schema";
 import { normalizePatientRow } from "@/lib/patient-photo";
+import { formatInOrgTimeZone } from "@/lib/org-timezone";
 import {
   mergeLatestStoryboardVitals,
   storyboardVitalsHasAnyValue,
@@ -58,6 +60,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { VisitSummaryTab } from "@/components/visit-summary-tab";
+import { AdmissionMedicationTab } from "@/components/admission-documentation/admission-medication-tab";
+import { AdmissionOrdersTab } from "@/components/admission-documentation/admission-orders-tab";
+import {
+  SidebarTabsNavLayout,
+  SIDEBAR_TABS_LIST_CLASS,
+  SIDEBAR_TABS_TRIGGER_CLASS,
+} from "@/components/sidebar-tabs-nav";
 import { PatientCallDocumentationForm } from "@/components/patient-call-documentation-form";
 import {
   setClinicianVisitDocumentationSession,
@@ -65,9 +74,26 @@ import {
   readClinicianVisitDocumentationSession,
 } from "@/lib/clinician-visit-doc-session";
 import { cn } from "@/lib/utils";
+import {
+  getPatientChartReviewNav,
+  getPatientChartVisitDocNav,
+  visitDocActivityIdToTab,
+  reviewTabsAllowedSet,
+  visitDocTabsAllowedSet,
+  pickFallbackMainTab,
+} from "@/lib/patient-chart-activity-ui";
+import { PatientChartReviewTabTriggers, PatientChartFormsConsentTab } from "@/components/patient-chart-review-section";
+import { PATIENT_CHART_SIDEBAR_TAB_TRIGGER_CLASS } from "@/components/patient-chart-review-constants";
 import { apiGetJson, apiPostJson } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import { getRecordDocumentTypeId, type PatientDocumentRow } from "@shared/patient-document-normalize";
+import { frequencyToIntervalMinutes } from "@/lib/medication-frequency";
+
+const ROUTE_OPTIONS: { id: "oral" | "injection" | "iv"; label: string }[] = [
+  { id: "oral", label: "Oral" },
+  { id: "injection", label: "Injection" },
+  { id: "iv", label: "Intravenous (IV)" },
+];
 
 const ALLERGY_REACTION_TYPES = [
   "Anaphylaxis",
@@ -85,10 +111,28 @@ const ALLERGY_REACTION_TYPES = [
 
 const BLOOD_GROUP_OPTIONS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] as const;
 
-function safeFormatDateTime(value: unknown): string {
+function safeFormatDateTime(value: unknown, timeZone: string): string {
   if (value == null || value === "") return "—";
-  const d = value instanceof Date ? value : new Date(String(value));
-  return Number.isNaN(d.getTime()) ? "—" : format(d, "MMM d, yyyy · HH:mm");
+  return formatInOrgTimeZone(value as any, "MMM d, yyyy · HH:mm", timeZone);
+}
+
+function visitDocSidebarIcon(id: string) {
+  switch (id) {
+    case "pc_allergy":
+      return AlertTriangle;
+    case "pc_problems":
+      return ListChecks;
+    case "pc_vitals":
+      return Activity;
+    case "pc_medication":
+      return Pill;
+    case "pc_orders":
+      return ClipboardList;
+    case "pc_notes":
+      return FileText;
+    default:
+      return FileText;
+  }
 }
 
 /** Active schedule encounter for this chart (from session). Use at save time — not React state — so documentation links before visitSummaryMeta finishes loading. */
@@ -105,6 +149,7 @@ export default function PatientDetailPage() {
   const [location, navigate] = useLocation();
   const urlSearch = useSearch();
   const { user, token } = useAuth();
+  const orgTz = useOrgTimeZone();
   const { toast } = useToast();
   const id = params?.id;
   const authToken = token ?? getStoredAuthToken();
@@ -180,7 +225,14 @@ export default function PatientDetailPage() {
     medicationName: "", dosage: "", frequency: "once daily", duration: "", instructions: "",
     patientProblemId: "",
     orderType: "prescription" as "prescription" | "administered",
+    route: "",
+    rate: "",
   });
+  const [medicationTab, setMedicationTab] = useState<"history" | "administration">("history");
+  const [encAdminOpen, setEncAdminOpen] = useState<{ rx: Prescription } | null>(null);
+  const [encAdminForm, setEncAdminForm] = useState({ doseGiven: "", notes: "" });
+  const [medNowTick, setMedNowTick] = useState(() => Date.now());
+  const medDueToastRef = useRef(new Set<string>());
   const [discontinueRxOpen, setDiscontinueRxOpen] = useState(false);
   const [discontinuePrescription, setDiscontinuePrescription] = useState<Prescription | null>(null);
   const [discontinueReason, setDiscontinueReason] = useState("");
@@ -188,14 +240,12 @@ export default function PatientDetailPage() {
   const isClinicianOrNurse = user?.role === "clinician" || user?.role === "nurse";
   /** Full navigator only after starting a visit from Schedule (session flag). Browse/search entry = Review only. */
   const [clinVisitDocUnlocked, setClinVisitDocUnlocked] = useState(false);
+  /** Admission documentation unlock: clinician/nurse opened an active admission from the admitted list. */
+  const [admissionDocUnlocked, setAdmissionDocUnlocked] = useState(false);
   /** Billing / admin opens chart from Billing → Visit Documentation (?visitDocReview=1&encounterId=) */
   const [billingReviewEncounterValid, setBillingReviewEncounterValid] = useState(false);
 
-  const isVisitDocumentationReviewRole =
-    user?.role === "super_admin" ||
-    user?.role === "facility_admin" ||
-    user?.role === "finance" ||
-    user?.role === "reception";
+  const isVisitDocumentationReviewRole = user?.role === "super_admin" || user?.role === "reception";
 
   /** Prefer window/location query — wouter's useSearch() can be empty right after <Link> navigation. */
   const billingVisitDocReviewParams = useMemo(() => {
@@ -215,8 +265,11 @@ export default function PatientDetailPage() {
   const documentationReadOnly = billingReviewEncounterValid && isVisitDocumentationReviewRole;
 
   const showVisitDocumentation =
-    (isClinicianOrNurse && clinVisitDocUnlocked && user?.role !== "reception") || billingReviewEncounterValid;
-  const reviewSectionTabs = new Set(["overview", "history", "immunization", "results", "patient-call"]);
+    (isClinicianOrNurse && (clinVisitDocUnlocked || admissionDocUnlocked) && user?.role !== "reception") ||
+    billingReviewEncounterValid;
+  const reviewNav = useMemo(() => getPatientChartReviewNav(user), [user?.activityUi]);
+  const visitDocNav = useMemo(() => getPatientChartVisitDocNav(user), [user?.activityUi]);
+  const reviewSectionTabs = useMemo(() => reviewTabsAllowedSet(reviewNav), [reviewNav]);
   const [patientCallReasonForCall, setPatientCallReasonForCall] = useState("");
   const [patientCallOutcome, setPatientCallOutcome] = useState<"picked_up" | "did_not_pick_up" | "left_message" | "">("");
   const [patientCallDiscussion, setPatientCallDiscussion] = useState("");
@@ -226,11 +279,17 @@ export default function PatientDetailPage() {
   const [reopenVisitPrompt, setReopenVisitPrompt] = useState<{ appointmentId: string } | null>(null);
   const [reopenVisitLoading, setReopenVisitLoading] = useState(false);
 
-  const documentationTabs = useMemo(() => {
-    const s = new Set(["allergy", "problems", "vitals", "medication", "orders", "notes"]);
-    if (visitSummaryMeta) s.add("visit-summary");
-    return s;
-  }, [visitSummaryMeta]);
+  useEffect(() => {
+    const id = window.setInterval(() => setMedNowTick(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const documentationTabs = useMemo(
+    () => visitDocTabsAllowedSet(visitDocNav, !!visitSummaryMeta),
+    [visitDocNav, visitSummaryMeta],
+  );
+
+  const activeAdmissionId = admissionDocUnlocked ? sessionStorage.getItem("ehr_active_admission_id") : null;
 
   const invalidateVisitSummaryForScheduleSession = useCallback(() => {
     const encId = readScheduleEncounterIdForPatient(id);
@@ -261,13 +320,23 @@ export default function PatientDetailPage() {
 
   const handleMainTabChange = (nextTab: string) => {
     if (nextTab === "visit-summary" && !visitSummaryMeta) {
-      setMainTab("overview");
-      replaceTabInUrl("overview");
+      const fb = pickFallbackMainTab(reviewSectionTabs, documentationTabs, showVisitDocumentation);
+      setMainTab(fb);
+      replaceTabInUrl(fb);
       return;
     }
     if (!showVisitDocumentation && documentationTabs.has(nextTab)) {
-      setMainTab("overview");
-      replaceTabInUrl("overview");
+      const fb = pickFallbackMainTab(reviewSectionTabs, documentationTabs, showVisitDocumentation);
+      setMainTab(fb);
+      replaceTabInUrl(fb);
+      return;
+    }
+    const allowedReview = reviewSectionTabs.has(nextTab);
+    const allowedDoc = showVisitDocumentation && documentationTabs.has(nextTab);
+    if (!allowedReview && !allowedDoc) {
+      const fb = pickFallbackMainTab(reviewSectionTabs, documentationTabs, showVisitDocumentation);
+      setMainTab(fb);
+      replaceTabInUrl(fb);
       return;
     }
     setMainTab(nextTab);
@@ -285,10 +354,19 @@ export default function PatientDetailPage() {
     if (allowed) {
       setMainTab(t);
     } else {
-      setMainTab("overview");
-      replaceTabInUrl("overview");
+      const fb = pickFallbackMainTab(reviewSectionTabs, documentationTabs, showVisitDocumentation);
+      setMainTab(fb);
+      replaceTabInUrl(fb);
     }
-  }, [id, showVisitDocumentation, replaceTabInUrl, documentationTabs, visitSummaryMeta, billingReviewEncounterValid]);
+  }, [
+    id,
+    showVisitDocumentation,
+    replaceTabInUrl,
+    documentationTabs,
+    visitSummaryMeta,
+    billingReviewEncounterValid,
+    reviewSectionTabs,
+  ]);
 
   /** Visit Summary tab: schedule-started encounter only (appointment linked), clinician/nurse */
   useEffect(() => {
@@ -301,9 +379,13 @@ export default function PatientDetailPage() {
   useEffect(() => {
     if (!isClinicianOrNurse) {
       setClinVisitDocUnlocked(false);
+      setAdmissionDocUnlocked(false);
       return;
     }
     setClinVisitDocUnlocked(readClinicianVisitDocumentationSession());
+    const pid = sessionStorage.getItem("ehr_active_encounter_patient_id");
+    const hasAdmission = !!sessionStorage.getItem("ehr_active_admission_id");
+    setAdmissionDocUnlocked(!!id && pid === id && hasAdmission);
   }, [id, isClinicianOrNurse, encSessionTick]);
 
   /** Patient search / browse entry: Review-only until user starts a visit from Schedule again. */
@@ -315,6 +397,8 @@ export default function PatientDetailPage() {
     if (!fromSearch && !chartBrowse) return;
     clearClinicianVisitDocumentationSession();
     setClinVisitDocUnlocked(false);
+    sessionStorage.removeItem("ehr_active_admission_id");
+    setAdmissionDocUnlocked(false);
     const url = new URL(window.location.href);
     let changed = false;
     if (url.searchParams.has("fromSearch")) {
@@ -405,10 +489,11 @@ export default function PatientDetailPage() {
   useEffect(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
     if (t === "visit-summary" && !visitSummaryMeta) {
-      setMainTab("overview");
-      replaceTabInUrl("overview");
+      const fb = pickFallbackMainTab(reviewSectionTabs, documentationTabs, showVisitDocumentation);
+      setMainTab(fb);
+      replaceTabInUrl(fb);
     }
-  }, [visitSummaryMeta, replaceTabInUrl]);
+  }, [visitSummaryMeta, replaceTabInUrl, reviewSectionTabs, documentationTabs, showVisitDocumentation]);
 
   /** Clear schedule-encounter session when switching to a different patient */
   useEffect(() => {
@@ -418,10 +503,62 @@ export default function PatientDetailPage() {
       sessionStorage.removeItem("ehr_active_encounter_id");
       sessionStorage.removeItem("ehr_active_encounter_patient_id");
       sessionStorage.removeItem("ehr_schedule_appointment_id");
+      sessionStorage.removeItem("ehr_active_admission_id");
       clearClinicianVisitDocumentationSession();
+      setAdmissionDocUnlocked(false);
       window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
     }
   }, [id]);
+
+  /** Opening chart from Admitted Patients list (?fromAdmission=1&admissionId=) starts or resumes an inpatient encounter. */
+  useEffect(() => {
+    if (!id || !authToken || !isClinicianOrNurse) return;
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get("fromAdmission") !== "1") return;
+    const admissionId = sp.get("admissionId");
+    if (!admissionId) return;
+
+    const stripAdmissionQueryParams = () => {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("fromAdmission");
+      url.searchParams.delete("admissionId");
+      window.history.replaceState({}, "", url.pathname + (url.search ? url.search : ""));
+    };
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/patients/${id}/start-from-admission`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+          body: JSON.stringify({ admissionId }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || "Could not open admission documentation");
+        }
+        const data = (await res.json()) as { encounter: { id: string }; admissionId: string };
+        sessionStorage.setItem("ehr_active_encounter_id", data.encounter.id);
+        sessionStorage.setItem("ehr_active_encounter_patient_id", id);
+        sessionStorage.setItem("ehr_active_admission_id", data.admissionId);
+        setAdmissionDocUnlocked(true);
+        // Admission documentation is editable for clinical roles (no schedule unlock required).
+        setClinVisitDocUnlocked(false);
+        clearClinicianVisitDocumentationSession();
+        stripAdmissionQueryParams();
+        window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
+        // Default to the admission documentation area when opened from list.
+        const docTab = documentationTabs.has("medication")
+          ? "medication"
+          : pickFallbackMainTab(reviewSectionTabs, documentationTabs, true);
+        setMainTab(docTab);
+        pushTabInUrl(docTab);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Could not open admission documentation";
+        toast({ title: "Error", description: msg, variant: "destructive" });
+        stripAdmissionQueryParams();
+      }
+    })();
+  }, [id, authToken, isClinicianOrNurse, pushTabInUrl, toast, documentationTabs, reviewSectionTabs]);
 
   useEffect(() => {
     setReopenVisitPrompt(null);
@@ -601,6 +738,17 @@ export default function PatientDetailPage() {
     queryKey: id ? queryKeys.prescriptions.list(id) : queryKeys.prescriptions.root,
     queryFn: () => apiGetJson<Prescription[]>(`/api/prescriptions?patientId=${id}`, authToken),
     enabled: !!id,
+  });
+
+  const activeEncounterId = readScheduleEncounterIdForPatient(id) ?? null;
+
+  const { data: encounterMedicationAdministrations = [] } = useQuery<EncounterMedicationAdministration[]>({
+    queryKey: activeEncounterId
+      ? ["/api/encounters", activeEncounterId, "medication-administrations"]
+      : (["/api/encounters", "medication-administrations", "idle"] as const),
+    queryFn: () => apiGetJson<EncounterMedicationAdministration[]>(`/api/encounters/${activeEncounterId}/medication-administrations`, authToken),
+    enabled: !!activeEncounterId && !!authToken,
+    staleTime: 0,
   });
 
   const { data: problems = [] } = useQuery<PatientProblem[]>({
@@ -1379,6 +1527,37 @@ export default function PatientDetailPage() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
 
+  const recordEncounterMedicationAdministrationMutation = useMutation({
+    mutationFn: async (rx: Prescription) => {
+      if (!activeEncounterId) throw new Error("Missing encounter");
+      const res = await fetch(`/api/encounters/${activeEncounterId}/medication-administrations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
+        body: JSON.stringify({
+          encounterId: activeEncounterId,
+          prescriptionId: rx.id,
+          patientId: id,
+          administeredBy: user?.id,
+          administeredAt: new Date().toISOString(),
+          doseGiven: encAdminForm.doseGiven.trim() || null,
+          notes: encAdminForm.notes.trim() || null,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/encounters", activeEncounterId, "medication-administrations"] });
+      toast({ title: "Administration recorded" });
+      setEncAdminOpen(null);
+      setEncAdminForm({ doseGiven: "", notes: "" });
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
   const addPrescriptionMutation = useMutation({
     mutationFn: async (data: typeof newMedOrderForm) => {
       const res = await fetch("/api/prescriptions", {
@@ -1392,8 +1571,10 @@ export default function PatientDetailPage() {
           medicationName: data.medicationName.trim(),
           dosage: data.dosage.trim(),
           frequency: data.frequency.trim(),
-          duration: data.duration.trim() || undefined,
+          duration: data.orderType === "prescription" ? (data.duration.trim() || undefined) : undefined,
           instructions: data.instructions.trim() || undefined,
+          route: data.orderType === "administered" ? (data.route || null) : null,
+          rate: data.orderType === "administered" && data.route === "iv" ? (data.rate?.trim() || null) : null,
           status: "active",
           ...(readScheduleEncounterIdForPatient(id) ? { encounterId: readScheduleEncounterIdForPatient(id)! } : {}),
         }),
@@ -1411,7 +1592,7 @@ export default function PatientDetailPage() {
       setNewMedOrderOpen(false);
       setNewOrderOpen(false);
       setOrderComposerType(null);
-      setNewMedOrderForm({ medicationName: "", dosage: "", frequency: "once daily", duration: "", instructions: "", patientProblemId: "", orderType: "prescription" });
+      setNewMedOrderForm({ medicationName: "", dosage: "", frequency: "once daily", duration: "", instructions: "", patientProblemId: "", orderType: "prescription", route: "", rate: "" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   });
@@ -1562,74 +1743,66 @@ export default function PatientDetailPage() {
             <div>
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Review</p>
               <div className="flex flex-col gap-0.5">
-                <Link href={`/patients/${id}/demographics`} className="block w-full">
-                  <a
-                    className={cn(
-                      "inline-flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 h-auto text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-                      "bg-transparent hover:bg-accent text-foreground",
-                      onDemographicsPage && "bg-accent"
-                    )}
-                    data-testid="nav-review-demographics"
-                  >
-                    <User className="w-4 h-4 shrink-0" /> Demographics
-                  </a>
-                </Link>
+                {reviewNav.some((e) => e.id === "pc_demographics") ? (
+                  <Link href={`/patients/${id}/demographics`} className="block w-full min-w-0">
+                    <a
+                      className={cn(
+                        "flex w-full min-w-0 items-center justify-start gap-2 rounded-md px-3 py-2 h-auto text-sm font-medium text-left ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                        "bg-transparent hover:bg-accent text-foreground",
+                        onDemographicsPage && "bg-accent",
+                      )}
+                      data-testid="nav-review-demographics"
+                    >
+                      <User className="w-4 h-4 shrink-0" />{" "}
+                      {reviewNav.find((e) => e.id === "pc_demographics")?.label ?? "Demographics"}
+                    </a>
+                  </Link>
+                ) : null}
                 <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
-                  <TabsTrigger value="patient-call" data-testid="tab-patient-call" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <PhoneCall className="w-4 h-4 shrink-0" /> Patient call
-                  </TabsTrigger>
-                  <TabsTrigger value="overview" data-testid="tab-overview" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <LayoutGrid className="w-4 h-4 shrink-0" /> Overview
-                  </TabsTrigger>
-                  <TabsTrigger value="history" data-testid="tab-history" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <History className="w-4 h-4 shrink-0" /> History
-                  </TabsTrigger>
-                  <TabsTrigger value="immunization" data-testid="tab-immunization" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <ShieldCheck className="w-4 h-4 shrink-0" /> Immunization
-                  </TabsTrigger>
-                  <TabsTrigger value="results" data-testid="tab-results" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <FileCheck className="w-4 h-4 shrink-0" /> Results
-                  </TabsTrigger>
+                  <PatientChartReviewTabTriggers items={reviewNav} />
                 </TabsList>
               </div>
             </div>
             {showVisitDocumentation && (
               <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Visit documentation</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">
+                  {admissionDocUnlocked ? "Admission documentation" : "Visit documentation"}
+                </p>
                 <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
-                  <TabsTrigger value="allergy" data-testid="tab-allergy" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <AlertTriangle className="w-4 h-4 shrink-0" /> Allergy
-                  </TabsTrigger>
-                  <TabsTrigger value="problems" data-testid="tab-problems" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <ListChecks className="w-4 h-4 shrink-0" /> Problems List
-                  </TabsTrigger>
-                  <TabsTrigger value="vitals" data-testid="tab-vitals" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <Activity className="w-4 h-4 shrink-0" /> Vitals
-                  </TabsTrigger>
-                  <TabsTrigger value="medication" data-testid="tab-medication" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <Pill className="w-4 h-4 shrink-0" /> Medication
-                  </TabsTrigger>
-                  <TabsTrigger value="orders" data-testid="tab-orders" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <ClipboardList className="w-4 h-4 shrink-0" /> Orders
-                  </TabsTrigger>
-                  <TabsTrigger value="notes" data-testid="tab-notes" className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium">
-                    <FileText className="w-4 h-4 shrink-0" /> Notes
-                  </TabsTrigger>
+                  {visitDocNav
+                    .filter((e) => e.id !== "pc_visit_summary")
+                    .map((entry) => {
+                      const tab = visitDocActivityIdToTab(entry.id);
+                      const Icon = visitDocSidebarIcon(entry.id);
+                      return (
+                        <TabsTrigger
+                          key={entry.id}
+                          value={tab}
+                          data-testid={`tab-${tab}`}
+                          className={PATIENT_CHART_SIDEBAR_TAB_TRIGGER_CLASS}
+                        >
+                          <Icon className="w-4 h-4 shrink-0" /> {entry.label}
+                        </TabsTrigger>
+                      );
+                    })}
                 </TabsList>
-                {visitSummaryMeta && (
+                {visitSummaryMeta && visitDocNav.some((e) => e.id === "pc_visit_summary") ? (
                   <div className="mt-4">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Visit Summary</p>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">
+                      Visit Summary
+                    </p>
                     <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
                       <TabsTrigger
                         value="visit-summary"
                         data-testid="tab-visit-summary"
-                        className="w-full justify-start gap-2 rounded-md px-3 py-2 h-auto bg-transparent hover:bg-accent data-[state=active]:bg-accent data-[state=active]:font-medium"
+                        className={PATIENT_CHART_SIDEBAR_TAB_TRIGGER_CLASS}
                       >
-                        <ScrollText className="w-4 h-4 shrink-0" /> Visit Summary
+                        <ScrollText className="w-4 h-4 shrink-0" />{" "}
+                        {visitDocNav.find((e) => e.id === "pc_visit_summary")?.label ?? "Visit Summary"}
                       </TabsTrigger>
                     </TabsList>
                   </div>
-                )}
+                ) : null}
               </div>
             )}
           </div>
@@ -1723,7 +1896,7 @@ export default function PatientDetailPage() {
                         return Number.isFinite(n) ? n : null;
                       };
                       const chartData = [...vitalsList.slice(0, 3)].reverse().map((v) => ({
-                        date: v.recordedAt ? format(new Date(v.recordedAt), "MMM d") : "",
+                        date: v.recordedAt ? formatInOrgTimeZone(v.recordedAt, "MMM d", orgTz) : "",
                         systolic: v.bloodPressureSystolic != null ? Number(v.bloodPressureSystolic) : null,
                         diastolic: v.bloodPressureDiastolic != null ? Number(v.bloodPressureDiastolic) : null,
                         heartRate: v.heartRate != null ? Number(v.heartRate) : null,
@@ -1948,7 +2121,7 @@ export default function PatientDetailPage() {
                           )}
                           {(startDate || symptoms) && (
                             <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                              {startDate && <p>Started: {format(new Date(startDate), "MMM d, yyyy")}</p>}
+                              {startDate && <p>Started: {formatInOrgTimeZone(startDate, "MMM d, yyyy", orgTz)}</p>}
                               {symptoms && <p className="whitespace-pre-wrap">Symptoms: {symptoms}</p>}
                             </div>
                           )}
@@ -2088,7 +2261,8 @@ export default function PatientDetailPage() {
                             onClick={() => {
                               setEditVitals(v);
                               const d = v.recordedAt ? new Date(v.recordedAt) : new Date();
-                              const recordedAtStr = format(d, "yyyy-MM-dd") + "T" + format(d, "HH:mm");
+                              const recordedAtStr =
+                                formatInOrgTimeZone(d, "yyyy-MM-dd", orgTz) + "T" + formatInOrgTimeZone(d, "HH:mm", orgTz);
                               setEditVitalsForm({
                                 temperature: v.temperature != null ? String(v.temperature) : "",
                                 bloodPressureSystolic: v.bloodPressureSystolic != null ? String(v.bloodPressureSystolic) : "",
@@ -2103,10 +2277,12 @@ export default function PatientDetailPage() {
                               setEditVitalsOpen(true);
                             }}
                           >
-                            {v.recordedAt ? format(new Date(v.recordedAt), "MMM d, yyyy HH:mm") : "Edit vitals"}
+                            {v.recordedAt ? formatInOrgTimeZone(v.recordedAt, "MMM d, yyyy HH:mm", orgTz) : "Edit vitals"}
                           </button>
                         ) : v.recordedAt ? (
-                          <span className="text-muted-foreground">{format(new Date(v.recordedAt), "MMM d, yyyy HH:mm")}</span>
+                          <span className="text-muted-foreground">
+                            {formatInOrgTimeZone(v.recordedAt, "MMM d, yyyy HH:mm", orgTz)}
+                          </span>
                         ) : null}
                         {v.temperature != null && <span>Temp: {v.temperature} °C</span>}
                         {(v.bloodPressureSystolic != null || v.bloodPressureDiastolic != null) && (
@@ -2191,103 +2367,288 @@ export default function PatientDetailPage() {
         </TabsContent>
 
         <TabsContent value="medication" className="space-y-3 mt-4">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-muted-foreground">Medications and prescriptions</span>
-            {canOrder && (
-              <Button size="sm" onClick={() => setNewMedOrderOpen(true)} data-testid="button-new-med-order">
-                <Plus className="w-3.5 h-3.5 mr-1.5" /> New Order
-              </Button>
-            )}
-          </div>
-          {prescriptions.length === 0 ? (
-            <Card><CardContent className="p-8 text-center text-muted-foreground">No medications on record. {canOrder ? "Use New Order to add a medication." : ""}</CardContent></Card>
-          ) : prescriptions.map((rx) => {
-            const linkedProblem = (rx as Prescription & { patientProblemId?: string | null }).patientProblemId
-              ? problems.find((p) => p.id === (rx as Prescription & { patientProblemId?: string }).patientProblemId)
-              : null;
-            return (
-            <Card key={rx.id} data-testid={`card-rx-${rx.id}`}>
-              <CardContent className="py-3 px-4">
-                <div className={`flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm ${rx.status === "cancelled" ? "line-through opacity-60" : ""}`}>
-                  <span className="font-medium shrink-0">{rx.medicationName}</span>
-                  <span className="shrink-0">{rx.dosage}</span>
-                  <span className="text-muted-foreground shrink-0">{rx.frequency}</span>
-                  {rx.duration && <span className="text-muted-foreground shrink-0">· {rx.duration}</span>}
-                  {linkedProblem && <span className="text-muted-foreground shrink-0">· For: {linkedProblem.problem}</span>}
-                  {rx.instructions && <span className="text-muted-foreground shrink-0">· {rx.instructions}</span>}
-                  <Badge variant="secondary" className={`text-[10px] ${statusColors[rx.status] || ""} shrink-0`}>
-                    {rx.status === "cancelled" ? "discontinued" : rx.status}
-                  </Badge>
-                  {canOrder && (
-                    <div className="ml-auto flex items-center gap-2 shrink-0">
-                      {rx.status !== "cancelled" && (
-                        <>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="h-8 px-2.5 text-xs"
-                            onClick={() => {
-                              setNewMedOrderForm({
-                                medicationName: rx.medicationName,
-                                dosage: rx.dosage,
-                                frequency: rx.frequency,
-                                duration: rx.duration ?? "",
-                                instructions: rx.instructions ?? "",
-                                patientProblemId: rx.patientProblemId ?? "",
-                                orderType: ((rx as any).orderType === "administered" ? "administered" : "prescription"),
-                              });
-                              setOrderComposerType("medication");
-                              setNewOrderOpen(true);
-                              setNewMedOrderOpen(true);
-                            }}
-                          >
-                            Reorder
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="destructive"
-                            className="h-8 px-2.5 text-xs"
-                            onClick={() => {
-                              setDiscontinuePrescription(rx);
-                              setDiscontinueReason("");
-                              setDiscontinueRxOpen(true);
-                            }}
-                          >
-                            Discontinue
-                          </Button>
-                        </>
-                      )}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                        title="Do NOT delete unless documentation was completed in error"
-                        onClick={() => {
-                          const ok = window.confirm("Do NOT delete unless documentation was completed in error.\n\nDelete this medication?");
-                          if (!ok) return;
-                          deletePrescriptionMutation.mutate(rx.id);
-                        }}
-                        disabled={deletePrescriptionMutation.isPending}
-                        data-testid={`button-delete-medication-${rx.id}`}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
+          {admissionDocUnlocked && activeAdmissionId ? (
+            <AdmissionMedicationTab admissionId={activeAdmissionId} patientId={id!} />
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-muted-foreground">Medications and prescriptions</span>
+                {canOrder && (
+                  <Button size="sm" onClick={() => setNewMedOrderOpen(true)} data-testid="button-new-med-order">
+                    <Plus className="w-3.5 h-3.5 mr-1.5" /> New Order
+                  </Button>
+                )}
+              </div>
+              <Tabs value={medicationTab} onValueChange={(v) => setMedicationTab(v as any)}>
+                <TabsList>
+                  <TabsTrigger value="history">Medication History</TabsTrigger>
+                  <TabsTrigger value="administration">Medication Administration</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="history" className="mt-3 space-y-3">
+                  {prescriptions.length === 0 ? (
+                    <Card>
+                      <CardContent className="p-8 text-center text-muted-foreground">
+                        No medications on record. {canOrder ? "Use New Order to add a medication." : ""}
+                      </CardContent>
+                    </Card>
+                  ) : prescriptions.map((rx) => {
+                    const linkedProblem = (rx as Prescription & { patientProblemId?: string | null }).patientProblemId
+                      ? problems.find((p) => p.id === (rx as Prescription & { patientProblemId?: string }).patientProblemId)
+                      : null;
+                    return (
+                      <Card key={rx.id} data-testid={`card-rx-${rx.id}`}>
+                        <CardContent className="py-3 px-4">
+                          <div className={`flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm ${rx.status === "cancelled" ? "line-through opacity-60" : ""}`}>
+                            <span className="font-medium shrink-0">{rx.medicationName}</span>
+                            <span className="shrink-0">{rx.dosage}</span>
+                            <span className="text-muted-foreground shrink-0">{rx.frequency}</span>
+                            {rx.duration && <span className="text-muted-foreground shrink-0">· {rx.duration}</span>}
+                            {linkedProblem && <span className="text-muted-foreground shrink-0">· For: {linkedProblem.problem}</span>}
+                            {rx.instructions && <span className="text-muted-foreground shrink-0">· {rx.instructions}</span>}
+                            <Badge variant="secondary" className={`text-[10px] ${statusColors[rx.status] || ""} shrink-0`}>
+                              {rx.status === "cancelled" ? "discontinued" : rx.status}
+                            </Badge>
+                            {canOrder && (
+                              <div className="ml-auto flex items-center gap-2 shrink-0">
+                                {rx.status !== "cancelled" && (
+                                  <>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-8 px-2.5 text-xs"
+                                      onClick={() => {
+                                        setNewMedOrderForm({
+                                          medicationName: rx.medicationName,
+                                          dosage: rx.dosage,
+                                          frequency: rx.frequency,
+                                          duration: rx.duration ?? "",
+                                          instructions: rx.instructions ?? "",
+                                          patientProblemId: rx.patientProblemId ?? "",
+                                          orderType: ((rx as any).orderType === "administered" ? "administered" : "prescription"),
+                                          route: (rx as any).route ?? "",
+                                          rate: (rx as any).rate ?? "",
+                                        });
+                                        setOrderComposerType("medication");
+                                        setNewOrderOpen(true);
+                                        setNewMedOrderOpen(true);
+                                      }}
+                                    >
+                                      Reorder
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="destructive"
+                                      className="h-8 px-2.5 text-xs"
+                                      onClick={() => {
+                                        setDiscontinuePrescription(rx);
+                                        setDiscontinueReason("");
+                                        setDiscontinueRxOpen(true);
+                                      }}
+                                    >
+                                      Discontinue
+                                    </Button>
+                                  </>
+                                )}
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                  title="Do NOT delete unless documentation was completed in error"
+                                  onClick={() => {
+                                    const ok = window.confirm("Do NOT delete unless documentation was completed in error.\n\nDelete this medication?");
+                                    if (!ok) return;
+                                    deletePrescriptionMutation.mutate(rx.id);
+                                  }}
+                                  disabled={deletePrescriptionMutation.isPending}
+                                  data-testid={`button-delete-medication-${rx.id}`}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                          <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                            Ordered {formatInOrgTimeZone(rx.createdAt, "MMM d, yyyy · HH:mm", orgTz)}
+                            {" · "}
+                            By {prescriberNameById.get(rx.prescribedBy) ?? rx.prescribedBy ?? "Unknown user"}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </TabsContent>
+
+                <TabsContent value="administration" className="mt-3 space-y-3">
+                  {!activeEncounterId ? (
+                    <Card>
+                      <CardContent className="p-8 text-center text-muted-foreground">
+                        Start a visit from Schedule to administer medications.
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    (() => {
+                      const medsToAdmin = prescriptions.filter((rx) => (rx as any).orderType === "administered" && rx.status !== "cancelled" && (rx as any).encounterId === activeEncounterId);
+                      const nextDueByRxId = new Map<string, number>();
+                      for (const rx of medsToAdmin) {
+                        const intervalMin = frequencyToIntervalMinutes(rx.frequency);
+                        if (!intervalMin) continue;
+                        const last = encounterMedicationAdministrations
+                          .filter((a) => a.prescriptionId === rx.id)
+                          .sort((a, b) => new Date(b.administeredAt ?? 0).getTime() - new Date(a.administeredAt ?? 0).getTime())[0];
+                        if (!last?.administeredAt) continue;
+                        nextDueByRxId.set(rx.id, new Date(last.administeredAt).getTime() + intervalMin * 60_000);
+                      }
+                      for (const [rxId, dueAt] of Array.from(nextDueByRxId.entries())) {
+                        if (dueAt <= medNowTick && !medDueToastRef.current.has(rxId)) {
+                          medDueToastRef.current.add(rxId);
+                          toast({ title: "Medication dose due", description: "A medication dose is now due for administration." });
+                        }
+                      }
+
+                      return medsToAdmin.length === 0 ? (
+                        <Card>
+                          <CardContent className="p-8 text-center text-muted-foreground">
+                            No medications to administer for this visit.
+                          </CardContent>
+                        </Card>
+                      ) : (
+                        <div className="space-y-3">
+                          {medsToAdmin.map((rx) => {
+                            const dueAt = nextDueByRxId.get(rx.id);
+                            const msLeft = dueAt != null ? dueAt - medNowTick : null;
+                            const isOverdue = msLeft != null && msLeft <= 0;
+                            const dueAtLabel = dueAt != null ? formatInOrgTimeZone(dueAt, "h:mm a", orgTz) : null;
+                            return (
+                              <Card key={rx.id} data-testid={`med-admin-${rx.id}`}>
+                                <CardContent className="py-3 px-4">
+                                  <div className="flex items-center gap-3 min-w-0 overflow-x-auto whitespace-nowrap text-sm">
+                                    <span className="font-medium shrink-0">{rx.medicationName}</span>
+                                    <span className="shrink-0">{rx.dosage}</span>
+                                    <span className="text-muted-foreground shrink-0">{rx.frequency}</span>
+                                    {dueAt != null ? (
+                                      <Badge variant={isOverdue ? "destructive" : "secondary"} className="text-[10px] shrink-0">
+                                        {isOverdue ? `Due (was due at ${dueAtLabel})` : `Next dose at ${dueAtLabel}`}
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="secondary" className="text-[10px] shrink-0">Not started</Badge>
+                                    )}
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      className="ml-auto h-8 px-2.5 text-xs shrink-0"
+                                      onClick={() => {
+                                        setEncAdminOpen({ rx });
+                                        setEncAdminForm({ doseGiven: rx.dosage ?? "", notes: "" });
+                                      }}
+                                    >
+                                      Administer
+                                    </Button>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="destructive"
+                                  className="h-8 px-2.5 text-xs shrink-0"
+                                  onClick={() => {
+                                    setDiscontinuePrescription(rx);
+                                    setDiscontinueReason("");
+                                    setDiscontinueRxOpen(true);
+                                    setMedicationTab("history");
+                                  }}
+                                >
+                                  Discontinue
+                                </Button>
+                                  </div>
+                                  <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
+                                    Ordered {formatInOrgTimeZone(rx.createdAt, "MMM d, yyyy · HH:mm", orgTz)}
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            );
+                          })}
+
+                          <div className="space-y-2">
+                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Administration log</p>
+                            {encounterMedicationAdministrations.length === 0 ? (
+                              <Card>
+                                <CardContent className="p-6 text-sm text-muted-foreground">No administrations recorded yet.</CardContent>
+                              </Card>
+                            ) : (
+                              <div className="space-y-2">
+                                {encounterMedicationAdministrations.slice(0, 25).map((a) => (
+                                  <Card key={a.id}>
+                                    <CardContent className="py-2.5 px-4">
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                                        <span className="font-medium">
+                                          {prescriptions.find((rx) => rx.id === a.prescriptionId)?.medicationName ?? "Medication"}{" "}
+                                          {a.doseGiven || ""}
+                                        </span>
+                                        <span className="text-muted-foreground">
+                                          · {formatInOrgTimeZone(a.administeredAt, "MMM d, yyyy · HH:mm", orgTz)}
+                                          {" · "}By {a.administeredBy ? (prescriberNameById.get(a.administeredBy) ?? a.administeredBy) : "Unknown user"}
+                                        </span>
+                                      </div>
+                                      {a.notes ? <p className="text-xs text-muted-foreground mt-1 whitespace-pre-wrap">{a.notes}</p> : null}
+                                    </CardContent>
+                                  </Card>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()
                   )}
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                  Ordered {rx.createdAt ? format(new Date(rx.createdAt), "MMM d, yyyy · HH:mm") : "—"}
-                  {" · "}
-                  By {prescriberNameById.get(rx.prescribedBy) ?? rx.prescribedBy ?? "Unknown user"}
-                </div>
-              </CardContent>
-            </Card>
-            );
-          })}
+                </TabsContent>
+              </Tabs>
+            </>
+          )}
         </TabsContent>
+
+        <Dialog open={!!encAdminOpen} onOpenChange={(open) => (!open ? setEncAdminOpen(null) : null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Record administration</DialogTitle>
+            </DialogHeader>
+            {encAdminOpen ? (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">{encAdminOpen.rx.medicationName}</p>
+                  <p className="text-xs text-muted-foreground">{encAdminOpen.rx.frequency}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Dose given</Label>
+                  <Input value={encAdminForm.doseGiven} onChange={(e) => setEncAdminForm((s) => ({ ...s, doseGiven: e.target.value }))} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Notes</Label>
+                  <Textarea
+                    value={encAdminForm.notes}
+                    onChange={(e) => setEncAdminForm((s) => ({ ...s, notes: e.target.value }))}
+                    rows={3}
+                    className="resize-none"
+                  />
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button type="button" variant="secondary" onClick={() => setEncAdminOpen(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    disabled={recordEncounterMedicationAdministrationMutation.isPending}
+                    onClick={() => recordEncounterMedicationAdministrationMutation.mutate(encAdminOpen.rx)}
+                  >
+                    {recordEncounterMedicationAdministrationMutation.isPending ? "Saving…" : "Record dose"}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </DialogContent>
+        </Dialog>
 
         <Dialog open={discontinueRxOpen} onOpenChange={(open) => { setDiscontinueRxOpen(open); if (!open) { setDiscontinuePrescription(null); setDiscontinueReason(""); } }}>
           <DialogContent>
@@ -2327,18 +2688,22 @@ export default function PatientDetailPage() {
         </Dialog>
 
         <TabsContent value="orders" className="space-y-3 mt-4">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-muted-foreground">Lab and clinical orders</span>
-            {canOrder && (
-              <Button size="sm" onClick={() => setNewOrderOpen(true)} data-testid="button-new-order">
-                <Plus className="w-3.5 h-3.5 mr-1.5" /> New Order
-              </Button>
-            )}
-          </div>
-          {labOrders.length === 0 && imagingOrders.length === 0 ? (
-            <Card><CardContent className="p-8 text-center text-muted-foreground">No orders. {canOrder ? "Use New Order to add one." : ""}</CardContent></Card>
+          {admissionDocUnlocked && activeAdmissionId ? (
+            <AdmissionOrdersTab admissionId={activeAdmissionId} patientId={id!} />
           ) : (
-            <div className="space-y-3">
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-muted-foreground">Lab and clinical orders</span>
+                {canOrder && (
+                  <Button size="sm" onClick={() => setNewOrderOpen(true)} data-testid="button-new-order">
+                    <Plus className="w-3.5 h-3.5 mr-1.5" /> New Order
+                  </Button>
+                )}
+              </div>
+              {labOrders.length === 0 && imagingOrders.length === 0 ? (
+                <Card><CardContent className="p-8 text-center text-muted-foreground">No orders. {canOrder ? "Use New Order to add one." : ""}</CardContent></Card>
+              ) : (
+                <div className="space-y-3">
               {labOrders.map((order) => (
                 <Card key={order.id}>
                   <CardContent className="py-3 px-4">
@@ -2386,7 +2751,7 @@ export default function PatientDetailPage() {
                       )}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                      Ordered {order.createdAt ? format(new Date(order.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                      Ordered {formatInOrgTimeZone(order.createdAt, "MMM d, yyyy · HH:mm", orgTz)}
                       {" · "}
                       By {prescriberNameById.get(order.orderedBy) ?? order.orderedBy ?? "Unknown user"}
                     </div>
@@ -2437,14 +2802,16 @@ export default function PatientDetailPage() {
                       )}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                      Ordered {order.createdAt ? format(new Date(order.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                      Ordered {formatInOrgTimeZone(order.createdAt, "MMM d, yyyy · HH:mm", orgTz)}
                       {" · "}
                       By {prescriberNameById.get(order.orderedBy) ?? order.orderedBy ?? "Unknown user"}
                     </div>
                   </CardContent>
                 </Card>
               ))}
-            </div>
+                </div>
+              )}
+            </>
           )}
         </TabsContent>
 
@@ -2485,8 +2852,8 @@ export default function PatientDetailPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-muted-foreground">
                         {(note as PatientNote & { status?: string }).status === "incomplete"
-                          ? `Saved ${note.createdAt ? format(new Date(note.createdAt), "MMM d, yyyy · HH:mm") : "—"} · By ${note.authorId ? (prescriberNameById.get(note.authorId) ?? note.authorId) : "Unknown user"}`
-                          : `Signed ${note.signedAt ? format(new Date(note.signedAt), "MMM d, yyyy · HH:mm") : "—"} · By ${note.authorId ? (prescriberNameById.get(note.authorId) ?? note.authorId) : "Unknown user"}`}
+                          ? `Saved ${formatInOrgTimeZone(note.createdAt, "MMM d, yyyy · HH:mm", orgTz)} · By ${note.authorId ? (prescriberNameById.get(note.authorId) ?? note.authorId) : "Unknown user"}`
+                          : `Signed ${formatInOrgTimeZone(note.signedAt, "MMM d, yyyy · HH:mm", orgTz)} · By ${note.authorId ? (prescriberNameById.get(note.authorId) ?? note.authorId) : "Unknown user"}`}
                       </span>
                       {canAddNote && (
                         <Button
@@ -2558,12 +2925,22 @@ export default function PatientDetailPage() {
 
         <TabsContent value="history" className="space-y-4 mt-4">
           <Tabs defaultValue="medical" className="w-full">
-            <TabsList className="w-full grid grid-cols-3">
-              <TabsTrigger value="medical">Medical history</TabsTrigger>
-              <TabsTrigger value="family">Family history</TabsTrigger>
-              <TabsTrigger value="social">Social history</TabsTrigger>
-            </TabsList>
-            <TabsContent value="medical" className="space-y-3 mt-4">
+            <SidebarTabsNavLayout
+              sidebar={
+                <TabsList className={SIDEBAR_TABS_LIST_CLASS}>
+                  <TabsTrigger value="medical" className={SIDEBAR_TABS_TRIGGER_CLASS}>
+                    Medical history
+                  </TabsTrigger>
+                  <TabsTrigger value="family" className={SIDEBAR_TABS_TRIGGER_CLASS}>
+                    Family history
+                  </TabsTrigger>
+                  <TabsTrigger value="social" className={SIDEBAR_TABS_TRIGGER_CLASS}>
+                    Social history
+                  </TabsTrigger>
+                </TabsList>
+              }
+            >
+            <TabsContent value="medical" className="mt-0 space-y-3 focus-visible:outline-none">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm text-muted-foreground">Current and past problems</span>
                 {canAddNote && (
@@ -2627,7 +3004,7 @@ export default function PatientDetailPage() {
                                   )}
                                   {(startDate || resolution || sym) && (
                                     <div className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                                      {startDate && <p>Started: {format(new Date(startDate), "MMM d, yyyy")}</p>}
+                                      {startDate && <p>Started: {formatInOrgTimeZone(startDate, "MMM d, yyyy", orgTz)}</p>}
                                       {resolution && <p>{resolution === "current" ? "Still current" : "Resolved"}</p>}
                                       {sym && <p className="whitespace-pre-wrap">Symptoms: {sym}</p>}
                                     </div>
@@ -2646,7 +3023,7 @@ export default function PatientDetailPage() {
                 );
               })()}
             </TabsContent>
-            <TabsContent value="family" className="space-y-3 mt-4">
+            <TabsContent value="family" className="mt-0 space-y-3 focus-visible:outline-none">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm text-muted-foreground">Family members and inherited/familial conditions</span>
                 {canAddNote && (
@@ -2703,9 +3080,10 @@ export default function PatientDetailPage() {
                 </div>
               )}
             </TabsContent>
-            <TabsContent value="social" className="mt-4">
+            <TabsContent value="social" className="mt-0 focus-visible:outline-none">
               <Card><CardContent className="p-8 text-center text-muted-foreground">Social history. Records can be added when this section is enabled.</CardContent></Card>
             </TabsContent>
+            </SidebarTabsNavLayout>
           </Tabs>
         </TabsContent>
 
@@ -2746,7 +3124,7 @@ export default function PatientDetailPage() {
                       <span className="text-muted-foreground shrink-0">Vaccination / immunization record</span>
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                      Uploaded {doc.createdAt ? format(new Date(doc.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                      Uploaded {formatInOrgTimeZone(doc.createdAt, "MMM d, yyyy · HH:mm", orgTz)}
                       {" · "}
                       By {doc.uploadedBy ? (prescriberNameById.get(doc.uploadedBy) ?? doc.uploadedBy) : "Unknown user"}
                     </div>
@@ -2821,7 +3199,7 @@ export default function PatientDetailPage() {
                         <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
                           {c.outcome.replaceAll("_", " ")}
                         </Badge>
-                        <span>{safeFormatDateTime(c.createdAt)}</span>
+                        <span>{safeFormatDateTime(c.createdAt, orgTz)}</span>
                         <span>•</span>
                         <span>By {c.contactedBy ? (prescriberNameById.get(c.contactedBy) ?? c.contactedBy) : "Unknown user"}</span>
                       </div>
@@ -2989,7 +3367,7 @@ export default function PatientDetailPage() {
                         )}
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                        Documented {safeFormatDateTime(a.createdAt)}
+                        Documented {safeFormatDateTime(a.createdAt, orgTz)}
                         {" · "}
                         By {a.addedBy ? (prescriberNameById.get(a.addedBy) ?? a.addedBy) : "Unknown user"}
                       </div>
@@ -3015,11 +3393,19 @@ export default function PatientDetailPage() {
 
         <TabsContent value="results" className="space-y-4 mt-4 data-[state=inactive]:hidden">
           <Tabs defaultValue="labs" className="w-full">
-            <TabsList className="w-full grid grid-cols-2">
-              <TabsTrigger value="labs" className="gap-2"><FlaskConical className="w-3.5 h-3.5" /> Labs</TabsTrigger>
-              <TabsTrigger value="imaging" className="gap-2"><ImageIcon className="w-3.5 h-3.5" /> Imaging</TabsTrigger>
-            </TabsList>
-            <TabsContent value="labs" className="space-y-3 mt-4">
+            <SidebarTabsNavLayout
+              sidebar={
+                <TabsList className={SIDEBAR_TABS_LIST_CLASS}>
+                  <TabsTrigger value="labs" className={SIDEBAR_TABS_TRIGGER_CLASS}>
+                    <FlaskConical className="w-3.5 h-3.5 shrink-0" /> Labs
+                  </TabsTrigger>
+                  <TabsTrigger value="imaging" className={SIDEBAR_TABS_TRIGGER_CLASS}>
+                    <ImageIcon className="w-3.5 h-3.5 shrink-0" /> Imaging
+                  </TabsTrigger>
+                </TabsList>
+              }
+            >
+            <TabsContent value="labs" className="mt-0 space-y-3 focus-visible:outline-none">
               <p className="text-sm text-muted-foreground">Completed lab results appear here once resulted in the Laboratory or uploaded via Uploads.</p>
               {labOrders.filter((o) => o.status === "resulted" || o.status === "completed").length === 0 && patientDocuments.filter((d) => d.documentType === "lab_result").length === 0 ? (
                 <Card><CardContent className="p-8 text-center text-muted-foreground">No lab results yet. Lab orders are resulted in Laboratory or upload external results via Uploads.</CardContent></Card>
@@ -3048,7 +3434,7 @@ export default function PatientDetailPage() {
                           {order.isCritical && <Badge variant="destructive" className="text-[10px] shrink-0">Critical</Badge>}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                          Resulted {order.completedAt ? format(new Date(order.completedAt), "MMM d, yyyy · HH:mm") : "—"}
+                          Resulted {formatInOrgTimeZone(order.completedAt, "MMM d, yyyy · HH:mm", orgTz)}
                           {" · "}
                           By {prescriberNameById.get(order.orderedBy) ?? order.orderedBy ?? "Unknown user"}
                           {order.resultValue ? ` · Values: ${order.resultValue}` : ""}
@@ -3075,7 +3461,7 @@ export default function PatientDetailPage() {
                           <span className="text-muted-foreground shrink-0">Uploaded lab result</span>
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                          Uploaded {doc.createdAt ? format(new Date(doc.createdAt), "MMM d, yyyy · HH:mm") : "—"}
+                          Uploaded {formatInOrgTimeZone(doc.createdAt, "MMM d, yyyy · HH:mm", orgTz)}
                           {" · "}
                           By {doc.uploadedBy ? (prescriberNameById.get(doc.uploadedBy) ?? doc.uploadedBy) : "Unknown user"}
                         </div>
@@ -3090,7 +3476,7 @@ export default function PatientDetailPage() {
                 </div>
               )}
             </TabsContent>
-            <TabsContent value="imaging" className="space-y-3 mt-4">
+            <TabsContent value="imaging" className="mt-0 space-y-3 focus-visible:outline-none">
               <p className="text-sm text-muted-foreground">Scans and uploaded imaging (X-Ray, CT, MRI, etc.). Results appear here after upload from Uploads or completion of an imaging order.</p>
               {imagingResults.length === 0 && imagingOrders.filter((o) => o.status === "completed" && o.documentUrl).length === 0 ? (
                 <Card><CardContent className="p-8 text-center text-muted-foreground">No imaging results yet.</CardContent></Card>
@@ -3117,7 +3503,7 @@ export default function PatientDetailPage() {
                             <span className="text-muted-foreground shrink-0">Completed</span>
                           </div>
                           <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                            Completed {o.completedAt ? format(new Date(o.completedAt), "MMM d, yyyy · HH:mm") : "—"}
+                            Completed {formatInOrgTimeZone(o.completedAt, "MMM d, yyyy · HH:mm", orgTz)}
                             {" · "}
                             By {prescriberNameById.get(o.orderedBy) ?? o.orderedBy ?? "Unknown user"}
                           </div>
@@ -3145,7 +3531,7 @@ export default function PatientDetailPage() {
                           {img.description && <span className="text-muted-foreground shrink-0">{img.description}</span>}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                          Performed {img.performedAt ? format(new Date(img.performedAt), "MMM d, yyyy · HH:mm") : "—"}
+                          Performed {formatInOrgTimeZone(img.performedAt, "MMM d, yyyy · HH:mm", orgTz)}
                           {" · "}
                           By {img.uploadedBy ? (prescriberNameById.get(img.uploadedBy) ?? img.uploadedBy) : "Unknown user"}
                         </div>
@@ -3160,7 +3546,12 @@ export default function PatientDetailPage() {
                 </div>
               )}
             </TabsContent>
+            </SidebarTabsNavLayout>
           </Tabs>
+        </TabsContent>
+
+        <TabsContent value="forms-consent" className="mt-4 space-y-4 data-[state=inactive]:hidden">
+          {id ? <PatientChartFormsConsentTab patientId={id} /> : null}
         </TabsContent>
           </div>
         </div>
@@ -3606,7 +3997,7 @@ export default function PatientDetailPage() {
                   {viewNote.authorRole === "nursing" ? "Nursing" : "Clinician"}
                 </Badge>
                 <span className="text-xs text-muted-foreground">
-                  Signed {viewNote.signedAt ? format(new Date(viewNote.signedAt), "MMM d, yyyy · HH:mm") : "—"}
+                  Signed {formatInOrgTimeZone(viewNote.signedAt, "MMM d, yyyy · HH:mm", orgTz)}
                   {" · "}
                   By {viewNote.authorId ? (prescriberNameById.get(viewNote.authorId) ?? viewNote.authorId) : "Unknown user"}
                 </span>
@@ -3993,30 +4384,65 @@ export default function PatientDetailPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label>Duration</Label>
-                  <Select
-                    value={DURATION_OPTIONS.includes(newMedOrderForm.duration as any) ? newMedOrderForm.duration : (newMedOrderForm.duration ? "Other" : "none")}
-                    onValueChange={(v) => setNewMedOrderForm((f) => ({ ...f, duration: v === "Other" || v === "none" ? "" : v }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select duration (optional)" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">None</SelectItem>
-                      {DURATION_OPTIONS.map((d) => (
-                        <SelectItem key={d} value={d}>{d}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {(newMedOrderForm.duration && !DURATION_OPTIONS.includes(newMedOrderForm.duration as any)) && (
+
+                {newMedOrderForm.orderType === "administered" ? (
+                  <div className="space-y-2">
+                    <Label>Route *</Label>
+                    <Select
+                      value={newMedOrderForm.route}
+                      onValueChange={(v) => setNewMedOrderForm((f) => ({ ...f, route: v }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select route" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ROUTE_OPTIONS.map((r) => (
+                          <SelectItem key={r.id} value={r.id}>
+                            {r.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+
+                {newMedOrderForm.orderType === "administered" && newMedOrderForm.route === "iv" ? (
+                  <div className="space-y-2">
+                    <Label>Rate *</Label>
                     <Input
-                      value={newMedOrderForm.duration}
-                      onChange={(e) => setNewMedOrderForm((f) => ({ ...f, duration: e.target.value }))}
-                      placeholder="e.g. 7 days"
+                      value={newMedOrderForm.rate}
+                      onChange={(e) => setNewMedOrderForm((f) => ({ ...f, rate: e.target.value }))}
+                      placeholder="e.g. 100 mL/hr"
                     />
-                  )}
-                </div>
+                  </div>
+                ) : null}
+
+                {newMedOrderForm.orderType === "prescription" ? (
+                  <div className="space-y-2">
+                    <Label>Duration</Label>
+                    <Select
+                      value={DURATION_OPTIONS.includes(newMedOrderForm.duration as any) ? newMedOrderForm.duration : (newMedOrderForm.duration ? "Other" : "none")}
+                      onValueChange={(v) => setNewMedOrderForm((f) => ({ ...f, duration: v === "Other" || v === "none" ? "" : v }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select duration (optional)" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        {DURATION_OPTIONS.map((d) => (
+                          <SelectItem key={d} value={d}>{d}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {(newMedOrderForm.duration && !DURATION_OPTIONS.includes(newMedOrderForm.duration as any)) && (
+                      <Input
+                        value={newMedOrderForm.duration}
+                        onChange={(e) => setNewMedOrderForm((f) => ({ ...f, duration: e.target.value }))}
+                        placeholder="e.g. 7 days"
+                      />
+                    )}
+                  </div>
+                ) : null}
                 <div className="space-y-2">
                   <Label>Instructions</Label>
                   <Textarea
@@ -4032,7 +4458,14 @@ export default function PatientDetailPage() {
                 <Button variant="secondary" onClick={() => setOrderComposerType(null)}>Back</Button>
                 <Button
                   onClick={() => addPrescriptionMutation.mutate(newMedOrderForm)}
-                  disabled={!newMedOrderForm.medicationName.trim() || !newMedOrderForm.dosage.trim() || !newMedOrderForm.frequency.trim() || addPrescriptionMutation.isPending}
+                  disabled={
+                    !newMedOrderForm.medicationName.trim() ||
+                    !newMedOrderForm.dosage.trim() ||
+                    !newMedOrderForm.frequency.trim() ||
+                    (newMedOrderForm.orderType === "administered" && !newMedOrderForm.route) ||
+                    (newMedOrderForm.orderType === "administered" && newMedOrderForm.route === "iv" && !newMedOrderForm.rate.trim()) ||
+                    addPrescriptionMutation.isPending
+                  }
                   data-testid="button-submit-med-order"
                 >
                   {addPrescriptionMutation.isPending ? "Creating..." : "Create order"}
@@ -4151,30 +4584,65 @@ export default function PatientDetailPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>Duration</Label>
-              <Select
-                value={DURATION_OPTIONS.includes(newMedOrderForm.duration as any) ? newMedOrderForm.duration : (newMedOrderForm.duration ? "Other" : "none")}
-                onValueChange={(v) => setNewMedOrderForm((f) => ({ ...f, duration: v === "Other" || v === "none" ? "" : v }))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select duration (optional)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">None</SelectItem>
-                  {DURATION_OPTIONS.map((d) => (
-                    <SelectItem key={d} value={d}>{d}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {(newMedOrderForm.duration && !DURATION_OPTIONS.includes(newMedOrderForm.duration as any)) && (
+
+            {newMedOrderForm.orderType === "administered" ? (
+              <div className="space-y-2">
+                <Label>Route *</Label>
+                <Select
+                  value={newMedOrderForm.route}
+                  onValueChange={(v) => setNewMedOrderForm((f) => ({ ...f, route: v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select route" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ROUTE_OPTIONS.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
+
+            {newMedOrderForm.orderType === "administered" && newMedOrderForm.route === "iv" ? (
+              <div className="space-y-2">
+                <Label>Rate *</Label>
                 <Input
-                  value={newMedOrderForm.duration}
-                  onChange={(e) => setNewMedOrderForm((f) => ({ ...f, duration: e.target.value }))}
-                  placeholder="e.g. 7 days"
+                  value={newMedOrderForm.rate}
+                  onChange={(e) => setNewMedOrderForm((f) => ({ ...f, rate: e.target.value }))}
+                  placeholder="e.g. 100 mL/hr"
                 />
-              )}
-            </div>
+              </div>
+            ) : null}
+
+            {newMedOrderForm.orderType === "prescription" ? (
+              <div className="space-y-2">
+                <Label>Duration</Label>
+                <Select
+                  value={DURATION_OPTIONS.includes(newMedOrderForm.duration as any) ? newMedOrderForm.duration : (newMedOrderForm.duration ? "Other" : "none")}
+                  onValueChange={(v) => setNewMedOrderForm((f) => ({ ...f, duration: v === "Other" || v === "none" ? "" : v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select duration (optional)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    {DURATION_OPTIONS.map((d) => (
+                      <SelectItem key={d} value={d}>{d}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {(newMedOrderForm.duration && !DURATION_OPTIONS.includes(newMedOrderForm.duration as any)) && (
+                  <Input
+                    value={newMedOrderForm.duration}
+                    onChange={(e) => setNewMedOrderForm((f) => ({ ...f, duration: e.target.value }))}
+                    placeholder="e.g. 7 days"
+                  />
+                )}
+              </div>
+            ) : null}
             <div className="space-y-2">
               <Label>Instructions</Label>
               <Textarea
@@ -4190,7 +4658,13 @@ export default function PatientDetailPage() {
             <Button variant="secondary" onClick={() => setNewMedOrderOpen(false)}>Cancel</Button>
             <Button
               onClick={() => addPrescriptionMutation.mutate(newMedOrderForm)}
-              disabled={!newMedOrderForm.medicationName.trim() || !newMedOrderForm.dosage.trim() || !newMedOrderForm.frequency.trim() || addPrescriptionMutation.isPending}
+              disabled={
+                !newMedOrderForm.medicationName.trim() ||
+                !newMedOrderForm.dosage.trim() ||
+                !newMedOrderForm.frequency.trim() ||
+                (newMedOrderForm.orderType === "administered" && !newMedOrderForm.route) ||
+                addPrescriptionMutation.isPending
+              }
               data-testid="button-submit-med-order"
             >
               {addPrescriptionMutation.isPending ? "Creating..." : "Create order"}

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { queryClient } from "@/lib/queryClient";
@@ -6,6 +7,7 @@ import { useAuth } from "@/lib/auth";
 import { apiGetJson, apiPatchJson } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import { Card, CardContent } from "@/components/ui/card";
+import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +18,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
+  SidebarTabsNavLayout,
+  SIDEBAR_TABS_LIST_CLASS,
+  SIDEBAR_TABS_TRIGGER_CLASS,
+} from "@/components/sidebar-tabs-nav";
+import {
   Table,
   TableBody,
   TableCell,
@@ -24,7 +31,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { AlertTriangle, Building2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Building2, Upload } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { DocumentFileUpload } from "@/components/document-file-upload";
 import { labOrderStatusBadgeClass } from "@/lib/lab-order-status";
@@ -46,6 +54,7 @@ function priorityLabel(p: unknown): string {
 }
 
 export default function LaboratoryPage() {
+  const { t } = useTranslation();
   const [, navigate] = useLocation();
   const search = useSearch();
   const patientIdFromUrl = useMemo(() => new URLSearchParams(search).get("patientId"), [search]);
@@ -195,14 +204,28 @@ export default function LaboratoryPage() {
   ) => {
     const activeKey = which === "internal" ? internalSortKey : externalSortKey;
     const activeDir = which === "internal" ? internalSortDir : externalSortDir;
-    const arrow = activeKey === key ? (activeDir === "asc" ? " ▲" : " ▼") : "";
+    const active = activeKey === key;
     return (
       <button
         type="button"
         onClick={() => toggleSort(key, which)}
-        className={`w-full text-left text-xs font-semibold uppercase tracking-wide hover:underline ${className}`}
+        className={cn(
+          "-mx-2 inline-flex min-h-10 w-full max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors",
+          "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          className,
+        )}
+        aria-sort={active ? (activeDir === "asc" ? "ascending" : "descending") : "none"}
       >
-        {label}{arrow}
+        <span className="truncate">{label}</span>
+        {active ? (
+          activeDir === "asc" ? (
+            <ArrowUp className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+          ) : (
+            <ArrowDown className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+          )
+        ) : (
+          <ArrowUpDown className="h-3.5 w-3.5 shrink-0 opacity-40" aria-hidden />
+        )}
       </button>
     );
   };
@@ -228,23 +251,25 @@ export default function LaboratoryPage() {
       )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Laboratory</h1>
-          <p className="text-muted-foreground text-sm mt-1">Internal labs (collect & result) and external labs (upload results)</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t("pages.laboratory.title")}</h1>
+          <p className="text-muted-foreground text-sm mt-1">{t("pages.laboratory.subtitle")}</p>
         </div>
       </div>
 
-      <Tabs defaultValue="internal" className="space-y-4">
-        <TabsList className="grid w-full max-w-md grid-cols-2">
-          <TabsTrigger value="internal" className="gap-2">
-            <Building2 className="w-4 h-4" /> Internal labs ({internalPending.length} pending)
-          </TabsTrigger>
-          <TabsTrigger value="external" className="gap-2">
-            <Upload className="w-4 h-4" /> External labs ({externalPending.length} pending)
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="internal" className="space-y-6 mt-4">
-          <p className="text-sm text-muted-foreground">Collected and resulted by internal staff. Once resulted, labs leave this list and appear in the patient&apos;s Results section.</p>
+      <Tabs defaultValue="internal">
+        <SidebarTabsNavLayout
+          sidebar={
+            <TabsList className={SIDEBAR_TABS_LIST_CLASS}>
+              <TabsTrigger value="internal" className={SIDEBAR_TABS_TRIGGER_CLASS}>
+                <Building2 className="w-4 h-4 shrink-0" /> Internal labs ({internalPending.length} pending)
+              </TabsTrigger>
+              <TabsTrigger value="external" className={SIDEBAR_TABS_TRIGGER_CLASS}>
+                <Upload className="w-4 h-4 shrink-0" /> External labs ({externalPending.length} pending)
+              </TabsTrigger>
+            </TabsList>
+          }
+        >
+        <TabsContent value="internal" className="mt-0 space-y-6 focus-visible:outline-none">
           {isLoading ? (
             Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20" />)
           ) : internalPending.length === 0 ? (
@@ -332,8 +357,7 @@ export default function LaboratoryPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="external" className="space-y-6 mt-4">
-          <p className="text-sm text-muted-foreground">External lab orders. Upload results to mark complete; once resulted, they leave this list and appear in the patient&apos;s Results section on their chart.</p>
+        <TabsContent value="external" className="mt-0 space-y-6 focus-visible:outline-none">
           {isLoading ? (
             Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-20" />)
           ) : externalPending.length === 0 ? (
@@ -401,6 +425,7 @@ export default function LaboratoryPage() {
             </Card>
           )}
         </TabsContent>
+        </SidebarTabsNavLayout>
       </Tabs>
 
       <Dialog open={!!resultOpen} onOpenChange={(open) => { if (!open) setResultOpen(null); }}>

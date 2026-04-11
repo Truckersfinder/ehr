@@ -5,6 +5,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Loader2, User, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Patient } from "@shared/schema";
+import { getStoredAuthToken } from "@/lib/auth-storage";
+import { useOrganizationSettings } from "@/lib/organization-settings";
 
 const DEBOUNCE_MS = 300;
 
@@ -23,13 +25,16 @@ export function PatientSearchCombobox({
   value,
   onChange,
   disabled,
-  placeholder = "Search by name or MRN…",
+  placeholder,
   triggerTestId = "patient-combobox-trigger",
 }: PatientSearchComboboxProps) {
+  const { patientIdentifierLabel } = useOrganizationSettings();
+  const resolvedPlaceholder = placeholder ?? `Search by name or ${patientIdentifierLabel}…`;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
@@ -37,17 +42,34 @@ export function PatientSearchCombobox({
     if (!query.trim()) {
       setResults([]);
       setLoading(false);
+      setError(null);
+      return;
+    }
+    const authToken = token ?? getStoredAuthToken();
+    if (!authToken) {
+      setResults([]);
+      setLoading(false);
+      setError("Session expired. Please refresh and sign in again.");
       return;
     }
     setLoading(true);
+    setError(null);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       fetch(`/api/patients?search=${encodeURIComponent(query.trim())}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${authToken}` },
       })
-        .then((res) => (res.ok ? res.json() : []))
+        .then(async (res) => {
+          if (res.ok) return res.json();
+          const j = await res.json().catch(() => ({}));
+          const msg = (j as { message?: string }).message || `Search failed (${res.status})`;
+          throw new Error(msg);
+        })
         .then((data) => setResults(Array.isArray(data) ? data : []))
-        .catch(() => setResults([]))
+        .catch((e: Error) => {
+          setResults([]);
+          setError(e.message);
+        })
         .finally(() => setLoading(false));
     }, DEBOUNCE_MS);
     return () => {
@@ -89,17 +111,19 @@ export function PatientSearchCombobox({
                 <span className="font-medium text-foreground">
                   {value.firstName} {value.lastName}
                 </span>
-                <span className="text-muted-foreground font-mono text-sm ml-2">MRN {value.mrn}</span>
+                <span className="text-muted-foreground font-mono text-sm ml-2">
+                  {patientIdentifierLabel} {value.mrn}
+                </span>
               </span>
             ) : (
-              placeholder
+              resolvedPlaceholder
             )}
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-[min(100vw-2rem,22rem)] p-0" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
           <div className="p-2 border-b border-border">
             <Input
-              placeholder="Type name or MRN…"
+              placeholder={`Type name or ${patientIdentifierLabel}…`}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               autoFocus
@@ -111,6 +135,8 @@ export function PatientSearchCombobox({
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
+            ) : error ? (
+              <p className="py-6 px-3 text-sm text-destructive text-center">{error}</p>
             ) : !query.trim() ? (
               <p className="py-6 px-3 text-sm text-muted-foreground text-center">Type to search patients</p>
             ) : results.length === 0 ? (
@@ -133,7 +159,9 @@ export function PatientSearchCombobox({
                         <p className="font-medium truncate">
                           {patient.firstName} {patient.lastName}
                         </p>
-                        <p className="text-xs text-muted-foreground font-mono truncate">MRN: {patient.mrn}</p>
+                        <p className="text-xs text-muted-foreground font-mono truncate">
+                          {patientIdentifierLabel}: {patient.mrn}
+                        </p>
                       </div>
                     </button>
                   </li>

@@ -1,18 +1,25 @@
-import { db } from "./db";
-import { eq, like, ilike, or, desc, and, sql, count, inArray, isNull, gte, asc, sum } from "drizzle-orm";
+import { randomBytes } from "crypto";
+import { db, pool } from "./db";
+import { eq, like, ilike, or, desc, and, sql, count, inArray, isNull, isNotNull, gte, asc, sum } from "drizzle-orm";
+import type { SystemsDashboardSnapshot } from "@shared/systems-admin-dashboard";
+import { normalizeUiActivityLayoutRows, type UiActivityLayoutRow } from "@shared/application-ui";
 import {
   users, facilities, patients, patientProblems, patientAllergies, patientNotes, familyMembers, familyMemberConditions,
-  encounters, vitals, appointments, commonVisitReasons, labOrders, imagingOrders, prescriptions, invoices, billingChargeCatalog, encounterVisitCharges, imagingResults, patientDocuments, auditLogs,
+  encounters, vitals, appointments, commonVisitReasons, beds, bedAssignments, labOrders, imagingOrders, prescriptions, medicationAdministrations, invoices, billingChargeCatalog, encounterVisitCharges, imagingResults, patientDocuments, auditLogs, clinicalForms, clinicalFormPatientCompletions,
+  encounterMedicationAdministrations,
   followUpContacts,
   type InsertUser, type User, type InsertFacility, type Facility,
   type InsertPatient, type Patient, type InsertPatientProblem, type PatientProblem,
   type InsertPatientAllergy, type PatientAllergy, type InsertPatientNote, type PatientNote, type InsertFamilyMember, type FamilyMember,
   type InsertFamilyMemberCondition, type FamilyMemberCondition, type InsertEncounter, type Encounter,
-  type InsertVitals, type Vitals, type InsertAppointment, type Appointment, type CommonVisitReason,
+  type InsertVitals, type Vitals, type InsertAppointment, type Appointment, type CommonVisitReason, type InsertBed, type Bed, type InsertBedAssignment, type BedAssignment,
   type InsertLabOrder, type LabOrder, type InsertImagingOrder, type ImagingOrder,
   type InsertPrescription, type Prescription, type InsertImagingResult, type ImagingResult,
+  type InsertMedicationAdministration, type MedicationAdministration,
+  type InsertEncounterMedicationAdministration, type EncounterMedicationAdministration,
   type InsertPatientDocument, type PatientDocument, type InsertInvoice, type Invoice,
   type BillingChargeCatalog, type InsertBillingChargeCatalog, type InsertAuditLog, type AuditLog,
+  type ClinicalForm, type ClinicalFormField, type ClinicalFormPatientCompletion,
   type InsertFollowUpContact, type FollowUpContact,
   type EncounterVisitCharge, type InsertEncounterVisitCharge,
 } from "@shared/schema";
@@ -108,6 +115,48 @@ export interface IStorage {
   /** Inserts default rows if table is empty (idempotent). */
   ensureCommonVisitReasonsSeeded(): Promise<void>;
 
+  /** Bed Management */
+  getBeds(facilityId?: string): Promise<Bed[]>;
+  createBed(b: InsertBed): Promise<Bed>;
+  updateBed(id: string, data: Partial<InsertBed>): Promise<Bed | undefined>;
+  getAvailableBeds(facilityId?: string): Promise<Bed[]>;
+  bedHasActiveAssignment(bedId: string): Promise<boolean>;
+  getOccupiedBedIds(facilityId?: string | null): Promise<Set<string>>;
+  /** Bed id → "First Last" for active (not discharged) admissions; scoped like `getBeds`. */
+  getActivePatientDisplayByBedId(facilityId?: string): Promise<Map<string, string>>;
+  setBedOnHold(id: string, reason: string): Promise<Bed | undefined>;
+  setBedRemoved(id: string, reason: string): Promise<Bed | undefined>;
+  setBedRestoredToOpen(id: string): Promise<Bed | undefined>;
+
+  /** Admissions */
+  createBedAssignment(a: InsertBedAssignment): Promise<BedAssignment>;
+  getBedAssignment(id: string): Promise<BedAssignment | undefined>;
+  getActiveBedAssignmentByPatientId(patientId: string): Promise<BedAssignment | undefined>;
+  getActiveAdmissions(facilityId?: string): Promise<(BedAssignment & { bedName: string; clinicianId: string; scheduledDate: Date; status: string; reason: string | null })[]>;
+  getRecentDischargedAdmissions(
+    facilityId?: string,
+    days?: number,
+  ): Promise<(BedAssignment & { bedName: string; clinicianId: string | null; scheduledDate: Date | null; status: string | null; reason: string | null })[]>;
+  attachEncounterToActiveAdmission(appointmentId: string, encounterId: string): Promise<BedAssignment | undefined>;
+  attachEncounterToBedAssignment(assignmentId: string, encounterId: string): Promise<BedAssignment | undefined>;
+  getAdmissionLabOrders(admissionId: string): Promise<LabOrder[]>;
+  getAdmissionImagingOrders(admissionId: string): Promise<ImagingOrder[]>;
+  getAdmissionPrescriptions(admissionId: string): Promise<Prescription[]>;
+  getMedicationAdministrations(admissionId: string): Promise<MedicationAdministration[]>;
+  createMedicationAdministration(a: InsertMedicationAdministration): Promise<MedicationAdministration>;
+  getEncounterMedicationAdministrations(encounterId: string): Promise<EncounterMedicationAdministration[]>;
+  createEncounterMedicationAdministration(a: InsertEncounterMedicationAdministration): Promise<EncounterMedicationAdministration>;
+  dischargeBedAssignment(
+    assignmentId: string,
+    data: {
+      dischargedBy: string;
+      dischargeReason: string;
+      dischargeNotes?: string | null;
+      causeOfDeath?: string | null;
+      timeOfDeath?: Date | null;
+    }
+  ): Promise<BedAssignment | undefined>;
+
   getLabOrders(patientId?: string): Promise<LabOrder[]>;
   createLabOrder(l: InsertLabOrder): Promise<LabOrder>;
   updateLabOrder(id: string, data: Partial<InsertLabOrder>): Promise<LabOrder | undefined>;
@@ -164,6 +213,115 @@ export interface IStorage {
   ensureVisitChargeLineKindManualEnum(): Promise<void>;
   /** Ensures encounter columns exist for charge finalization (idempotent). */
   ensureEncounterChargeFinalizationColumns(): Promise<void>;
+  /** Ensures prescriptions.route exists (idempotent). */
+  ensurePrescriptionRouteColumn(): Promise<void>;
+  /** Ensures prescriptions.rate exists (idempotent). */
+  ensurePrescriptionRateColumn(): Promise<void>;
+  /** Ensures encounter_medication_administrations exists (idempotent). */
+  ensureEncounterMedicationAdministrationsTable(): Promise<void>;
+  /** Ensures beds / bed_assignments tables exist (idempotent; for DBs not yet drizzle-pushed). */
+  ensureBedsAndBedAssignmentsTables(): Promise<void>;
+  /** Ensures clinical_forms table exists (idempotent). */
+  ensureClinicalFormsTable(): Promise<void>;
+  /** Facility org branding columns + RBAC / column override tables. */
+  ensureFacilityOrganizationAndRoleTables(): Promise<void>;
+  getRoleCapabilityOverridesForRole(role: string): Promise<{ capabilityId: string; allowed: boolean }[]>;
+  upsertRoleCapabilityOverride(role: string, capabilityId: string, allowed: boolean): Promise<void>;
+  listUiTableColumnOverrides(): Promise<
+    {
+      role: string;
+      tableKey: string;
+      columnId: string;
+      hidden: boolean;
+      label: string | null;
+      sortOrder: number | null;
+    }[]
+  >;
+  upsertUiTableColumnOverride(args: {
+    role: string;
+    tableKey: string;
+    columnId: string;
+    hidden?: boolean;
+    label?: string | null;
+    sortOrder?: number | null;
+  }): Promise<void>;
+  deleteUiTableColumnOverride(role: string, tableKey: string, columnId: string): Promise<void>;
+  setUiTableColumnOrder(role: string, tableKey: string, orderedColumnIds: string[]): Promise<void>;
+  getClinicalForms(): Promise<ClinicalForm[]>;
+  getClinicalFormById(id: string): Promise<ClinicalForm | undefined>;
+  createClinicalForm(entry: {
+    title: string;
+    description?: string | null;
+    fields: ClinicalFormField[];
+    templateKind: "form" | "consent";
+    createdByUserId?: string | null;
+  }): Promise<ClinicalForm>;
+  updateClinicalForm(
+    id: string,
+    entry: { title: string; description?: string | null; fields: ClinicalFormField[]; templateKind: "form" | "consent" },
+  ): Promise<ClinicalForm | undefined>;
+  setClinicalFormActive(id: string, isActive: boolean): Promise<ClinicalForm | undefined>;
+  ensureClinicalFormPatientCompletionsTable(): Promise<void>;
+  deletePendingQrCompletionsForPatientForm(patientId: string, formId: string): Promise<void>;
+  createPendingQrFormCompletion(args: {
+    patientId: string;
+    formId: string;
+  }): Promise<{ row: ClinicalFormPatientCompletion; token: string; expiresAt: Date }>;
+  getClinicalFormCompletionByQrToken(token: string): Promise<ClinicalFormPatientCompletion | undefined>;
+  completeClinicalFormPatientCompletion(
+    id: string,
+    args: { answers: Record<string, string | number | boolean>; completedByUserId?: string | null },
+  ): Promise<ClinicalFormPatientCompletion | undefined>;
+  createStaffAssistedClinicalFormCompletion(args: {
+    patientId: string;
+    formId: string;
+    answers: Record<string, string | number | boolean>;
+    completedByUserId: string;
+  }): Promise<ClinicalFormPatientCompletion>;
+  listCompletedClinicalFormsForPatient(patientId: string): Promise<
+    {
+      id: string;
+      formId: string;
+      formTitle: string;
+      templateKind: "form" | "consent";
+      completionMode: "staff_assisted" | "patient_qr";
+      completedAt: Date;
+      createdAt: Date | null;
+    }[]
+  >;
+  /** Consents signed by clinician but still need patient signature (QR). */
+  listProcedureConsentsNeedingPatientSignature(patientId: string): Promise<
+    {
+      id: string;
+      formId: string;
+      formTitle: string;
+      completionMode: "staff_assisted" | "patient_qr";
+      clinicianSignedAt: Date;
+      createdAt: Date | null;
+    }[]
+  >;
+  /** Clinician initiates/signs a consent (patient signs later via QR). */
+  createClinicianSignedProcedureConsentCompletion(args: {
+    patientId: string;
+    formId: string;
+    answers: Record<string, string | number | boolean>;
+    clinicianUserId: string;
+  }): Promise<ClinicalFormPatientCompletion>;
+  /** Generate a QR session for the patient to sign a procedural consent. */
+  createProcedureConsentPatientQrSession(args: {
+    patientId: string;
+    completionId: string;
+  }): Promise<{ token: string; expiresAt: Date } | undefined>;
+  /** Completed submission for a patient (for chart review). */
+  getCompletedClinicalFormCompletionForPatient(
+    patientId: string,
+    completionId: string,
+  ): Promise<{ completion: ClinicalFormPatientCompletion; form: ClinicalForm } | undefined>;
+  /** Any completion row for a patient (completed or pending). */
+  getClinicalFormCompletionForPatientById(
+    patientId: string,
+    completionId: string,
+  ): Promise<{ completion: ClinicalFormPatientCompletion; form: ClinicalForm } | undefined>;
   getEncounterVisitCharges(encounterId: string): Promise<EncounterVisitCharge[]>;
   tryInsertEncounterVisitCharge(row: InsertEncounterVisitCharge): Promise<boolean>;
   /** Removes a line by stable source id (e.g. order id) regardless of encounter. */
@@ -193,6 +351,21 @@ export interface IStorage {
     pendingLabOrders: number;
     pendingInvoices: number;
   }>;
+
+  /** Aggregated metrics for the Systems administrator home dashboard. */
+  getSystemsDashboardSnapshot(): Promise<SystemsDashboardSnapshot>;
+
+  listUiActivityLayout(): Promise<UiActivityLayoutRow[]>;
+  listUiActivityLayoutForRole(role: string): Promise<UiActivityLayoutRow[]>;
+  upsertUiActivityLayout(row: {
+    role: string;
+    context: string;
+    activityId: string;
+    labelOverride?: string | null;
+    sortOrder: number;
+    hidden: boolean;
+    readOnly: boolean;
+  }): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -620,11 +793,289 @@ export class DatabaseStorage implements IStorage {
     await db.insert(commonVisitReasons).values(defaults);
   }
 
+  async getBeds(facilityId?: string): Promise<Bed[]> {
+    const base = db
+      .select({
+        id: beds.id,
+        facilityId: beds.facilityId,
+        name: beds.name,
+        notes: beds.notes,
+        isActive: beds.isActive,
+        status: beds.status,
+        statusReason: beds.statusReason,
+        createdAt: beds.createdAt,
+      })
+      .from(beds);
+    if (facilityId) {
+      return base.where(eq(beds.facilityId, facilityId)).orderBy(asc(beds.createdAt));
+    }
+    return base.orderBy(asc(beds.createdAt));
+  }
+
+  async createBed(b: InsertBed): Promise<Bed> {
+    const [created] = await db
+      .insert(beds)
+      .values({
+        name: b.name,
+        facilityId: b.facilityId ?? null,
+        notes: b.notes ?? null,
+        isActive: b.isActive ?? true,
+        status: b.status ?? "open",
+        statusReason: b.statusReason ?? null,
+      })
+      .returning();
+    return created;
+  }
+
+  async updateBed(id: string, data: Partial<InsertBed>): Promise<Bed | undefined> {
+    const [updated] = await db.update(beds).set(data).where(eq(beds.id, id)).returning();
+    return updated;
+  }
+
+  async getAvailableBeds(facilityId?: string): Promise<Bed[]> {
+    // Walk-in picker: operational status open, not removed, no active admission on this bed.
+    const whereFacility = facilityId ? sql`${beds.facilityId} = ${facilityId}` : sql`true`;
+    const rows = await db
+      .select({ bed: beds })
+      .from(beds)
+      .leftJoin(bedAssignments, and(eq(bedAssignments.bedId, beds.id), isNull(bedAssignments.dischargedAt)))
+      .where(
+        and(
+          eq(beds.status, "open"),
+          eq(beds.isActive, true),
+          whereFacility,
+          isNull(bedAssignments.id),
+        ),
+      )
+      .orderBy(asc(beds.name));
+    return rows.map((r) => r.bed);
+  }
+
+  async bedHasActiveAssignment(bedId: string): Promise<boolean> {
+    const [row] = await db
+      .select({ id: bedAssignments.id })
+      .from(bedAssignments)
+      .where(and(eq(bedAssignments.bedId, bedId), isNull(bedAssignments.dischargedAt)))
+      .limit(1);
+    return !!row;
+  }
+
+  async getOccupiedBedIds(facilityId?: string | null): Promise<Set<string>> {
+    const active = isNull(bedAssignments.dischargedAt);
+    const where = facilityId ? and(active, eq(beds.facilityId, facilityId)) : active;
+    const rows = await db
+      .select({ bedId: bedAssignments.bedId })
+      .from(bedAssignments)
+      .innerJoin(beds, eq(beds.id, bedAssignments.bedId))
+      .where(where);
+    return new Set(rows.map((r) => r.bedId));
+  }
+
+  async getActivePatientDisplayByBedId(facilityId?: string): Promise<Map<string, string>> {
+    const active = isNull(bedAssignments.dischargedAt);
+    const where = facilityId ? and(active, eq(beds.facilityId, facilityId)) : active;
+    const rows = await db
+      .select({
+        bedId: bedAssignments.bedId,
+        firstName: patients.firstName,
+        lastName: patients.lastName,
+      })
+      .from(bedAssignments)
+      .innerJoin(beds, eq(beds.id, bedAssignments.bedId))
+      .innerJoin(patients, eq(patients.id, bedAssignments.patientId))
+      .where(where)
+      .orderBy(desc(bedAssignments.admittedAt));
+    const map = new Map<string, string>();
+    for (const r of rows) {
+      if (map.has(r.bedId)) continue;
+      const name = `${r.firstName} ${r.lastName}`.trim();
+      map.set(r.bedId, name);
+    }
+    return map;
+  }
+
+  async setBedOnHold(id: string, reason: string): Promise<Bed | undefined> {
+    const [bed] = await db.select().from(beds).where(eq(beds.id, id)).limit(1);
+    if (!bed) return undefined;
+    if (bed.status !== "open") {
+      throw new Error("Only beds in Open status can be placed on hold.");
+    }
+    if (await this.bedHasActiveAssignment(id)) {
+      throw new Error("Cannot place on hold while a patient is admitted to this bed.");
+    }
+    return this.updateBed(id, {
+      status: "on_hold",
+      statusReason: reason.trim(),
+      isActive: true,
+    });
+  }
+
+  async setBedRemoved(id: string, reason: string): Promise<Bed | undefined> {
+    const [bed] = await db.select().from(beds).where(eq(beds.id, id)).limit(1);
+    if (!bed) return undefined;
+    if (bed.status === "removed") {
+      throw new Error("This bed is already removed.");
+    }
+    if (await this.bedHasActiveAssignment(id)) {
+      throw new Error("Cannot remove while a patient is admitted to this bed.");
+    }
+    return this.updateBed(id, {
+      status: "removed",
+      statusReason: reason.trim(),
+      isActive: false,
+    });
+  }
+
+  async setBedRestoredToOpen(id: string): Promise<Bed | undefined> {
+    const [bed] = await db.select().from(beds).where(eq(beds.id, id)).limit(1);
+    if (!bed) return undefined;
+    if (bed.status !== "on_hold") {
+      throw new Error("Only beds on hold can be restored to open.");
+    }
+    if (await this.bedHasActiveAssignment(id)) {
+      throw new Error("Cannot restore while a patient is admitted to this bed.");
+    }
+    return this.updateBed(id, {
+      status: "open",
+      statusReason: null,
+      isActive: true,
+    });
+  }
+
+  async createBedAssignment(a: InsertBedAssignment): Promise<BedAssignment> {
+    const [created] = await db.insert(bedAssignments).values(a).returning();
+    return created;
+  }
+
+  async getBedAssignment(id: string): Promise<BedAssignment | undefined> {
+    const [row] = await db.select().from(bedAssignments).where(eq(bedAssignments.id, id));
+    return row;
+  }
+
+  async getActiveBedAssignmentByPatientId(patientId: string): Promise<BedAssignment | undefined> {
+    const [row] = await db
+      .select()
+      .from(bedAssignments)
+      .where(and(eq(bedAssignments.patientId, patientId), isNull(bedAssignments.dischargedAt)))
+      .orderBy(desc(bedAssignments.admittedAt));
+    return row;
+  }
+
+  async getActiveAdmissions(facilityId?: string): Promise<(BedAssignment & { bedName: string; clinicianId: string; scheduledDate: Date; status: string; reason: string | null })[]> {
+    const whereFacility = facilityId ? sql`${beds.facilityId} = ${facilityId}` : sql`true`;
+    const rows = await db
+      .select({
+        assignment: bedAssignments,
+        bedName: beds.name,
+        clinicianId: appointments.clinicianId,
+        scheduledDate: appointments.scheduledDate,
+        status: appointments.status,
+        reason: appointments.reason,
+      })
+      .from(bedAssignments)
+      .innerJoin(beds, eq(beds.id, bedAssignments.bedId))
+      .leftJoin(appointments, eq(appointments.id, bedAssignments.appointmentId))
+      .where(and(isNull(bedAssignments.dischargedAt), whereFacility))
+      .orderBy(desc(bedAssignments.admittedAt));
+    return rows
+      .filter((r) => !!r.clinicianId && !!r.scheduledDate && !!r.status)
+      .map((r) => ({
+        ...r.assignment,
+        bedName: r.bedName,
+        clinicianId: r.clinicianId!,
+        scheduledDate: r.scheduledDate!,
+        status: String(r.status),
+        reason: (r.reason ?? null) as string | null,
+      }));
+  }
+
+  async getRecentDischargedAdmissions(
+    facilityId?: string,
+    days = 14,
+  ): Promise<(BedAssignment & { bedName: string; clinicianId: string | null; scheduledDate: Date | null; status: string | null; reason: string | null })[]> {
+    const whereFacility = facilityId ? sql`${beds.facilityId} = ${facilityId}` : sql`true`;
+    const boundedDays = Math.max(1, Math.min(90, days));
+    const since = new Date(Date.now() - boundedDays * 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select({
+        assignment: bedAssignments,
+        bedName: beds.name,
+        clinicianId: appointments.clinicianId,
+        scheduledDate: appointments.scheduledDate,
+        status: appointments.status,
+        reason: appointments.reason,
+      })
+      .from(bedAssignments)
+      .innerJoin(beds, eq(beds.id, bedAssignments.bedId))
+      .leftJoin(appointments, eq(appointments.id, bedAssignments.appointmentId))
+      .where(and(whereFacility, sql`${bedAssignments.dischargedAt} IS NOT NULL`, gte(bedAssignments.dischargedAt, since)))
+      .orderBy(desc(bedAssignments.dischargedAt));
+    return rows.map((r) => ({
+      ...r.assignment,
+      bedName: r.bedName,
+      clinicianId: (r.clinicianId ?? null) as string | null,
+      scheduledDate: (r.scheduledDate ?? null) as Date | null,
+      status: (r.status != null ? String(r.status) : null) as string | null,
+      reason: (r.reason ?? null) as string | null,
+    }));
+  }
+
+  async attachEncounterToActiveAdmission(appointmentId: string, encounterId: string): Promise<BedAssignment | undefined> {
+    const [updated] = await db
+      .update(bedAssignments)
+      .set({ encounterId })
+      .where(and(eq(bedAssignments.appointmentId, appointmentId), isNull(bedAssignments.dischargedAt)))
+      .returning();
+    return updated;
+  }
+
+  async attachEncounterToBedAssignment(assignmentId: string, encounterId: string): Promise<BedAssignment | undefined> {
+    const [updated] = await db
+      .update(bedAssignments)
+      .set({ encounterId })
+      .where(eq(bedAssignments.id, assignmentId))
+      .returning();
+    return updated;
+  }
+
+  async dischargeBedAssignment(
+    assignmentId: string,
+    data: {
+      dischargedBy: string;
+      dischargeReason: string;
+      dischargeNotes?: string | null;
+      causeOfDeath?: string | null;
+      timeOfDeath?: Date | null;
+    }
+  ): Promise<BedAssignment | undefined> {
+    const [updated] = await db
+      .update(bedAssignments)
+      .set({
+        dischargedAt: new Date(),
+        dischargedBy: data.dischargedBy,
+        dischargeReason: data.dischargeReason,
+        dischargeNotes: data.dischargeNotes ?? null,
+        causeOfDeath: data.causeOfDeath ?? null,
+        timeOfDeath: data.timeOfDeath ?? null,
+      })
+      .where(eq(bedAssignments.id, assignmentId))
+      .returning();
+    return updated;
+  }
+
   async getLabOrders(patientId?: string): Promise<LabOrder[]> {
     if (patientId) {
       return db.select().from(labOrders).where(eq(labOrders.patientId, patientId)).orderBy(desc(labOrders.createdAt));
     }
     return db.select().from(labOrders).orderBy(desc(labOrders.createdAt));
+  }
+
+  async getAdmissionLabOrders(admissionId: string): Promise<LabOrder[]> {
+    return db
+      .select()
+      .from(labOrders)
+      .where(eq((labOrders as any).admissionId, admissionId))
+      .orderBy(desc(labOrders.createdAt));
   }
 
   async createLabOrder(l: InsertLabOrder): Promise<LabOrder> {
@@ -639,6 +1090,50 @@ export class DatabaseStorage implements IStorage {
 
   async deleteLabOrder(id: string): Promise<void> {
     await db.delete(labOrders).where(eq(labOrders.id, id));
+  }
+
+  async getAdmissionImagingOrders(admissionId: string): Promise<ImagingOrder[]> {
+    return db
+      .select()
+      .from(imagingOrders)
+      .where(eq((imagingOrders as any).admissionId, admissionId))
+      .orderBy(desc(imagingOrders.createdAt));
+  }
+
+  async getAdmissionPrescriptions(admissionId: string): Promise<Prescription[]> {
+    return db
+      .select()
+      .from(prescriptions)
+      .where(eq((prescriptions as any).admissionId, admissionId))
+      .orderBy(desc(prescriptions.createdAt));
+  }
+
+  async getMedicationAdministrations(admissionId: string): Promise<MedicationAdministration[]> {
+    return db
+      .select()
+      .from(medicationAdministrations)
+      .where(eq(medicationAdministrations.admissionId, admissionId))
+      .orderBy(desc(medicationAdministrations.administeredAt));
+  }
+
+  async createMedicationAdministration(a: InsertMedicationAdministration): Promise<MedicationAdministration> {
+    const [created] = await db.insert(medicationAdministrations).values(a).returning();
+    return created;
+  }
+
+  async getEncounterMedicationAdministrations(encounterId: string): Promise<EncounterMedicationAdministration[]> {
+    return db
+      .select()
+      .from(encounterMedicationAdministrations)
+      .where(eq((encounterMedicationAdministrations as any).encounterId, encounterId))
+      .orderBy(desc((encounterMedicationAdministrations as any).administeredAt));
+  }
+
+  async createEncounterMedicationAdministration(
+    a: InsertEncounterMedicationAdministration
+  ): Promise<EncounterMedicationAdministration> {
+    const [created] = await db.insert(encounterMedicationAdministrations).values(a as any).returning();
+    return created;
   }
 
   async getImagingResults(patientId: string): Promise<ImagingResult[]> {
@@ -839,6 +1334,541 @@ END $$;
 `));
   }
 
+  async ensurePrescriptionRouteColumn(): Promise<void> {
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'prescriptions' AND column_name = 'route'
+  ) THEN
+    ALTER TABLE prescriptions ADD COLUMN route text;
+  END IF;
+END $$;
+`));
+  }
+
+  async ensurePrescriptionRateColumn(): Promise<void> {
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'prescriptions' AND column_name = 'rate'
+  ) THEN
+    ALTER TABLE prescriptions ADD COLUMN rate text;
+  END IF;
+END $$;
+`));
+  }
+
+  async ensureEncounterMedicationAdministrationsTable(): Promise<void> {
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS encounter_medication_administrations (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  encounter_id varchar NOT NULL,
+  prescription_id varchar NOT NULL,
+  patient_id varchar NOT NULL,
+  administered_by varchar NOT NULL,
+  administered_at timestamp DEFAULT now(),
+  dose_given text,
+  notes text
+);
+`));
+  }
+
+  async ensureBedsAndBedAssignmentsTables(): Promise<void> {
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  CREATE TYPE bed_operational_status AS ENUM ('open', 'on_hold', 'removed');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+`));
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS beds (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  facility_id varchar,
+  name text NOT NULL,
+  notes text,
+  is_active boolean NOT NULL DEFAULT true,
+  status bed_operational_status NOT NULL DEFAULT 'open',
+  status_reason text,
+  created_at timestamp DEFAULT now()
+);
+`));
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'beds' AND column_name = 'notes'
+  ) THEN
+    ALTER TABLE beds ADD COLUMN notes text;
+  END IF;
+END $$;
+`));
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'beds' AND column_name = 'status'
+  ) THEN
+    ALTER TABLE beds ADD COLUMN status bed_operational_status NOT NULL DEFAULT 'open';
+  END IF;
+END $$;
+`));
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'beds' AND column_name = 'status_reason'
+  ) THEN
+    ALTER TABLE beds ADD COLUMN status_reason text;
+  END IF;
+END $$;
+`));
+    await db.execute(sql.raw(`
+UPDATE beds SET status = 'removed', status_reason = COALESCE(NULLIF(TRIM(status_reason), ''), 'Previously marked inactive')
+WHERE is_active = false AND status = 'open';
+`));
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS bed_assignments (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  bed_id varchar NOT NULL,
+  patient_id varchar NOT NULL,
+  appointment_id varchar,
+  encounter_id varchar,
+  admitted_by varchar NOT NULL,
+  admitted_at timestamp DEFAULT now(),
+  discharged_at timestamp,
+  discharged_by varchar,
+  discharge_reason text,
+  discharge_notes text,
+  cause_of_death text,
+  time_of_death timestamp
+);
+`));
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'bed_assignments' AND column_name = 'cause_of_death'
+  ) THEN
+    ALTER TABLE bed_assignments ADD COLUMN cause_of_death text;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'bed_assignments' AND column_name = 'time_of_death'
+  ) THEN
+    ALTER TABLE bed_assignments ADD COLUMN time_of_death timestamp;
+  END IF;
+END $$;
+`));
+  }
+
+  async ensureClinicalFormsTable(): Promise<void> {
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS clinical_forms (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  title text NOT NULL,
+  description text,
+  fields jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_by_user_id varchar,
+  created_at timestamp DEFAULT now(),
+  updated_at timestamp DEFAULT now()
+);
+`));
+    await db.execute(sql.raw(`
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'clinical_forms' AND column_name = 'public_fill_token'
+  ) THEN
+    DROP INDEX IF EXISTS clinical_forms_public_fill_token_unique;
+    ALTER TABLE clinical_forms DROP COLUMN public_fill_token;
+  END IF;
+END $$;
+`));
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS clinical_form_submissions (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  form_id varchar NOT NULL REFERENCES clinical_forms (id),
+  answers jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp DEFAULT now()
+);
+`));
+    await db.execute(sql.raw(`
+CREATE INDEX IF NOT EXISTS clinical_form_submissions_form_id_idx ON clinical_form_submissions (form_id);
+`));
+    await db.execute(sql.raw(`
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'clinical_forms' AND column_name = 'template_kind'
+  ) THEN
+    ALTER TABLE clinical_forms ADD COLUMN template_kind varchar(32) NOT NULL DEFAULT 'form';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'clinical_forms' AND column_name = 'is_active'
+  ) THEN
+    ALTER TABLE clinical_forms ADD COLUMN is_active boolean NOT NULL DEFAULT true;
+  END IF;
+END $$;
+`));
+    await this.ensureClinicalFormPatientCompletionsTable();
+  }
+
+  async ensureClinicalFormPatientCompletionsTable(): Promise<void> {
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS clinical_form_patient_completions (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  patient_id varchar NOT NULL REFERENCES patients (id),
+  form_id varchar NOT NULL REFERENCES clinical_forms (id),
+  answers jsonb NOT NULL DEFAULT '{}'::jsonb,
+  completion_mode varchar(32) NOT NULL,
+  qr_token varchar,
+  qr_expires_at timestamp,
+  provider_signed_at timestamp,
+  provider_signed_by_user_id varchar,
+  completed_at timestamp,
+  completed_by_user_id varchar,
+  created_at timestamp DEFAULT now()
+);
+`));
+    // Backfill new columns for existing deployments.
+    await db.execute(sql.raw(`
+ALTER TABLE clinical_form_patient_completions
+  ADD COLUMN IF NOT EXISTS provider_signed_at timestamp;
+`));
+    await db.execute(sql.raw(`
+ALTER TABLE clinical_form_patient_completions
+  ADD COLUMN IF NOT EXISTS provider_signed_by_user_id varchar;
+`));
+    await db.execute(sql.raw(`
+CREATE UNIQUE INDEX IF NOT EXISTS clinical_form_patient_completions_qr_token_unique
+  ON clinical_form_patient_completions (qr_token) WHERE qr_token IS NOT NULL;
+`));
+    await db.execute(sql.raw(`
+CREATE INDEX IF NOT EXISTS clinical_form_patient_completions_patient_idx
+  ON clinical_form_patient_completions (patient_id);
+`));
+    await db.execute(sql.raw(`
+CREATE INDEX IF NOT EXISTS clinical_form_patient_completions_completed_idx
+  ON clinical_form_patient_completions (patient_id, completed_at DESC NULLS LAST);
+`));
+  }
+
+  async deletePendingQrCompletionsForPatientForm(patientId: string, formId: string): Promise<void> {
+    await db
+      .delete(clinicalFormPatientCompletions)
+      .where(
+        and(
+          eq(clinicalFormPatientCompletions.patientId, patientId),
+          eq(clinicalFormPatientCompletions.formId, formId),
+          eq(clinicalFormPatientCompletions.completionMode, "patient_qr"),
+          isNull(clinicalFormPatientCompletions.completedAt),
+          isNotNull(clinicalFormPatientCompletions.qrToken),
+        ),
+      );
+  }
+
+  async createPendingQrFormCompletion(args: {
+    patientId: string;
+    formId: string;
+  }): Promise<{ row: ClinicalFormPatientCompletion; token: string; expiresAt: Date }> {
+    const token = randomBytes(24).toString("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const [row] = await db
+      .insert(clinicalFormPatientCompletions)
+      .values({
+        patientId: args.patientId,
+        formId: args.formId,
+        answers: {},
+        completionMode: "patient_qr",
+        qrToken: token,
+        qrExpiresAt: expiresAt,
+        completedAt: null,
+        completedByUserId: null,
+      })
+      .returning();
+    return { row, token, expiresAt };
+  }
+
+  async getClinicalFormCompletionByQrToken(token: string): Promise<ClinicalFormPatientCompletion | undefined> {
+    const [row] = await db
+      .select()
+      .from(clinicalFormPatientCompletions)
+      .where(eq(clinicalFormPatientCompletions.qrToken, token))
+      .limit(1);
+    return row;
+  }
+
+  async completeClinicalFormPatientCompletion(
+    id: string,
+    args: { answers: Record<string, string | number | boolean>; completedByUserId?: string | null },
+  ): Promise<ClinicalFormPatientCompletion | undefined> {
+    const [row] = await db
+      .update(clinicalFormPatientCompletions)
+      .set({
+        answers: args.answers,
+        completedAt: new Date(),
+        qrToken: null,
+        qrExpiresAt: null,
+        completedByUserId: args.completedByUserId ?? null,
+      })
+      .where(eq(clinicalFormPatientCompletions.id, id))
+      .returning();
+    return row;
+  }
+
+  async createStaffAssistedClinicalFormCompletion(args: {
+    patientId: string;
+    formId: string;
+    answers: Record<string, string | number | boolean>;
+    completedByUserId: string;
+  }): Promise<ClinicalFormPatientCompletion> {
+    const [row] = await db
+      .insert(clinicalFormPatientCompletions)
+      .values({
+        patientId: args.patientId,
+        formId: args.formId,
+        answers: args.answers,
+        completionMode: "staff_assisted",
+        qrToken: null,
+        qrExpiresAt: null,
+        completedAt: new Date(),
+        completedByUserId: args.completedByUserId,
+      })
+      .returning();
+    return row;
+  }
+
+  async listCompletedClinicalFormsForPatient(patientId: string): Promise<
+    {
+      id: string;
+      formId: string;
+      formTitle: string;
+      templateKind: "form" | "consent";
+      completionMode: "staff_assisted" | "patient_qr";
+      completedAt: Date;
+      createdAt: Date | null;
+    }[]
+  > {
+    const rows = await db
+      .select({
+        id: clinicalFormPatientCompletions.id,
+        formId: clinicalFormPatientCompletions.formId,
+        formTitle: clinicalForms.title,
+        templateKind: clinicalForms.templateKind,
+        completionMode: clinicalFormPatientCompletions.completionMode,
+        completedAt: clinicalFormPatientCompletions.completedAt,
+        createdAt: clinicalFormPatientCompletions.createdAt,
+        providerSignedAt: clinicalFormPatientCompletions.providerSignedAt,
+        answers: clinicalFormPatientCompletions.answers,
+      })
+      .from(clinicalFormPatientCompletions)
+      .innerJoin(clinicalForms, eq(clinicalFormPatientCompletions.formId, clinicalForms.id))
+      .where(
+        and(eq(clinicalFormPatientCompletions.patientId, patientId), isNotNull(clinicalFormPatientCompletions.completedAt)),
+      )
+      .orderBy(desc(clinicalFormPatientCompletions.completedAt));
+    return rows.map((r) => ({
+      id: r.id,
+      formId: r.formId,
+      formTitle: r.formTitle,
+      templateKind: r.templateKind === "consent" ? "consent" : "form",
+      completionMode: r.completionMode,
+      completedAt: r.completedAt!,
+      createdAt: r.createdAt ?? null,
+    }));
+  }
+
+  async listProcedureConsentsNeedingPatientSignature(patientId: string): Promise<
+    {
+      id: string;
+      formId: string;
+      formTitle: string;
+      completionMode: "staff_assisted" | "patient_qr";
+      clinicianSignedAt: Date;
+      createdAt: Date | null;
+    }[]
+  > {
+    const rows = await db
+      .select({
+        id: clinicalFormPatientCompletions.id,
+        formId: clinicalFormPatientCompletions.formId,
+        formTitle: clinicalForms.title,
+        completionMode: clinicalFormPatientCompletions.completionMode,
+        clinicianSignedAt: clinicalFormPatientCompletions.providerSignedAt,
+        createdAt: clinicalFormPatientCompletions.createdAt,
+      })
+      .from(clinicalFormPatientCompletions)
+      .innerJoin(clinicalForms, eq(clinicalFormPatientCompletions.formId, clinicalForms.id))
+      .where(
+        and(
+          eq(clinicalFormPatientCompletions.patientId, patientId),
+          isNotNull(clinicalFormPatientCompletions.providerSignedAt),
+          isNull(clinicalFormPatientCompletions.completedAt),
+          eq(clinicalForms.templateKind, "consent"),
+        ),
+      )
+      .orderBy(desc(clinicalFormPatientCompletions.providerSignedAt));
+    return rows.map((r) => ({
+      id: r.id,
+      formId: r.formId,
+      formTitle: r.formTitle,
+      completionMode: r.completionMode,
+      clinicianSignedAt: r.clinicianSignedAt!,
+      createdAt: r.createdAt ?? null,
+    }));
+  }
+
+  async createClinicianSignedProcedureConsentCompletion(args: {
+    patientId: string;
+    formId: string;
+    answers: Record<string, string | number | boolean>;
+    clinicianUserId: string;
+  }): Promise<ClinicalFormPatientCompletion> {
+    const [row] = await db
+      .insert(clinicalFormPatientCompletions)
+      .values({
+        patientId: args.patientId,
+        formId: args.formId,
+        answers: args.answers,
+        completionMode: "staff_assisted",
+        qrToken: null,
+        qrExpiresAt: null,
+        providerSignedAt: new Date(),
+        providerSignedByUserId: args.clinicianUserId,
+        completedAt: null,
+        completedByUserId: null,
+      })
+      .returning();
+    return row;
+  }
+
+  async createProcedureConsentPatientQrSession(args: {
+    patientId: string;
+    completionId: string;
+  }): Promise<{ token: string; expiresAt: Date } | undefined> {
+    const existing = await this.getClinicalFormCompletionForPatientById(args.patientId, args.completionId);
+    if (!existing) return undefined;
+    const token = randomBytes(24).toString("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const [row] = await db
+      .update(clinicalFormPatientCompletions)
+      .set({
+        qrToken: token,
+        qrExpiresAt: expiresAt,
+      })
+      .where(
+        and(
+          eq(clinicalFormPatientCompletions.id, args.completionId),
+          eq(clinicalFormPatientCompletions.patientId, args.patientId),
+          isNull(clinicalFormPatientCompletions.completedAt),
+        ),
+      )
+      .returning();
+    if (!row) return undefined;
+    return { token, expiresAt };
+  }
+
+  async getCompletedClinicalFormCompletionForPatient(
+    patientId: string,
+    completionId: string,
+  ): Promise<{ completion: ClinicalFormPatientCompletion; form: ClinicalForm } | undefined> {
+    const [row] = await db
+      .select()
+      .from(clinicalFormPatientCompletions)
+      .where(
+        and(
+          eq(clinicalFormPatientCompletions.id, completionId),
+          eq(clinicalFormPatientCompletions.patientId, patientId),
+          isNotNull(clinicalFormPatientCompletions.completedAt),
+        ),
+      )
+      .limit(1);
+    if (!row) return undefined;
+    const form = await this.getClinicalFormById(row.formId);
+    if (!form) return undefined;
+    return { completion: row, form };
+  }
+
+  async getClinicalFormCompletionForPatientById(
+    patientId: string,
+    completionId: string,
+  ): Promise<{ completion: ClinicalFormPatientCompletion; form: ClinicalForm } | undefined> {
+    const [row] = await db
+      .select()
+      .from(clinicalFormPatientCompletions)
+      .where(and(eq(clinicalFormPatientCompletions.id, completionId), eq(clinicalFormPatientCompletions.patientId, patientId)))
+      .limit(1);
+    if (!row) return undefined;
+    const form = await this.getClinicalFormById(row.formId);
+    if (!form) return undefined;
+    return { completion: row, form };
+  }
+
+  async getClinicalForms(): Promise<ClinicalForm[]> {
+    return db.select().from(clinicalForms).orderBy(desc(clinicalForms.createdAt));
+  }
+
+  async getClinicalFormById(id: string): Promise<ClinicalForm | undefined> {
+    const [row] = await db.select().from(clinicalForms).where(eq(clinicalForms.id, id)).limit(1);
+    return row;
+  }
+
+  async createClinicalForm(entry: {
+    title: string;
+    description?: string | null;
+    fields: ClinicalFormField[];
+    templateKind: "form" | "consent";
+    createdByUserId?: string | null;
+  }): Promise<ClinicalForm> {
+    const [row] = await db
+      .insert(clinicalForms)
+      .values({
+        title: entry.title.trim(),
+        description: entry.description?.trim() ? entry.description.trim() : null,
+        fields: entry.fields,
+        templateKind: entry.templateKind,
+        isActive: true,
+        createdByUserId: entry.createdByUserId ?? null,
+      })
+      .returning();
+    return row;
+  }
+
+  async updateClinicalForm(
+    id: string,
+    entry: { title: string; description?: string | null; fields: ClinicalFormField[]; templateKind: "form" | "consent" },
+  ): Promise<ClinicalForm | undefined> {
+    const [row] = await db
+      .update(clinicalForms)
+      .set({
+        title: entry.title.trim(),
+        description: entry.description?.trim() ? entry.description.trim() : null,
+        fields: entry.fields,
+        templateKind: entry.templateKind,
+        updatedAt: new Date(),
+      })
+      .where(eq(clinicalForms.id, id))
+      .returning();
+    return row;
+  }
+
+  async setClinicalFormActive(id: string, isActive: boolean): Promise<ClinicalForm | undefined> {
+    const [row] = await db
+      .update(clinicalForms)
+      .set({ isActive, updatedAt: new Date() } as any)
+      .where(eq(clinicalForms.id, id))
+      .returning();
+    return row;
+  }
+
   async getEncounterVisitCharges(encounterId: string): Promise<EncounterVisitCharge[]> {
     const rows = await db
       .select()
@@ -1026,6 +2056,251 @@ END $$;
       .orderBy(desc(encounters.createdAt));
   }
 
+  async ensureFacilityOrganizationAndRoleTables(): Promise<void> {
+    await db.execute(sql.raw(`
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'facilities' AND column_name = 'patient_identifier_label'
+  ) THEN
+    ALTER TABLE facilities ADD COLUMN patient_identifier_label text NOT NULL DEFAULT 'MRN';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'facilities' AND column_name = 'time_zone'
+  ) THEN
+    ALTER TABLE facilities ADD COLUMN time_zone text NOT NULL DEFAULT 'UTC';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'facilities' AND column_name = 'logo_url'
+  ) THEN
+    ALTER TABLE facilities ADD COLUMN logo_url text;
+  END IF;
+END $$;
+`));
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS role_capability_overrides (
+  role text NOT NULL,
+  capability_id varchar(128) NOT NULL,
+  allowed boolean NOT NULL DEFAULT true,
+  PRIMARY KEY (role, capability_id)
+);
+`));
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS ui_table_column_overrides (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  role text NOT NULL,
+  table_key varchar(128) NOT NULL,
+  column_id varchar(128) NOT NULL,
+  hidden boolean NOT NULL DEFAULT false,
+  label text,
+  sort_order integer,
+  UNIQUE (role, table_key, column_id)
+);
+`));
+    await db.execute(sql.raw(`
+ALTER TABLE ui_table_column_overrides ADD COLUMN IF NOT EXISTS sort_order integer;
+`));
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS ui_activity_layout (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  role text NOT NULL,
+  context varchar(64) NOT NULL,
+  activity_id varchar(128) NOT NULL,
+  label_override text,
+  sort_order int NOT NULL DEFAULT 0,
+  hidden boolean NOT NULL DEFAULT false,
+  UNIQUE (role, context, activity_id)
+);
+`));
+    await pool.query(`ALTER TABLE ui_activity_layout ADD COLUMN IF NOT EXISTS read_only boolean NOT NULL DEFAULT false`);
+    await pool.query(`UPDATE ui_activity_layout SET context = 'toolbar' WHERE context = 'header_nav'`);
+    await pool.query(`
+      DELETE FROM ui_activity_layout
+      WHERE activity_id IN (
+        'hdr_scheduled_appt',
+        'hdr_laboratory',
+        'hdr_uploads',
+        'hdr_org_config',
+        'hdr_user_mgmt',
+        'hdr_role_mgmt',
+        'hdr_administrative'
+      )
+    `);
+  }
+
+  async getRoleCapabilityOverridesForRole(role: string): Promise<{ capabilityId: string; allowed: boolean }[]> {
+    const { rows } = await pool.query<{ capability_id: string; allowed: boolean }>(
+      `SELECT capability_id, allowed FROM role_capability_overrides WHERE role = $1`,
+      [role],
+    );
+    return rows.map((r) => ({ capabilityId: r.capability_id, allowed: r.allowed }));
+  }
+
+  async upsertRoleCapabilityOverride(role: string, capabilityId: string, allowed: boolean): Promise<void> {
+    await pool.query(
+      `INSERT INTO role_capability_overrides (role, capability_id, allowed)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (role, capability_id) DO UPDATE SET allowed = EXCLUDED.allowed`,
+      [role, capabilityId, allowed],
+    );
+  }
+
+  async listUiTableColumnOverrides(): Promise<
+    {
+      role: string;
+      tableKey: string;
+      columnId: string;
+      hidden: boolean;
+      label: string | null;
+      sortOrder: number | null;
+    }[]
+  > {
+    const { rows } = await pool.query<{
+      role: string;
+      table_key: string;
+      column_id: string;
+      hidden: boolean;
+      label: string | null;
+      sort_order: number | null;
+    }>(
+      `SELECT role, table_key, column_id, hidden, label, sort_order FROM ui_table_column_overrides ORDER BY role, table_key, column_id`,
+    );
+    return rows.map((r) => ({
+      role: r.role,
+      tableKey: r.table_key,
+      columnId: r.column_id,
+      hidden: r.hidden,
+      label: r.label,
+      sortOrder: r.sort_order,
+    }));
+  }
+
+  async upsertUiTableColumnOverride(args: {
+    role: string;
+    tableKey: string;
+    columnId: string;
+    hidden?: boolean;
+    label?: string | null;
+    sortOrder?: number | null;
+  }): Promise<void> {
+    const hidden = args.hidden ?? false;
+    const label = args.label === undefined ? null : args.label;
+    const sortOrder = args.sortOrder === undefined ? null : args.sortOrder;
+    await pool.query(
+      `INSERT INTO ui_table_column_overrides (role, table_key, column_id, hidden, label, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (role, table_key, column_id) DO UPDATE SET
+         hidden = EXCLUDED.hidden,
+         label = EXCLUDED.label,
+         sort_order = COALESCE(EXCLUDED.sort_order, ui_table_column_overrides.sort_order)`,
+      [args.role, args.tableKey, args.columnId, hidden, label, sortOrder],
+    );
+  }
+
+  async deleteUiTableColumnOverride(role: string, tableKey: string, columnId: string): Promise<void> {
+    await pool.query(
+      `DELETE FROM ui_table_column_overrides WHERE role = $1 AND table_key = $2 AND column_id = $3`,
+      [role, tableKey, columnId],
+    );
+  }
+
+  async setUiTableColumnOrder(role: string, tableKey: string, orderedColumnIds: string[]): Promise<void> {
+    const all = await this.listUiTableColumnOverrides();
+    const byKey = new Map<string, { hidden: boolean; label: string | null }>();
+    for (const o of all) {
+      if (o.role === role && o.tableKey === tableKey) {
+        byKey.set(o.columnId, { hidden: o.hidden, label: o.label });
+      }
+    }
+    for (let i = 0; i < orderedColumnIds.length; i++) {
+      const columnId = orderedColumnIds[i];
+      const prev = byKey.get(columnId);
+      await this.upsertUiTableColumnOverride({
+        role,
+        tableKey,
+        columnId,
+        hidden: prev?.hidden ?? false,
+        label: prev?.label ?? null,
+        sortOrder: i * 10,
+      });
+    }
+  }
+
+  async listUiActivityLayout(): Promise<UiActivityLayoutRow[]> {
+    const { rows } = await pool.query<{
+      role: string;
+      context: string;
+      activity_id: string;
+      label_override: string | null;
+      sort_order: number;
+      hidden: boolean;
+      read_only: boolean;
+    }>(
+      `SELECT role, context, activity_id, label_override, sort_order, hidden, read_only FROM ui_activity_layout ORDER BY role, context, sort_order, activity_id`,
+    );
+    return normalizeUiActivityLayoutRows(
+      rows.map((r) => ({
+        role: r.role,
+        context: r.context,
+        activityId: r.activity_id,
+        labelOverride: r.label_override,
+        sortOrder: r.sort_order,
+        hidden: r.hidden,
+        readOnly: r.read_only,
+      })),
+    );
+  }
+
+  async listUiActivityLayoutForRole(role: string): Promise<UiActivityLayoutRow[]> {
+    const { rows } = await pool.query<{
+      role: string;
+      context: string;
+      activity_id: string;
+      label_override: string | null;
+      sort_order: number;
+      hidden: boolean;
+      read_only: boolean;
+    }>(
+      `SELECT role, context, activity_id, label_override, sort_order, hidden, read_only FROM ui_activity_layout WHERE role = $1 ORDER BY context, sort_order, activity_id`,
+      [role],
+    );
+    return normalizeUiActivityLayoutRows(
+      rows.map((r) => ({
+        role: r.role,
+        context: r.context,
+        activityId: r.activity_id,
+        labelOverride: r.label_override,
+        sortOrder: r.sort_order,
+        hidden: r.hidden,
+        readOnly: r.read_only,
+      })),
+    );
+  }
+
+  async upsertUiActivityLayout(row: {
+    role: string;
+    context: string;
+    activityId: string;
+    labelOverride?: string | null;
+    sortOrder: number;
+    hidden: boolean;
+    readOnly: boolean;
+  }): Promise<void> {
+    const label = row.labelOverride === undefined ? null : row.labelOverride;
+    await pool.query(
+      `INSERT INTO ui_activity_layout (role, context, activity_id, label_override, sort_order, hidden, read_only)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (role, context, activity_id) DO UPDATE SET
+         label_override = EXCLUDED.label_override,
+         sort_order = EXCLUDED.sort_order,
+         hidden = EXCLUDED.hidden,
+         read_only = EXCLUDED.read_only`,
+      [row.role, row.context, row.activityId, label, row.sortOrder, row.hidden, row.readOnly],
+    );
+  }
+
   async getDashboardStats() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -1051,6 +2326,151 @@ END $$;
       activeEncounters: eCount.value,
       pendingLabOrders: lCount.value,
       pendingInvoices: iCount.value,
+    };
+  }
+
+  async getSystemsDashboardSnapshot(): Promise<SystemsDashboardSnapshot> {
+    const allUsers = await this.getUsers();
+    const facs = await this.getFacilities();
+    const forms = await this.getClinicalForms();
+    const userNameById = new Map(allUsers.map((u) => [u.id, u.fullName]));
+
+    const { rows: loginRows } = await pool.query<{ user_id: string; last_login: Date }>(
+      `SELECT user_id, MAX(created_at) AS last_login
+       FROM audit_logs
+       WHERE action = 'LOGIN' AND resource = 'auth'
+       GROUP BY user_id`,
+    );
+    const lastLoginByUser = new Map<string, Date>();
+    for (const r of loginRows) {
+      lastLoginByUser.set(r.user_id, new Date(r.last_login));
+    }
+
+    const cutoff = new Date();
+    cutoff.setUTCDate(cutoff.getUTCDate() - 30);
+
+    const staleItems: SystemsDashboardSnapshot["staleActiveAccounts"]["items"] = [];
+    for (const u of allUsers) {
+      if (!u.isActive) continue;
+      const last = lastLoginByUser.get(u.id);
+      const created = u.createdAt ? new Date(u.createdAt) : null;
+      let isStale = false;
+      if (!last) {
+        if (created && created < cutoff) isStale = true;
+      } else if (last < cutoff) {
+        isStale = true;
+      }
+      if (isStale) {
+        staleItems.push({
+          id: u.id,
+          fullName: u.fullName,
+          username: u.username,
+          role: u.role,
+          lastLoginAt: last ? last.toISOString() : null,
+          createdAt: created ? created.toISOString() : null,
+        });
+      }
+    }
+    staleItems.sort((a, b) => {
+      const ta = a.lastLoginAt ?? a.createdAt ?? "";
+      const tb = b.lastLoginAt ?? b.createdAt ?? "";
+      return tb.localeCompare(ta);
+    });
+
+    const securityActions = [
+      "UPDATE_ROLE_CAPABILITY",
+      "CREATE_USER",
+      "RESET_USER_PASSWORD",
+      "UPDATE_ORGANIZATION_SETTINGS",
+      "UPDATE_ORGANIZATION_LOGO",
+      "UPDATE_UI_TABLE_COLUMN",
+      "CREATE_CLINICAL_FORM",
+      "UPDATE_CLINICAL_FORM",
+    ];
+
+    const { rows: recentRows } = await pool.query<{
+      id: string;
+      created_at: Date;
+      action: string;
+      resource: string;
+      details: string | null;
+      user_id: string;
+    }>(
+      `SELECT id, created_at, action, resource, details, user_id
+       FROM audit_logs
+       WHERE action = ANY($1::text[])
+       ORDER BY created_at DESC
+       LIMIT 25`,
+      [securityActions],
+    );
+
+    const { rows: count24h } = await pool.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c
+       FROM audit_logs
+       WHERE created_at >= NOW() - INTERVAL '24 hours'
+         AND action = ANY($1::text[])`,
+      [securityActions],
+    );
+
+    const { rows: login7d } = await pool.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c
+       FROM audit_logs
+       WHERE action = 'LOGIN' AND resource = 'auth'
+         AND created_at >= NOW() - INTERVAL '7 days'`,
+    );
+
+    let roleCapabilityOverrideRows = 0;
+    try {
+      const { rows: rc } = await pool.query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM role_capability_overrides`);
+      roleCapabilityOverrideRows = parseInt(rc[0]?.c ?? "0", 10) || 0;
+    } catch {
+      roleCapabilityOverrideRows = 0;
+    }
+
+    const totalUsers = allUsers.length;
+    const activeUsers = allUsers.filter((u) => u.isActive).length;
+    const deactivated = totalUsers - activeUsers;
+
+    const facActive = facs.filter((f) => f.isActive).length;
+    const facInactive = facs.length - facActive;
+
+    const formsActive = forms.filter((f) => f.isActive !== false).length;
+    const formsInactive = forms.length - formsActive;
+
+    return {
+      users: {
+        total: totalUsers,
+        active: activeUsers,
+        deactivated,
+      },
+      staleActiveAccounts: {
+        count: staleItems.length,
+        items: staleItems.slice(0, 75),
+      },
+      facilities: {
+        total: facs.length,
+        active: facActive,
+        inactive: facInactive,
+      },
+      clinicalForms: {
+        total: forms.length,
+        active: formsActive,
+        inactive: formsInactive,
+      },
+      roleCapabilityOverrideRows,
+      audit: {
+        loginsLast7Days: parseInt(login7d[0]?.c ?? "0", 10) || 0,
+        securityEventsLast24h: parseInt(count24h[0]?.c ?? "0", 10) || 0,
+        recentSecurityEvents: recentRows.map((r) => ({
+          id: r.id,
+          createdAt: new Date(r.created_at).toISOString(),
+          action: r.action,
+          resource: r.resource,
+          details: r.details,
+          userId: r.user_id,
+          actorFullName: userNameById.get(r.user_id) ?? null,
+        })),
+      },
     };
   }
 }

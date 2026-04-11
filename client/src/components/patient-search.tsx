@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useLocation } from "wouter";
 import { Input } from "@/components/ui/input";
 import {
@@ -9,17 +10,20 @@ import {
 import { Search, Loader2, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { useOrganizationSettings } from "@/lib/organization-settings";
 import type { Patient } from "@shared/schema";
 
 const DEBOUNCE_MS = 300;
 
 export function PatientSearch() {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [results, setResults] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(false);
   const [, setLocation] = useLocation();
   const { token } = useAuth();
+  const { patientIdentifierLabel } = useOrganizationSettings();
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   /** Re-open when typing after popover was closed (e.g. Escape) while input stays focused */
@@ -66,7 +70,8 @@ export function PatientSearch() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
             type="search"
-            placeholder="Patient search (name or MRN)..."
+            placeholder={t("patientSearch.placeholderDetail")}
+            aria-label={t("patientSearch.ariaLabel")}
             value={query}
             onChange={(e) => {
               const v = e.target.value;
@@ -90,7 +95,7 @@ export function PatientSearch() {
           </div>
         ) : !query.trim() ? (
           <p className="py-4 px-3 text-sm text-muted-foreground text-center">
-            Type a patient name or MRN to search
+            Type a patient name or {patientIdentifierLabel} to search
           </p>
         ) : results.length === 0 ? (
           <p className="py-4 px-3 text-sm text-muted-foreground text-center">
@@ -115,7 +120,7 @@ export function PatientSearch() {
                       {patient.firstName} {patient.lastName}
                     </p>
                     <p className="text-xs text-muted-foreground font-mono truncate">
-                      MRN: {patient.mrn}
+                      {patientIdentifierLabel}: {patient.mrn}
                     </p>
                   </div>
                 </button>

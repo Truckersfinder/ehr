@@ -3,11 +3,14 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Printer, Loader2 } from "lucide-react";
 import { format } from "date-fns";
+import { useOrgTimeZone } from "@/hooks/use-org-timezone";
+import { formatInOrgTimeZone } from "@/lib/org-timezone";
 import type {
   Appointment,
   Encounter,
@@ -21,6 +24,7 @@ import type {
   Prescription,
   Vitals,
 } from "@shared/schema";
+import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
 import { useToast } from "@/hooks/use-toast";
 
 type VisitSummaryPayload = {
@@ -57,6 +61,7 @@ type Props = {
 
 export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, readOnly = false }: Props) {
   const { toast } = useToast();
+  const orgTz = useOrgTimeZone();
   const printRef = useRef<HTMLDivElement>(null);
   const [instructions, setInstructions] = useState("");
 
@@ -146,12 +151,17 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, re
     <div className="space-y-4 max-w-4xl">
       <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight">Visit Summary</h2>
-          <p className="text-sm text-muted-foreground">
-            {readOnly
-              ? "View-only review of this visit. Patient instructions cannot be edited from this link."
-              : "Read-only snapshot of this schedule visit. Edit patient instructions below."}
-          </p>
+          <h2 className="text-lg font-semibold tracking-tight">
+            <SectionTitleWithHint
+              hint={
+                readOnly
+                  ? "View-only review of this visit. Patient instructions cannot be edited from this link."
+                  : "Read-only snapshot of this schedule visit. Edit patient instructions below."
+              }
+            >
+              Visit Summary
+            </SectionTitleWithHint>
+          </h2>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={handlePrint} className="gap-2" data-testid="visit-summary-print">
           <Printer className="h-4 w-4" />
@@ -166,7 +176,7 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, re
             {patient.firstName} {patient.lastName} · MRN {patient.mrn}
           </p>
           <p className="text-xs text-muted-foreground">
-            Printed {format(new Date(), "MMM d, yyyy HH:mm")}
+            Printed {formatInOrgTimeZone(Date.now(), "MMM d, yyyy HH:mm", orgTz)}
           </p>
         </div>
 
@@ -183,7 +193,7 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, re
             </p>
             <p>
               <span className="text-muted-foreground">DOB:</span>{" "}
-              {patient.dateOfBirth ? format(new Date(patient.dateOfBirth), "MMM d, yyyy") : "—"}
+              {formatInOrgTimeZone(patient.dateOfBirth, "MMM d, yyyy", orgTz)}
             </p>
             <p>
               <span className="text-muted-foreground">Gender:</span> {patient.gender ?? "—"}
@@ -209,7 +219,7 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, re
           <CardContent className="text-sm space-y-2">
             <p>
               <span className="text-muted-foreground">Visit date:</span>{" "}
-              {encounter.visitDate ? format(new Date(encounter.visitDate), "MMM d, yyyy HH:mm") : "—"}
+              {formatInOrgTimeZone(encounter.visitDate, "MMM d, yyyy HH:mm", orgTz)}
             </p>
             <p>
               <span className="text-muted-foreground">Type:</span> {encounter.type}
@@ -221,11 +231,12 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, re
               <>
                 <p>
                   <span className="text-muted-foreground">Scheduled:</span>{" "}
-                  {appointment.scheduledDate ? format(new Date(appointment.scheduledDate), "MMM d, yyyy HH:mm") : "—"}
+                  {formatInOrgTimeZone(appointment.scheduledDate, "MMM d, yyyy HH:mm", orgTz)}
                 </p>
                 {appointment.reason && (
                   <p>
-                    <span className="text-muted-foreground">Reason:</span> {appointment.reason}
+                    <span className="text-muted-foreground">{APPOINTMENT_REASON_FOR_VISIT_LABEL}:</span>{" "}
+                    {appointment.reason}
                   </p>
                 )}
               </>
@@ -325,7 +336,7 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, re
                 {vitals.map((v) => (
                   <li key={v.id} className="border-b border-border/50 pb-2 last:border-0">
                     <p className="text-xs text-muted-foreground mb-1">
-                      {v.recordedAt ? format(new Date(v.recordedAt), "MMM d, yyyy HH:mm") : "—"}
+                      {formatInOrgTimeZone(v.recordedAt, "MMM d, yyyy HH:mm", orgTz)}
                     </p>
                     <div className="flex flex-wrap gap-x-4 gap-y-1">
                       {v.temperature != null && <span>Temp {v.temperature} °C</span>}
@@ -363,7 +374,7 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, re
                     {a.reactionType && <span className="text-muted-foreground"> · {a.reactionType}</span>}
                     {a.createdAt && (
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {format(new Date(a.createdAt), "MMM d, yyyy HH:mm")}
+                        {formatInOrgTimeZone(a.createdAt, "MMM d, yyyy HH:mm", orgTz)}
                       </p>
                     )}
                   </li>
@@ -462,9 +473,9 @@ export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, re
                   <p className="text-xs text-muted-foreground mb-1">
                     {n.noteKind} · {n.authorRole} ·{" "}
                     {n.signedAt
-                      ? format(new Date(n.signedAt), "MMM d, yyyy HH:mm")
+                      ? formatInOrgTimeZone(n.signedAt, "MMM d, yyyy HH:mm", orgTz)
                       : n.createdAt
-                        ? format(new Date(n.createdAt), "MMM d, yyyy HH:mm")
+                        ? formatInOrgTimeZone(n.createdAt, "MMM d, yyyy HH:mm", orgTz)
                         : "—"}
                     {n.authorId && ` · ${prescriberNameById.get(n.authorId) ?? n.authorId}`}
                   </p>

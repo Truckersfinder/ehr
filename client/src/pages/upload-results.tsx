@@ -19,6 +19,7 @@ import { DocumentFileUpload } from "@/components/document-file-upload";
 import { fetchPatientRecordDocumentTypes, patientRecordDocumentTypesQueryKey } from "@/lib/patient-record-document-types-api";
 import type { Patient, LabOrder, ImagingOrder } from "@shared/schema";
 import { PATIENT_RECORD_DOCUMENT_TYPES, type PatientRecordDocumentTypeOption } from "@shared/patient-record-document-types";
+import { useTranslation } from "react-i18next";
 
 function isExternalOrder(o: { internalExternal?: string | null }) {
   const v = o.internalExternal ?? "internal";
@@ -28,6 +29,7 @@ function isExternalOrder(o: { internalExternal?: string | null }) {
 const DEBOUNCE_MS = 300;
 
 export default function UploadResultsPage() {
+  const { t, i18n } = useTranslation();
   const [, navigate] = useLocation();
   const search = useSearch();
   const params = useMemo(() => new URLSearchParams(search), [search]);
@@ -172,10 +174,11 @@ export default function UploadResultsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.labOrders.root });
-      toast({ title: "Lab result uploaded; order marked complete" });
+      toast({ title: i18n.t("pages.uploadResults.toastLabUploaded") });
       resetAndGoBack();
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: i18n.t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const createDocMutation = useMutation({
@@ -194,10 +197,11 @@ export default function UploadResultsPage() {
       queryClient.invalidateQueries({
         queryKey: queryKeys.patientDocuments.list(variables.patientId),
       });
-      toast({ title: "Document uploaded" });
+      toast({ title: i18n.t("pages.uploadResults.toastDocumentUploaded") });
       resetAndGoBack();
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: i18n.t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const updateImagingOrderMutation = useMutation({
@@ -208,7 +212,8 @@ export default function UploadResultsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.imagingOrders.root });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: i18n.t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   function resetAndGoBack() {
@@ -240,16 +245,16 @@ export default function UploadResultsPage() {
     if (docType === "lab_result") {
       if (!labOrderId) {
         toast({
-          title: "Lab order is required",
-          description: "Please select the external lab order this result belongs to.",
+          title: t("pages.uploadResults.toastLabOrderRequired"),
+          description: t("pages.uploadResults.toastLabOrderRequiredDesc"),
           variant: "destructive",
         });
         return;
       }
       if (!pendingExternalLabOrders.some((o) => o.id === labOrderId)) {
         toast({
-          title: "Invalid lab order",
-          description: "Choose an open external lab order from the list.",
+          title: t("pages.uploadResults.toastInvalidLabOrder"),
+          description: t("pages.uploadResults.toastInvalidLabOrderDesc"),
           variant: "destructive",
         });
         return;
@@ -268,16 +273,16 @@ export default function UploadResultsPage() {
     } else if (docType === "imaging") {
       if (!imagingOrderId) {
         toast({
-          title: "Imaging order is required",
-          description: "Please select the external imaging order this upload completes.",
+          title: t("pages.uploadResults.toastImagingOrderRequired"),
+          description: t("pages.uploadResults.toastImagingOrderRequiredDesc"),
           variant: "destructive",
         });
         return;
       }
       if (!pendingExternalImagingOrders.some((o) => o.id === imagingOrderId)) {
         toast({
-          title: "Invalid imaging order",
-          description: "Choose an open external imaging order from the list.",
+          title: t("pages.uploadResults.toastInvalidImagingOrder"),
+          description: t("pages.uploadResults.toastInvalidImagingOrderDesc"),
           variant: "destructive",
         });
         return;
@@ -285,8 +290,8 @@ export default function UploadResultsPage() {
       const ord = imagingOrders.find((o) => o.id === imagingOrderId);
       if (!ord || !isExternalOrder(ord) || ord.status !== "ordered") {
         toast({
-          title: "Invalid imaging order",
-          description: "Select an open external imaging order from the list.",
+          title: t("pages.uploadResults.toastInvalidImagingOrder"),
+          description: t("pages.uploadResults.toastInvalidImagingOrderDescAlt"),
           variant: "destructive",
         });
         return;
@@ -298,7 +303,7 @@ export default function UploadResultsPage() {
           completedAt: new Date().toISOString(),
           documentUrl: form.documentUrl || undefined,
         });
-        toast({ title: "Imaging uploaded; order marked complete" });
+        toast({ title: i18n.t("pages.uploadResults.toastImagingUploaded") });
         resetAndGoBack();
       } catch {
         /* errors handled via mutation onError */
@@ -306,8 +311,8 @@ export default function UploadResultsPage() {
     } else if (docType === "patient_document") {
       if (!recordDocumentType.trim()) {
         toast({
-          title: "Document type is required",
-          description: "Choose the type of medical record document you are uploading.",
+          title: t("pages.uploadResults.toastDocumentTypeRequired"),
+          description: t("pages.uploadResults.toastDocumentTypeRequiredDesc"),
           variant: "destructive",
         });
         return;
@@ -315,7 +320,7 @@ export default function UploadResultsPage() {
       createDocMutation.mutate({
         patientId: selectedPatient.id,
         documentType: "patient_document",
-        title: form.title || "Patient document",
+        title: form.title || t("pages.uploadResults.patientDocumentDefaultTitle"),
         documentUrl: form.documentUrl || undefined,
         recordDocumentType: recordDocumentType.trim(),
       });
@@ -329,17 +334,17 @@ export default function UploadResultsPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">
           {!selectedPatient
-            ? "Uploads"
+            ? t("pages.uploadResults.headingUploads")
             : isPatientDocumentFlow
-              ? "Upload document"
-              : "Uploads"}
+              ? t("pages.uploadResults.headingUploadDocument")
+              : t("pages.uploadResults.headingUploads")}
         </h1>
         <p className="text-muted-foreground text-sm mt-1">
           {!selectedPatient
-            ? "Search for the patient whose outside lab, imaging, or document you are uploading."
+            ? t("pages.uploadResults.hintNoPatient")
             : isPatientDocumentFlow
-              ? "Add a file and classification to the patient's medical record."
-              : "Upload outside lab results, imaging, or patient documents."}
+              ? t("pages.uploadResults.hintDocumentFlow")
+              : t("pages.uploadResults.hintWithPatient")}
         </p>
       </div>
 
@@ -347,19 +352,21 @@ export default function UploadResultsPage() {
         <Card>
           <CardHeader>
             <Label className="flex items-center gap-2">
-              <Search className="w-4 h-4" /> Find patient (name or MRN)
+              <Search className="w-4 h-4" /> {t("pages.uploadResults.findPatientLabel")}
             </Label>
           </CardHeader>
           <CardContent className="space-y-3">
             <Input
-              placeholder="Patient search (name or MRN)..."
+              placeholder={t("patientSearch.placeholderDetail")}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               className="max-w-md"
               data-testid="upload-results-patient-search"
             />
-            {loading && <p className="text-sm text-muted-foreground">Searching...</p>}
-            {!loading && query.trim() && results.length === 0 && <p className="text-sm text-muted-foreground">No patients found</p>}
+            {loading && <p className="text-sm text-muted-foreground">{t("pages.uploadResults.searching")}</p>}
+            {!loading && query.trim() && results.length === 0 && (
+              <p className="text-sm text-muted-foreground">{t("pages.uploadResults.noPatientsFound")}</p>
+            )}
             {results.length > 0 && (
               <ul className="border rounded-md divide-y max-h-60 overflow-y-auto">
                 {results.map((p) => (
@@ -371,7 +378,9 @@ export default function UploadResultsPage() {
                     >
                       <User className="w-4 h-4 text-muted-foreground" />
                       <span className="font-medium">{p.firstName} {p.lastName}</span>
-                      <span className="text-muted-foreground font-mono text-xs">MRN: {p.mrn}</span>
+                      <span className="text-muted-foreground font-mono text-xs">
+                        {t("pages.uploadResults.mrn")} {p.mrn}
+                      </span>
                     </button>
                   </li>
                 ))}
@@ -382,7 +391,10 @@ export default function UploadResultsPage() {
       ) : !docType ? (
         <Card>
           <CardHeader>
-            <p className="font-medium">{selectedPatient.firstName} {selectedPatient.lastName} · MRN: {selectedPatient.mrn}</p>
+            <p className="font-medium">
+              {selectedPatient.firstName} {selectedPatient.lastName} · {t("pages.uploadResults.mrn")}{" "}
+              {selectedPatient.mrn}
+            </p>
             <Button
               variant="ghost"
               size="sm"
@@ -391,11 +403,11 @@ export default function UploadResultsPage() {
                 navigate(backPath);
               }}
             >
-              Change patient
+              {t("pages.uploadResults.changePatient")}
             </Button>
           </CardHeader>
           <CardContent>
-            <Label className="text-muted-foreground block mb-3">Select document type</Label>
+            <Label className="text-muted-foreground block mb-3">{t("pages.uploadResults.selectDocType")}</Label>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Button
                 variant="outline"
@@ -404,18 +416,18 @@ export default function UploadResultsPage() {
                 data-testid="upload-results-choose-lab-result"
               >
                 <FlaskConical className="w-5 h-5" />
-                <span>Lab result</span>
-                <span className="text-xs text-muted-foreground font-normal">External lab orders awaiting result</span>
+                <span>{t("pages.uploadResults.typeLabResult")}</span>
+                <span className="text-xs text-muted-foreground font-normal">{t("pages.uploadResults.typeLabResultHint")}</span>
               </Button>
               <Button variant="outline" className="h-auto py-4 flex flex-col gap-1" onClick={() => setDocType("imaging")}>
                 <ImageIcon className="w-5 h-5" />
-                <span>Imaging</span>
-                <span className="text-xs text-muted-foreground font-normal">Scan or report</span>
+                <span>{t("pages.uploadResults.typeImaging")}</span>
+                <span className="text-xs text-muted-foreground font-normal">{t("pages.uploadResults.typeImagingHint")}</span>
               </Button>
               <Button variant="outline" className="h-auto py-4 flex flex-col gap-1" onClick={() => setDocType("patient_document")}>
                 <FileText className="w-5 h-5" />
-                <span>Patient document</span>
-                <span className="text-xs text-muted-foreground font-normal">Other document</span>
+                <span>{t("pages.uploadResults.typePatientDocument")}</span>
+                <span className="text-xs text-muted-foreground font-normal">{t("pages.uploadResults.typePatientDocumentHint")}</span>
               </Button>
             </div>
           </CardContent>
@@ -426,12 +438,14 @@ export default function UploadResultsPage() {
             <div>
               <p className="font-medium">{selectedPatient.firstName} {selectedPatient.lastName}</p>
               <p className="text-sm text-muted-foreground">
-                {docType === "lab_result" && "Lab result"}
-                {docType === "imaging" && "Imaging"}
-                {docType === "patient_document" && "Patient document"}
+                {docType === "lab_result" && t("pages.uploadResults.typeLabResult")}
+                {docType === "imaging" && t("pages.uploadResults.typeImaging")}
+                {docType === "patient_document" && t("pages.uploadResults.typePatientDocument")}
               </p>
             </div>
-            <Button variant="ghost" size="sm" onClick={backFromDetailStep}>Back</Button>
+            <Button variant="ghost" size="sm" onClick={backFromDetailStep}>
+              {t("pages.uploadResults.back")}
+            </Button>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -567,7 +581,9 @@ export default function UploadResultsPage() {
                 onChange={(url) => setForm((f) => ({ ...f, documentUrl: url ?? "" }))}
               />
               <div className="flex gap-2">
-                <Button type="button" variant="secondary" onClick={backFromDetailStep}>Back</Button>
+                <Button type="button" variant="secondary" onClick={backFromDetailStep}>
+                  {t("pages.uploadResults.back")}
+                </Button>
                 <Button
                   type="submit"
                   disabled={
@@ -581,8 +597,8 @@ export default function UploadResultsPage() {
                 >
                   <Upload className="w-4 h-4 mr-2" />
                   {updateLabMutation.isPending || createDocMutation.isPending || updateImagingOrderMutation.isPending
-                    ? "Uploading..."
-                    : "Upload"}
+                    ? t("pages.uploadResults.uploading")
+                    : t("pages.uploadResults.upload")}
                 </Button>
               </div>
             </form>

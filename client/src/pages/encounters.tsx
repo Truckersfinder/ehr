@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
@@ -20,6 +21,7 @@ import { format } from "date-fns";
 import type { Encounter, Patient } from "@shared/schema";
 
 export default function EncountersPage() {
+  const { t } = useTranslation();
   const { user, token } = useAuth();
   const { toast } = useToast();
   const [, navigate] = useLocation();
@@ -83,8 +85,10 @@ export default function EncountersPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto" data-testid="encounters-page">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Encounters</h1>
-          <p className="text-muted-foreground text-sm mt-1">{encounters.length} total encounters</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t("pages.encounters.title")}</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            {t("pages.encounters.totalCount", { count: encounters.length })}
+          </p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>

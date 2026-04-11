@@ -29,6 +29,8 @@ import { useBillingCurrency } from "@/lib/currency";
 import { queryKeys } from "@/lib/query-keys";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { format } from "date-fns";
+import { useOrgTimeZone } from "@/hooks/use-org-timezone";
+import { formatInOrgTimeZone } from "@/lib/org-timezone";
 import type { BillingChargeCatalog, Encounter, EncounterVisitCharge, Patient, User } from "@shared/schema";
 
 const CATEGORY_ORDER = ["lab_order", "medication", "imaging", "problem_list", "clinical_charge"] as const;
@@ -51,13 +53,14 @@ function lineKindLabel(kind: string): string {
 }
 
 function canManageManualCharges(role: string | undefined) {
-  return role === "super_admin" || role === "facility_admin" || role === "finance";
+  return role === "super_admin";
 }
 
 export default function BillingVisitChargesReviewPage() {
   const [, params] = useRoute("/billing/visit-charges/:encounterId");
   const encounterId = params?.encounterId;
   const { token, user } = useAuth();
+  const orgTz = useOrgTimeZone();
   const { toast } = useToast();
   const { currencyCode } = useBillingCurrency(token);
   const canManage = canManageManualCharges(user?.role);
@@ -221,7 +224,7 @@ export default function BillingVisitChargesReviewPage() {
             )}
             {encounter.visitDate && (
               <span className="ml-2">
-                · {format(new Date(encounter.visitDate), "MMM d, yyyy h:mm a")}
+                · {formatInOrgTimeZone(encounter.visitDate, "MMM d, yyyy h:mm a", orgTz)}
               </span>
             )}
           </p>

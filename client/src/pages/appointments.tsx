@@ -1,8 +1,15 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import { useTableSort } from "@/hooks/use-table-sort";
 import { PatientSearchCombobox } from "@/components/patient-search-combobox";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
-import { appointmentStatusBadgeClass, formatAppointmentStatusLabel } from "@/lib/appointment-status";
+import {
+  ADMITTED_PATIENT_STATUS_BADGE_CLASS,
+  ADMITTED_PATIENT_STATUS_LABEL,
+  appointmentStatusBadgeClass,
+  formatAppointmentStatusLabel,
+} from "@/lib/appointment-status";
 import ReceptionAppointmentsPage from "@/pages/reception-appointments";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -10,6 +17,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   Dialog,
   DialogContent,
@@ -24,18 +33,42 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Calendar, Clock, User } from "lucide-react";
 import { format } from "date-fns";
+import { Link, useLocation } from "wouter";
 import type { Appointment, Patient, User as UserType, CommonVisitReason } from "@shared/schema";
+import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
+import { EmptyState } from "@/components/empty-state";
+import { excludeAppointmentsWithActiveAdmission } from "@/lib/exclude-admitted-appointments";
+import { useOrgTimeZone } from "@/hooks/use-org-timezone";
+import { formatInOrgTimeZone } from "@/lib/org-timezone";
+
+type ActiveAdmissionRow = {
+  id: string;
+  patientId: string;
+  appointmentId: string | null;
+  bedId: string;
+  bedName: string;
+  admittedAt: string | Date | null;
+  clinicianId: string;
+  scheduledDate: string | Date;
+  status: string;
+  reason: string | null;
+};
+
+type AdmittedSortKey = "patient" | "mrn" | "clinician" | "status" | "reason" | "bed" | "admittedAt";
 
 function AppointmentsManagementPage() {
+  const { t } = useTranslation();
   const { toast } = useToast();
   const { token } = useAuth();
+  const orgTz = useOrgTimeZone();
+  const [, navigate] = useLocation();
   const [open, setOpen] = useState(false);
   const [cancelDialog, setCancelDialog] = useState<{ id: string } | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [formData, setFormData] = useState({
     clinicianId: "", scheduledDate: "", scheduledTime: "09:00",
-    duration: 30, reason: "", notes: "",
+    duration: 30, reason: "",
   });
 
   const { data: appointments = [], isLoading } = useQuery<Appointment[]>({
@@ -45,6 +78,16 @@ function AppointmentsManagementPage() {
       if (!res.ok) throw new Error("Failed");
       return res.json();
     },
+  });
+
+  const { data: admissions = [], isLoading: admissionsLoading } = useQuery<ActiveAdmissionRow[]>({
+    queryKey: ["/api/admissions/active"],
+    queryFn: async () => {
+      const res = await fetch("/api/admissions/active", { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!token,
   });
 
   const { data: patients = [] } = useQuery<Patient[]>({
@@ -79,6 +122,55 @@ function AppointmentsManagementPage() {
   const patientMap = new Map(patients.map((p) => [p.id, p]));
   const userMap = new Map(users.map((u) => [u.id, u]));
 
+  const appointmentsForList = useMemo(
+    () => excludeAppointmentsWithActiveAdmission(appointments, admissions),
+    [appointments, admissions],
+  );
+
+  const { sortKey: admittedSortKey, sortDir: admittedSortDir, toggleSort: toggleAdmittedSort } =
+    useTableSort<AdmittedSortKey>("admittedAt", "desc");
+
+  const displayAdmissions = useMemo(() => {
+    const list = [...admissions];
+    const mult = admittedSortDir === "asc" ? 1 : -1;
+    list.sort((a, b) => {
+      const pa = patientMap.get(a.patientId);
+      const pb = patientMap.get(b.patientId);
+      const ca = userMap.get(a.clinicianId);
+      const cb = userMap.get(b.clinicianId);
+      const patientName = (p: Patient | undefined) => (p ? `${p.firstName} ${p.lastName}` : "—");
+      let cmp = 0;
+      switch (admittedSortKey) {
+        case "patient":
+          cmp = patientName(pa).localeCompare(patientName(pb));
+          break;
+        case "mrn":
+          cmp = (pa?.mrn ?? "").localeCompare(pb?.mrn ?? "");
+          break;
+        case "clinician":
+          cmp = (ca?.fullName ?? "").localeCompare(cb?.fullName ?? "");
+          break;
+        case "status":
+          cmp = a.status.localeCompare(b.status);
+          break;
+        case "reason":
+          cmp = (a.reason ?? "").localeCompare(b.reason ?? "");
+          break;
+        case "bed":
+          cmp = a.bedName.localeCompare(b.bedName);
+          break;
+        case "admittedAt":
+          cmp =
+            new Date(a.admittedAt ?? 0).getTime() - new Date(b.admittedAt ?? 0).getTime();
+          break;
+        default:
+          cmp = 0;
+      }
+      return cmp * mult;
+    });
+    return list;
+  }, [admissions, admittedSortKey, admittedSortDir, patientMap, userMap]);
+
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData & { patientId: string }) => {
       const dateTime = new Date(`${data.scheduledDate}T${data.scheduledTime}`);
@@ -91,7 +183,6 @@ function AppointmentsManagementPage() {
           scheduledDate: dateTime.toISOString(),
           duration: data.duration,
           reason: data.reason,
-          notes: data.notes,
           status: "scheduled",
         }),
       });
@@ -115,7 +206,7 @@ function AppointmentsManagementPage() {
       setSelectedPatient(null);
       setFormData({
         clinicianId: "", scheduledDate: "", scheduledTime: "09:00",
-        duration: 30, reason: "", notes: "",
+        duration: 30, reason: "",
       });
     },
     onError: (error: Error) => toast({ title: "Error", description: error.message, variant: "destructive" }),
@@ -149,8 +240,8 @@ function AppointmentsManagementPage() {
     },
   });
 
-  const grouped = appointments.reduce<Record<string, Appointment[]>>((acc, apt) => {
-    const dateKey = format(new Date(apt.scheduledDate), "yyyy-MM-dd");
+  const grouped = appointmentsForList.reduce<Record<string, Appointment[]>>((acc, apt) => {
+    const dateKey = formatInOrgTimeZone(apt.scheduledDate, "yyyy-MM-dd", orgTz);
     if (!acc[dateKey]) acc[dateKey] = [];
     acc[dateKey].push(apt);
     return acc;
@@ -162,8 +253,8 @@ function AppointmentsManagementPage() {
     <div className="p-6 space-y-6 max-w-5xl mx-auto" data-testid="appointments-page">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Appointments</h1>
-          <p className="text-muted-foreground text-sm mt-1">{appointments.length} total appointments</p>
+          <h1 className="text-2xl font-bold tracking-tight">{t("pages.appointments.title")}</h1>
+          <p className="text-muted-foreground text-sm mt-1">{appointmentsForList.length} total appointments</p>
         </div>
         <Dialog
           open={open}
@@ -173,7 +264,7 @@ function AppointmentsManagementPage() {
               setSelectedPatient(null);
               setFormData({
                 clinicianId: "", scheduledDate: "", scheduledTime: "09:00",
-                duration: 30, reason: "", notes: "",
+                duration: 30, reason: "",
               });
             }
           }}
@@ -234,7 +325,7 @@ function AppointmentsManagementPage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Visit reason</Label>
+                <Label>{APPOINTMENT_REASON_FOR_VISIT_LABEL}</Label>
                 <Select
                   value={visitReasons.some((r) => r.label === formData.reason) ? formData.reason : undefined}
                   onValueChange={(v) => setFormData({ ...formData, reason: v })}
@@ -256,17 +347,6 @@ function AppointmentsManagementPage() {
                   onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
                   className="resize-none"
                   placeholder="Type or edit reason for visit…"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Appointment note</Label>
-                <Textarea
-                  data-testid="input-appt-notes"
-                  value={formData.notes}
-                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                  className="resize-none"
-                  placeholder="Note for this appointment (shown on Schedule as APT Note)"
-                  rows={3}
                 />
               </div>
               <div className="flex justify-end gap-2">
@@ -294,11 +374,11 @@ function AppointmentsManagementPage() {
           const dayAppts = grouped[dateKey].sort(
             (a, b) => new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime()
           );
-          const isToday = dateKey === format(new Date(), "yyyy-MM-dd");
+          const isToday = dateKey === formatInOrgTimeZone(Date.now(), "yyyy-MM-dd", orgTz);
           return (
             <div key={dateKey} className="space-y-3">
               <h3 className="text-sm font-medium flex items-center gap-2">
-                {format(new Date(dateKey), "EEEE, MMMM d, yyyy")}
+                {formatInOrgTimeZone(new Date(dateKey), "EEEE, MMMM d, yyyy", orgTz)}
                 {isToday && <Badge variant="secondary" className="text-[10px]">Today</Badge>}
               </h3>
               {dayAppts.map((apt) => {
@@ -310,7 +390,7 @@ function AppointmentsManagementPage() {
                       <div className="flex items-center justify-between gap-3 flex-wrap">
                         <div className="flex items-center gap-4 min-w-0">
                           <div className="text-center min-w-[55px]">
-                            <p className="text-sm font-bold">{format(new Date(apt.scheduledDate), "HH:mm")}</p>
+                            <p className="text-sm font-bold">{formatInOrgTimeZone(apt.scheduledDate, "HH:mm", orgTz)}</p>
                             <p className="text-[10px] text-muted-foreground">{apt.duration}min</p>
                           </div>
                           <div className="min-w-0">
@@ -354,6 +434,145 @@ function AppointmentsManagementPage() {
           );
         })
       )}
+
+      <Card data-testid="appointments-admitted-patients">
+        <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
+          <div className="flex w-full min-w-0 items-center justify-between gap-3 flex-wrap">
+            <div className="min-w-0 text-left">
+              <p className="text-sm font-semibold">Admitted Patients</p>
+              <p className="text-xs text-muted-foreground">Overnight visits remain here until discharged.</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => navigate("/admissions/recently-discharged")}
+                data-testid="button-recently-discharged"
+              >
+                Recently discharged
+              </Button>
+              <Badge variant="secondary" className="text-[10px] shrink-0">
+                {admissions.length} Admissions
+              </Badge>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {admissionsLoading ? (
+            <div className="p-6 space-y-2">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : admissions.length === 0 ? (
+            <div className="p-4">
+              <EmptyState title="No admitted patients" description="Overnight walk-ins appear here until discharged." />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table className="min-w-[1180px] w-full text-sm table-fixed">
+                <TableHeader>
+                  <TableRow>
+                    <SortableTableHead
+                      className="whitespace-nowrap w-[18%]"
+                      active={admittedSortKey === "patient"}
+                      sortDir={admittedSortDir}
+                      onSort={() => toggleAdmittedSort("patient")}
+                    >
+                      Patient
+                    </SortableTableHead>
+                    <SortableTableHead
+                      className="whitespace-nowrap w-[9%]"
+                      active={admittedSortKey === "mrn"}
+                      sortDir={admittedSortDir}
+                      onSort={() => toggleAdmittedSort("mrn")}
+                    >
+                      MRN
+                    </SortableTableHead>
+                    <SortableTableHead
+                      className="whitespace-nowrap w-[18%]"
+                      active={admittedSortKey === "clinician"}
+                      sortDir={admittedSortDir}
+                      onSort={() => toggleAdmittedSort("clinician")}
+                    >
+                      Clinician
+                    </SortableTableHead>
+                    <SortableTableHead
+                      className="whitespace-nowrap w-[8%]"
+                      active={admittedSortKey === "status"}
+                      sortDir={admittedSortDir}
+                      onSort={() => toggleAdmittedSort("status")}
+                    >
+                      Status
+                    </SortableTableHead>
+                    <SortableTableHead
+                      className="whitespace-nowrap w-[22%]"
+                      active={admittedSortKey === "reason"}
+                      sortDir={admittedSortDir}
+                      onSort={() => toggleAdmittedSort("reason")}
+                    >
+                      {APPOINTMENT_REASON_FOR_VISIT_LABEL}
+                    </SortableTableHead>
+                    <SortableTableHead
+                      className="whitespace-nowrap w-[12%]"
+                      active={admittedSortKey === "bed"}
+                      sortDir={admittedSortDir}
+                      onSort={() => toggleAdmittedSort("bed")}
+                    >
+                      Bed / Room
+                    </SortableTableHead>
+                    <SortableTableHead
+                      className="whitespace-nowrap w-[11%]"
+                      active={admittedSortKey === "admittedAt"}
+                      sortDir={admittedSortDir}
+                      onSort={() => toggleAdmittedSort("admittedAt")}
+                    >
+                      Admission Date
+                    </SortableTableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {displayAdmissions.map((a) => {
+                    const pt = patientMap.get(a.patientId);
+                    const clinician = userMap.get(a.clinicianId);
+                    return (
+                      <TableRow key={a.id}>
+                        <TableCell className="font-medium whitespace-nowrap truncate max-w-0">
+                          <Link href={`/patients/${a.patientId}?fromAdmission=1&admissionId=${encodeURIComponent(a.id)}&tab=medication`}>
+                            <a className="text-primary hover:underline">
+                              {pt ? `${pt.firstName} ${pt.lastName}` : "—"}
+                            </a>
+                          </Link>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground font-mono text-xs whitespace-nowrap">
+                          {pt?.mrn ?? "—"}
+                        </TableCell>
+                        <TableCell className="truncate max-w-0 whitespace-nowrap">{clinician?.fullName ?? "—"}</TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] font-medium border ${ADMITTED_PATIENT_STATUS_BADGE_CLASS}`}
+                          >
+                            {ADMITTED_PATIENT_STATUS_LABEL}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="truncate max-w-0" title={a.reason ?? ""}>
+                          {a.reason ?? "—"}
+                        </TableCell>
+                        <TableCell className="truncate max-w-0 whitespace-nowrap">{a.bedName}</TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">
+                          {formatInOrgTimeZone(a.admittedAt, "MMMM d, yyyy", orgTz)}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Dialog
         open={!!cancelDialog}

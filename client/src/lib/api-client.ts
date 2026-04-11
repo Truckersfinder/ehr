@@ -20,6 +20,22 @@ export async function apiGetJson<T>(path: string, token: string | null | undefin
   return readApiJsonOrThrow<T>(res);
 }
 
+/** Unauthenticated GET (e.g. public form session). */
+export async function apiGetJsonPublic<T>(path: string): Promise<T> {
+  const res = await fetch(path);
+  return readApiJsonOrThrow<T>(res);
+}
+
+/** Unauthenticated POST (e.g. public form submit). */
+export async function apiPostJsonPublic<TRes, TBody extends object = object>(path: string, body: TBody): Promise<TRes> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return readApiJsonOrThrow<TRes>(res);
+}
+
 export async function apiPostJson<TRes, TBody extends object = object>(
   path: string,
   body: TBody,
@@ -40,6 +56,19 @@ export async function apiPatchJson<TRes, TBody extends object = object>(
 ): Promise<TRes> {
   const res = await fetch(path, {
     method: "PATCH",
+    headers: jsonAuthHeaders(token),
+    body: JSON.stringify(body),
+  });
+  return readApiJsonOrThrow<TRes>(res);
+}
+
+export async function apiPutJson<TRes, TBody extends object = object>(
+  path: string,
+  body: TBody,
+  token: string | null | undefined,
+): Promise<TRes> {
+  const res = await fetch(path, {
+    method: "PUT",
     headers: jsonAuthHeaders(token),
     body: JSON.stringify(body),
   });

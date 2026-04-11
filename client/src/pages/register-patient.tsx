@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
+import { useOrganizationSettings } from "@/lib/organization-settings";
 import { queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { CountrySelect } from "@/components/country-select";
 import { StateSelect } from "@/components/state-select";
 import { EmergencyContactRelationshipSelect } from "@/components/emergency-contact-relationship-select";
@@ -53,9 +55,11 @@ const emptyForm = () => ({
 
 export default function RegisterPatientPage() {
   const { user, token } = useAuth();
+  const { patientIdentifierLabel, defaultCountry } = useOrganizationSettings();
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const [formData, setFormData] = useState(emptyForm);
+  const countryDefaultAppliedRef = useRef(false);
   const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null);
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
   const galleryPhotoInputRef = useRef<HTMLInputElement>(null);
@@ -73,6 +77,14 @@ export default function RegisterPatientPage() {
       if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
     };
   }, [photoPreviewUrl]);
+
+  useEffect(() => {
+    const dc = defaultCountry.trim();
+    if (!countryDefaultAppliedRef.current && dc) {
+      countryDefaultAppliedRef.current = true;
+      setFormData((prev) => (prev.country ? prev : { ...prev, country: dc }));
+    }
+  }, [defaultCountry]);
 
   const clearProfilePhoto = () => {
     if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
@@ -316,17 +328,21 @@ export default function RegisterPatientPage() {
       </div>
 
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Register New Patient</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Enter demographics and billing details. MRN is assigned automatically when you save.
-        </p>
+        <h1 className="text-2xl font-bold tracking-tight">
+          <SectionTitleWithHint
+            hint={`Enter demographics and billing details. ${patientIdentifierLabel} is assigned automatically when you save.`}
+          >
+            Register New Patient
+          </SectionTitleWithHint>
+        </h1>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle>Identity & demographics</CardTitle>
-            <CardDescription>Legal name and core patient information.</CardDescription>
+            <CardTitle>
+              <SectionTitleWithHint hint="Legal name and core patient information.">Identity &amp; demographics</SectionTitleWithHint>
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-4">
@@ -405,10 +421,11 @@ export default function RegisterPatientPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Camera className="h-4 w-4" aria-hidden />
-              Profile photo
+              <Camera className="h-4 w-4 shrink-0" aria-hidden />
+              <SectionTitleWithHint hint="Optional. JPEG, PNG, GIF, or WebP, up to 5 MB. Shown on the patient storyboard.">
+                Profile photo
+              </SectionTitleWithHint>
             </CardTitle>
-            <CardDescription>Optional. JPEG, PNG, GIF, or WebP, up to 5 MB. Shown on the patient storyboard.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex flex-wrap items-center gap-4">
@@ -515,7 +532,7 @@ export default function RegisterPatientPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Contact & address</CardTitle>
+            <CardTitle>Contact &amp; address</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-4">
@@ -571,8 +588,9 @@ export default function RegisterPatientPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Emergency contact</CardTitle>
-            <CardDescription>Next of kin or emergency contact.</CardDescription>
+            <CardTitle>
+              <SectionTitleWithHint hint="Next of kin or emergency contact.">Emergency contact</SectionTitleWithHint>
+            </CardTitle>
           </CardHeader>
           <CardContent className="grid sm:grid-cols-3 gap-4">
             <div className="space-y-2">
@@ -596,8 +614,9 @@ export default function RegisterPatientPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Billing & insurance</CardTitle>
-            <CardDescription>Coverage and guarantor for accounts receivable.</CardDescription>
+            <CardTitle>
+              <SectionTitleWithHint hint="Coverage and guarantor for accounts receivable.">Billing &amp; insurance</SectionTitleWithHint>
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-4">
@@ -660,8 +679,9 @@ export default function RegisterPatientPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Care team</CardTitle>
-            <CardDescription>Optional primary clinician for this chart.</CardDescription>
+            <CardTitle>
+              <SectionTitleWithHint hint="Optional primary clinician for this chart.">Care team</SectionTitleWithHint>
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 max-w-md">

@@ -25,7 +25,9 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { CalendarPlus, DoorOpen, CalendarClock } from "lucide-react";
 import { PatientSearchCombobox } from "@/components/patient-search-combobox";
+import { BedSelect } from "@/components/bed-select";
 import type { Patient, User as UserType, CommonVisitReason } from "@shared/schema";
+import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
 
 type Flow = "choose" | "walkin" | "future";
 
@@ -37,7 +39,8 @@ const defaultForm = () => {
     scheduledTime: format(now, "HH:mm"),
     duration: 30,
     reason: "",
-    notes: "",
+    overnightVisit: "no" as "yes" | "no",
+    bedId: "",
   };
 };
 
@@ -90,8 +93,9 @@ export function ScheduleNewAppointmentToolbarDialog() {
       scheduledTime: string;
       duration: number;
       reason: string;
-      notes: string;
       status: "checked_in" | "scheduled";
+      overnightVisit: "yes" | "no";
+      bedId?: string;
     }) => {
       const dateTime = new Date(`${payload.scheduledDate}T${payload.scheduledTime}`);
       const res = await fetch("/api/appointments", {
@@ -103,7 +107,6 @@ export function ScheduleNewAppointmentToolbarDialog() {
           scheduledDate: dateTime.toISOString(),
           duration: payload.duration,
           reason: payload.reason || undefined,
-          notes: payload.notes || undefined,
           status: payload.status,
         }),
       });
@@ -120,18 +123,42 @@ export function ScheduleNewAppointmentToolbarDialog() {
           [err.message || "Failed to create appointment", detail].filter(Boolean).join(" — ")
         );
       }
-      return res.json();
+      const appt = await res.json();
+
+      if (payload.status === "checked_in" && payload.overnightVisit === "yes") {
+        if (!payload.bedId) throw new Error("Select an available bed");
+        const ar = await fetch("/api/admissions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            bedId: payload.bedId,
+            patientId: payload.patientId,
+            appointmentId: appt.id,
+          }),
+        });
+        if (!ar.ok) {
+          const err = await ar.json().catch(() => ({}));
+          throw new Error(err.message || "Could not admit patient");
+        }
+      }
+
+      return appt;
     },
     onSuccess: async (_, variables) => {
       await queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/admissions/active"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/beds/available"] });
       await queryClient.refetchQueries({ queryKey: ["/api/appointments"] });
       window.dispatchEvent(
         new CustomEvent("ehr-appointments-focus-day", { detail: { ymd: variables.scheduledDate } })
       );
+      const overnightWalkIn =
+        variables.status === "checked_in" && variables.overnightVisit === "yes";
       toast({
         title: variables.status === "checked_in" ? "Walk-in checked in" : "Appointment scheduled",
-        description:
-          variables.status === "checked_in"
+        description: overnightWalkIn
+          ? "The patient appears under Admitted Patients until discharged (not in the day appointment list)."
+          : variables.status === "checked_in"
             ? "The visit appears on today’s Appointments and Schedule as Checked in."
             : "The appointment appears on the Appointments list for the selected day.",
       });
@@ -179,10 +206,11 @@ export function ScheduleNewAppointmentToolbarDialog() {
       clinicianId: form.clinicianId,
       scheduledDate: appointmentDateYmd,
       scheduledTime: form.scheduledTime,
-      duration: form.duration,
+      duration: flow === "walkin" && form.overnightVisit === "yes" ? 30 : form.duration,
       reason: form.reason,
-      notes: form.notes,
       status,
+      overnightVisit: flow === "walkin" ? form.overnightVisit : "no",
+      bedId: flow === "walkin" && form.overnightVisit === "yes" ? form.bedId : undefined,
     });
   };
 
@@ -268,6 +296,43 @@ export function ScheduleNewAppointmentToolbarDialog() {
                   </SelectContent>
                 </Select>
               </div>
+              {flow === "walkin" && (
+                <>
+                  <div className="space-y-2">
+                    <Label>Overnight Visit *</Label>
+                    <Select
+                      value={form.overnightVisit}
+                      onValueChange={(v) =>
+                        setForm((f) => ({
+                          ...f,
+                          overnightVisit: v === "yes" ? "yes" : "no",
+                          bedId: v === "yes" ? f.bedId : "",
+                        }))
+                      }
+                    >
+                      <SelectTrigger data-testid="walkin-overnight-visit">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="no">No</SelectItem>
+                        <SelectItem value="yes">Yes</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {form.overnightVisit === "yes" && (
+                    <div className="space-y-2">
+                      <Label>Assign bed *</Label>
+                      <BedSelect
+                        token={token}
+                        facilityId={user?.facilityId ?? undefined}
+                        value={form.bedId}
+                        onChange={(bedId) => setForm((f) => ({ ...f, bedId }))}
+                        data-testid="walkin-bed-select"
+                      />
+                    </div>
+                  )}
+                </>
+              )}
               {flow === "walkin" ? (
                 <div className="space-y-2">
                   <Label>Date (today)</Label>
@@ -304,6 +369,7 @@ export function ScheduleNewAppointmentToolbarDialog() {
                   data-testid="schedule-appt-input-time"
                 />
               </div>
+            {!(flow === "walkin" && form.overnightVisit === "yes") && (
               <div className="space-y-2">
                 <Label>Duration (minutes)</Label>
                 <Select
@@ -321,8 +387,9 @@ export function ScheduleNewAppointmentToolbarDialog() {
                   </SelectContent>
                 </Select>
               </div>
+            )}
               <div className="space-y-2">
-                <Label>Visit reason</Label>
+                <Label>{APPOINTMENT_REASON_FOR_VISIT_LABEL}</Label>
                 <Select
                   value={visitReasons.some((r) => r.label === form.reason) ? form.reason : undefined}
                   onValueChange={(v) => setForm((f) => ({ ...f, reason: v }))}
@@ -346,23 +413,18 @@ export function ScheduleNewAppointmentToolbarDialog() {
                   rows={2}
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Appointment note</Label>
-                <Textarea
-                  value={form.notes}
-                  onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-                  className="resize-none"
-                  placeholder="Note for schedule / appointments list"
-                  rows={2}
-                />
-              </div>
               <div className="flex flex-wrap gap-2 justify-end pt-2">
                 <Button type="button" variant="secondary" onClick={() => setFlow("choose")}>
                   Back
                 </Button>
                 <Button
                   type="button"
-                  disabled={createMutation.isPending || !selectedPatient?.id || !form.clinicianId}
+                  disabled={
+                    createMutation.isPending ||
+                    !selectedPatient?.id ||
+                    !form.clinicianId ||
+                    (flow === "walkin" && form.overnightVisit === "yes" && !form.bedId)
+                  }
                   onClick={() => submit(flow === "walkin" ? "checked_in" : "scheduled")}
                   data-testid="schedule-appt-submit"
                 >

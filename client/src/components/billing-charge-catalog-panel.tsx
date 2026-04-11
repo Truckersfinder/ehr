@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -355,7 +356,13 @@ export function BillingChargeCatalogPanel({ token }: { token: string | null }) {
         CATEGORY_ORDER.map((cat) => (
           <Card key={cat} data-testid={`charge-section-${cat}`}>
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
-              <CardTitle className="text-base">{CATEGORY_LABELS[cat]}</CardTitle>
+              <CardTitle className="text-base">
+                <SectionTitleWithHint
+                  hint={`Prices for ${CATEGORY_LABELS[cat]}. Use Upload Excel or Add item for this category.`}
+                >
+                  {CATEGORY_LABELS[cat]}
+                </SectionTitleWithHint>
+              </CardTitle>
               <div className="flex flex-wrap items-center gap-2">
                 <CategoryExcelUploadButton category={cat} token={token} onDone={invalidate} />
                 <Button

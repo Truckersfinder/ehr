@@ -1,9 +1,11 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { apiGetJson } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +16,7 @@ import { format } from "date-fns";
 import type { Patient } from "@shared/schema";
 
 export default function PatientsPage() {
+  const { t } = useTranslation();
   const { user, token } = useAuth();
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
@@ -36,15 +39,18 @@ export default function PatientsPage() {
     <div className="p-6 space-y-6 max-w-7xl mx-auto" data-testid="patients-page">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Patients</h1>
-          <p className="text-muted-foreground text-sm mt-1">{patients.length} registered patients</p>
+          <h1 className="text-2xl font-bold tracking-tight">
+            <SectionTitleWithHint hint={t("pages.patients.hint", { count: patients.length })}>
+              {t("pages.patients.title")}
+            </SectionTitleWithHint>
+          </h1>
         </div>
         {user && user.role !== "reception" && (
           <Button data-testid="button-register-patient" asChild>
             <Link href="/patients/register">
               <a className="inline-flex items-center">
                 <Plus className="w-4 h-4 mr-2" />
-                Register New Patient
+                {t("pages.patients.registerNew")}
               </a>
             </Link>
           </Button>

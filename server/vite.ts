@@ -29,7 +29,15 @@ export async function setupVite(server: Server, app: Express) {
     appType: "custom",
   });
 
-  app.use(vite.middlewares);
+  // Do not run Vite's dev middleware for `/api/*` — it can respond with HTML for unknown paths,
+  // which breaks `fetch` + JSON clients (see readApiJsonOrThrow). Unmatched `/api` routes must
+  // fall through to the handler below that returns 404 JSON.
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api")) {
+      return next();
+    }
+    return vite.middlewares(req, res, next);
+  });
 
   app.use("/{*path}", async (req, res, next) => {
     // Never serve SPA HTML for /api — unmatched API routes used to fall through here with 200 + HTML,

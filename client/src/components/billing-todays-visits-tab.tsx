@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Link } from "wouter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,8 +12,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { format } from "date-fns";
+import { useOrgTimeZone } from "@/hooks/use-org-timezone";
+import { formatInOrgTimeZone } from "@/lib/org-timezone";
 import type { Appointment, Encounter, Patient } from "@shared/schema";
+import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
 import { ExternalLink } from "lucide-react";
 
 export type BillingTodaysVisitRow = {
@@ -45,7 +52,53 @@ type Props = {
   error: Error | null;
 };
 
+type BillingSortKey = "time" | "patient" | "reason" | "status" | "encounter" | "total";
+
 export function BillingTodaysVisitsTab({ rows, isLoading, isError, error }: Props) {
+  const { sortKey, sortDir, toggleSort } = useTableSort<BillingSortKey>("time", "asc");
+  const orgTz = useOrgTimeZone();
+
+  const sortedRows = useMemo(() => {
+    const list = [...rows];
+    const mult = sortDir === "asc" ? 1 : -1;
+    list.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "time":
+          cmp =
+            new Date(a.appointment.scheduledDate).getTime() -
+            new Date(b.appointment.scheduledDate).getTime();
+          break;
+        case "patient":
+          cmp = `${a.patient.firstName} ${a.patient.lastName}`.localeCompare(
+            `${b.patient.firstName} ${b.patient.lastName}`,
+          );
+          break;
+        case "reason":
+          cmp = (a.appointment.reason ?? "").localeCompare(b.appointment.reason ?? "");
+          break;
+        case "status":
+          cmp = a.appointment.status.localeCompare(b.appointment.status);
+          break;
+        case "encounter": {
+          const sa = a.encounter ? String(a.encounter.status ?? "") : "";
+          const sb = b.encounter ? String(b.encounter.status ?? "") : "";
+          const na = a.encounter ? 0 : 1;
+          const nb = b.encounter ? 0 : 1;
+          cmp = na !== nb ? na - nb : sa.localeCompare(sb);
+          break;
+        }
+        case "total":
+          cmp = Number(a.visitChargeTotal) - Number(b.visitChargeTotal);
+          break;
+        default:
+          cmp = 0;
+      }
+      return cmp * mult;
+    });
+    return list;
+  }, [rows, sortKey, sortDir]);
+
   if (isError) {
     return (
       <p className="text-sm text-destructive" role="alert">
@@ -75,29 +128,67 @@ export function BillingTodaysVisitsTab({ rows, isLoading, isError, error }: Prop
 
   return (
     <div className="space-y-4" data-testid="billing-todays-visits-list">
-      <p className="text-sm text-muted-foreground">
-        All appointments for the selected day. Totals update when the visit has a started encounter. Refreshes about
-        every 20 seconds while this tab is open.
-      </p>
+      <h3 className="text-sm font-semibold">
+        <SectionTitleWithHint hint="All appointments for the selected day. Totals update when the visit has a started encounter. Refreshes about every 20 seconds while this tab is open.">
+          Today&apos;s visits
+        </SectionTitleWithHint>
+      </h3>
       <div className="rounded-md border overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Time</TableHead>
-              <TableHead>Patient</TableHead>
-              <TableHead>Reason for visit</TableHead>
-              <TableHead>Visit status</TableHead>
-              <TableHead>Encounter</TableHead>
-              <TableHead className="text-right">Visit total</TableHead>
+              <SortableTableHead
+                active={sortKey === "time"}
+                sortDir={sortDir}
+                onSort={() => toggleSort("time")}
+              >
+                Time
+              </SortableTableHead>
+              <SortableTableHead
+                active={sortKey === "patient"}
+                sortDir={sortDir}
+                onSort={() => toggleSort("patient")}
+              >
+                Patient
+              </SortableTableHead>
+              <SortableTableHead
+                active={sortKey === "reason"}
+                sortDir={sortDir}
+                onSort={() => toggleSort("reason")}
+              >
+                {APPOINTMENT_REASON_FOR_VISIT_LABEL}
+              </SortableTableHead>
+              <SortableTableHead
+                active={sortKey === "status"}
+                sortDir={sortDir}
+                onSort={() => toggleSort("status")}
+              >
+                Visit status
+              </SortableTableHead>
+              <SortableTableHead
+                active={sortKey === "encounter"}
+                sortDir={sortDir}
+                onSort={() => toggleSort("encounter")}
+              >
+                Encounter
+              </SortableTableHead>
+              <SortableTableHead
+                align="right"
+                active={sortKey === "total"}
+                sortDir={sortDir}
+                onSort={() => toggleSort("total")}
+              >
+                Visit total
+              </SortableTableHead>
               <TableHead className="w-[1%]" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map(({ appointment, patient, encounter, visitChargeTotal, billingCurrency }) => (
+            {sortedRows.map(({ appointment, patient, encounter, visitChargeTotal, billingCurrency }) => (
               <TableRow key={appointment.id} data-testid={`billing-todays-visit-${appointment.id}`}>
                 <TableCell className="text-sm whitespace-nowrap tabular-nums">
                   {appointment.scheduledDate
-                    ? format(new Date(appointment.scheduledDate), "h:mm a")
+                    ? formatInOrgTimeZone(appointment.scheduledDate, "h:mm a", orgTz)
                     : "—"}
                 </TableCell>
                 <TableCell>

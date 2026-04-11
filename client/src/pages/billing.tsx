@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,12 +22,19 @@ import { BillingTodaysVisitsTab, type BillingTodaysVisitRow } from "@/components
 import { format, parse, startOfDay, endOfDay } from "date-fns";
 import type { Invoice, Patient } from "@shared/schema";
 import { useLocation } from "wouter";
+import {
+  SidebarTabsNavLayout,
+  SIDEBAR_TABS_LIST_CLASS,
+  SIDEBAR_TABS_TRIGGER_CLASS,
+} from "@/components/sidebar-tabs-nav";
+import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 
 function canManageChargeCatalog(role: string | undefined) {
-  return role === "super_admin" || role === "facility_admin" || role === "finance";
+  return role === "super_admin";
 }
 
 export default function BillingPage() {
+  const { t } = useTranslation();
   const { toast } = useToast();
   const { user, token } = useAuth();
   const [location, setLocation] = useLocation();
@@ -246,8 +254,11 @@ export default function BillingPage() {
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto" data-testid="billing-page">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Billing</h1>
-        <p className="text-muted-foreground text-sm mt-1">{pending.length} pending invoices</p>
+        <h1 className="text-2xl font-bold tracking-tight">
+          <SectionTitleWithHint hint={t("pages.billing.titleHint", { count: pending.length })}>
+            {t("pages.billing.title")}
+          </SectionTitleWithHint>
+        </h1>
       </div>
 
       {canViewRevenue ? (
@@ -305,28 +316,31 @@ export default function BillingPage() {
           }
         }}
       >
-        <TabsList>
-          <TabsTrigger value="todays-visit" data-testid="tab-todays-visit">
-            <CalendarDays className="w-3.5 h-3.5 mr-1.5" />
-            Today&apos;s visit ({todaysVisits.length})
-          </TabsTrigger>
-          <TabsTrigger value="pending" data-testid="tab-pending">
-            <Clock className="w-3.5 h-3.5 mr-1.5" />
-            Pending Payment ({pending.length})
-          </TabsTrigger>
-          <TabsTrigger value="paid" data-testid="tab-paid">
-            <CircleCheck className="w-3.5 h-3.5 mr-1.5" />
-            Paid ({paid.length})
-          </TabsTrigger>
-          {showPricingTab ? (
-            <TabsTrigger value="pricing" data-testid="tab-pricing">
-              <Tags className="w-3.5 h-3.5 mr-1.5" />
-              Pricing
-            </TabsTrigger>
-          ) : null}
-        </TabsList>
-
-        <TabsContent value="todays-visit" className="space-y-4 mt-4">
+        <SidebarTabsNavLayout
+          sidebar={
+            <TabsList className={SIDEBAR_TABS_LIST_CLASS}>
+              <TabsTrigger value="todays-visit" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-todays-visit">
+                <CalendarDays className="w-3.5 h-3.5 shrink-0" />
+                Today&apos;s visit ({todaysVisits.length})
+              </TabsTrigger>
+              <TabsTrigger value="pending" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-pending">
+                <Clock className="w-3.5 h-3.5 shrink-0" />
+                Pending Payment ({pending.length})
+              </TabsTrigger>
+              <TabsTrigger value="paid" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-paid">
+                <CircleCheck className="w-3.5 h-3.5 shrink-0" />
+                Paid ({paid.length})
+              </TabsTrigger>
+              {showPricingTab ? (
+                <TabsTrigger value="pricing" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-pricing">
+                  <Tags className="w-3.5 h-3.5 shrink-0" />
+                  Pricing
+                </TabsTrigger>
+              ) : null}
+            </TabsList>
+          }
+        >
+        <TabsContent value="todays-visit" className="mt-0 space-y-4 focus-visible:outline-none">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium">Visits for {visitsDayLabel}</p>
@@ -380,7 +394,7 @@ export default function BillingPage() {
           />
         </TabsContent>
 
-        <TabsContent value="pending" className="space-y-4 mt-4">
+        <TabsContent value="pending" className="mt-0 space-y-4 focus-visible:outline-none">
           {isLoading ? (
             Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-32" />)
           ) : pending.length === 0 ? (
@@ -388,17 +402,18 @@ export default function BillingPage() {
           ) : pending.map((inv) => renderInvoice(inv, true))}
         </TabsContent>
 
-        <TabsContent value="paid" className="space-y-4 mt-4">
+        <TabsContent value="paid" className="mt-0 space-y-4 focus-visible:outline-none">
           {paid.length === 0 ? (
             <Card><CardContent className="py-12 text-center text-muted-foreground">No paid invoices yet</CardContent></Card>
           ) : paid.map((inv) => renderInvoice(inv))}
         </TabsContent>
 
         {showPricingTab ? (
-          <TabsContent value="pricing" className="space-y-4 mt-4">
+          <TabsContent value="pricing" className="mt-0 space-y-4 focus-visible:outline-none">
             <BillingChargeCatalogPanel token={token} />
           </TabsContent>
         ) : null}
+        </SidebarTabsNavLayout>
       </Tabs>
 
       <Dialog open={!!payOpen} onOpenChange={() => setPayOpen(null)}>

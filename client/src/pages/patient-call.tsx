@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardHeader } from "@/components/ui/card";
+import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { PatientSearchCombobox } from "@/components/patient-search-combobox";
 import type { Patient } from "@shared/schema";
 
@@ -13,15 +14,18 @@ export default function PatientCallPage() {
   return (
     <div className="p-4 md:p-6 w-full max-w-6xl mx-auto space-y-4" data-testid="patient-call-page">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Patient Call</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Search by patient name or MRN, then open the patient workspace to document calls in Review.
-        </p>
+        <h1 className="text-2xl font-bold tracking-tight">
+          <SectionTitleWithHint hint="Search by patient name or MRN, then open the patient workspace to document calls in Review.">
+            Patient Call
+          </SectionTitleWithHint>
+        </h1>
       </div>
 
       <Card>
         <CardHeader className="space-y-2">
-          <p className="font-medium">Find patient</p>
+          <p className="font-medium">
+            <SectionTitleWithHint hint="Search below, then select a patient to open their chart workspace.">Find patient</SectionTitleWithHint>
+          </p>
           <PatientSearchCombobox
             token={token ?? null}
             value={selectedPatient}
@@ -34,11 +38,6 @@ export default function PatientCallPage() {
             triggerTestId="patient-call-patient-search"
           />
         </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Select a patient to open their chart workspace.
-          </p>
-        </CardContent>
       </Card>
     </div>
   );

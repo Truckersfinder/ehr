@@ -3,8 +3,13 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  ArrowLeft, User, Phone, Mail, MapPin, Heart, AlertTriangle,
+  ArrowLeft, X, User, Phone, Mail, MapPin, Heart, AlertTriangle,
   Stethoscope, CalendarDays, Activity, FilePenLine, CreditCard,
   Thermometer, Wind, Droplets, Ruler, Weight,
 } from "lucide-react";
@@ -41,6 +46,15 @@ function readScheduleEncounterSession(patientId: string): { encounterId: string;
     encounterId,
     appointmentId: sessionStorage.getItem("ehr_schedule_appointment_id"),
   };
+}
+
+function readAdmissionEncounterSession(patientId: string): { encounterId: string; admissionId: string } | null {
+  if (typeof window === "undefined") return null;
+  const encounterId = sessionStorage.getItem("ehr_active_encounter_id");
+  const storedPatientId = sessionStorage.getItem("ehr_active_encounter_patient_id");
+  const admissionId = sessionStorage.getItem("ehr_active_admission_id");
+  if (!encounterId || storedPatientId !== patientId || !admissionId) return null;
+  return { encounterId, admissionId };
 }
 
 function ProfilePhotoAvatar({
@@ -81,6 +95,13 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
   const { token, user } = useAuth();
   const chartBackPath = user?.role === "reception" ? "/appointments" : "/schedule";
   const [scheduleEncounter, setScheduleEncounter] = useState(() => readScheduleEncounterSession(patientId));
+  const [admissionEncounter, setAdmissionEncounter] = useState(() => readAdmissionEncounterSession(patientId));
+  const [dischargeOpen, setDischargeOpen] = useState(false);
+  const [dischargeReason, setDischargeReason] = useState("");
+  const [dischargeNotes, setDischargeNotes] = useState("");
+  const [causeOfDeath, setCauseOfDeath] = useState("");
+  const [dateOfDeath, setDateOfDeath] = useState("");
+  const [timeOfDeath, setTimeOfDeath] = useState("");
   const galleryPhotoInputRef = useRef<HTMLInputElement>(null);
   const cameraPhotoInputRef = useRef<HTMLInputElement>(null);
 
@@ -111,6 +132,7 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
 
   const refreshEncounterSession = useCallback(() => {
     setScheduleEncounter(readScheduleEncounterSession(patientId));
+    setAdmissionEncounter(readAdmissionEncounterSession(patientId));
   }, [patientId]);
 
   useEffect(() => {
@@ -158,6 +180,79 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
       toast({ title: "Error", description: message, variant: "destructive" });
     }
   };
+
+  const { data: activeAdmission } = useQuery<{ id: string; bedId: string; appointmentId?: string | null } | null>({
+    queryKey: ["/api/patients", patientId, "admission"],
+    queryFn: async () => {
+      const res = await fetch(`/api/patients/${patientId}/admission`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!patientId && !!token,
+  });
+
+  const isClinicianOrNurse = user?.role === "clinician" || user?.role === "nurse";
+  const inAdmissionWorkflow =
+    isClinicianOrNurse &&
+    !!activeAdmission?.id &&
+    (admissionEncounter?.admissionId === activeAdmission.id ||
+      (!!scheduleEncounter?.appointmentId && activeAdmission.appointmentId === scheduleEncounter.appointmentId));
+
+  const dischargeMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeAdmission?.id) throw new Error("No active admission found");
+      if (!dischargeReason.trim()) throw new Error("Select a discharge reason");
+      if (dischargeReason.trim() === "deceased") {
+        if (!causeOfDeath.trim()) throw new Error("Cause of death is required");
+        if (!dateOfDeath.trim()) throw new Error("Date of death is required");
+        if (!timeOfDeath.trim()) throw new Error("Time of death is required");
+      }
+      const timeOfDeathIso =
+        dischargeReason.trim() === "deceased"
+          ? new Date(`${dateOfDeath.trim()}T${timeOfDeath.trim()}`).toISOString()
+          : null;
+      const res = await fetch(`/api/admissions/${activeAdmission.id}/discharge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          dischargeReason: dischargeReason.trim(),
+          dischargeNotes: dischargeNotes.trim() || null,
+          causeOfDeath: dischargeReason.trim() === "deceased" ? causeOfDeath.trim() : null,
+          timeOfDeath: timeOfDeathIso,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || "Could not discharge patient");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Patient discharged" });
+      setDischargeOpen(false);
+      setDischargeReason("");
+      setDischargeNotes("");
+      setCauseOfDeath("");
+      setDateOfDeath("");
+      setTimeOfDeath("");
+      queryClient.invalidateQueries({ queryKey: ["/api/admissions/active"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admissions/recent"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/patients", patientId, "admission"] });
+      // Clear schedule encounter session if present.
+      sessionStorage.removeItem("ehr_active_encounter_id");
+      sessionStorage.removeItem("ehr_active_encounter_patient_id");
+      sessionStorage.removeItem("ehr_schedule_appointment_id");
+      sessionStorage.removeItem("ehr_active_admission_id");
+      clearClinicianVisitDocumentationSession();
+      window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
+      if (onRequestLeave) {
+        onRequestLeave(chartBackPath);
+      } else {
+        navigate(chartBackPath);
+      }
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
 
   const { data: patient, isLoading } = useQuery<Patient>({
     queryKey: ["/api/patients", patientId],
@@ -232,14 +327,16 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
     return (
       <div className="w-[clamp(12rem,calc(var(--sidebar-width,16rem)*0.5),18rem)] flex-shrink-0 border-r bg-muted/30 flex flex-col overflow-y-auto">
         <div className="p-4 space-y-4">
-          <div className="grid grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-start gap-0 min-w-0">
+            <div className="grid grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-start gap-0 min-w-0">
             <Skeleton className="h-9 w-9 rounded-md shrink-0" />
             <div className="flex flex-col items-center gap-2 pt-0.5 min-w-0">
               <Skeleton className="h-5 w-40 max-w-full" />
               <Skeleton className="h-3 w-24" />
               <Skeleton className="h-14 w-14 rounded-lg" />
             </div>
-            <div aria-hidden className="min-w-0" />
+            <div className="flex justify-end shrink-0">
+              <Skeleton className="h-9 w-9 rounded-md" />
+            </div>
           </div>
           <Skeleton className="h-48 w-full" />
           <Skeleton className="h-20 w-full" />
@@ -334,22 +431,50 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
                 />
               )}
             </div>
-            <div aria-hidden className="min-w-0" />
+            <div className="flex justify-end shrink-0">
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={() => (onRequestLeave ? onRequestLeave(chartBackPath) : navigate(chartBackPath))}
+                title="Close patient workspace"
+                aria-label="Close patient workspace"
+                data-testid="button-close-storyboard"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
           {scheduleEncounter && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="w-full justify-center gap-2 font-medium border-green-600/70 text-green-800 bg-green-50 hover:bg-green-100 hover:text-green-900 dark:border-green-600 dark:text-green-100 dark:bg-green-950/50 dark:hover:bg-green-900/40 shadow-sm"
-              aria-label="Sign visit and complete encounter"
-              title="Complete this visit and return to scheduling"
-              data-testid="button-close-encounter"
-              onClick={closeScheduleEncounter}
-            >
-              <FilePenLine className="h-4 w-4 shrink-0" />
-              Sign visit
-            </Button>
+            inAdmissionWorkflow ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full justify-center gap-2 font-medium border-amber-600/70 text-amber-900 bg-amber-50 hover:bg-amber-100 hover:text-amber-900 dark:border-amber-600 dark:text-amber-100 dark:bg-amber-950/50 dark:hover:bg-amber-900/40 shadow-sm"
+                aria-label="Discharge patient"
+                title="Discharge this admitted patient"
+                data-testid="button-discharge-patient"
+                onClick={() => setDischargeOpen(true)}
+              >
+                <FilePenLine className="h-4 w-4 shrink-0" />
+                Discharge Patient
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="w-full justify-center gap-2 font-medium border-green-600/70 text-green-800 bg-green-50 hover:bg-green-100 hover:text-green-900 dark:border-green-600 dark:text-green-100 dark:bg-green-950/50 dark:hover:bg-green-900/40 shadow-sm"
+                aria-label="Sign visit and complete encounter"
+                title="Complete this visit and return to scheduling"
+                data-testid="button-close-encounter"
+                onClick={closeScheduleEncounter}
+              >
+                <FilePenLine className="h-4 w-4 shrink-0" />
+                Sign visit
+              </Button>
+            )
           )}
         </div>
 
@@ -563,6 +688,93 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
         </div>
 
       </div>
+
+      <Dialog
+        open={dischargeOpen}
+        onOpenChange={(open: boolean) => {
+          setDischargeOpen(open);
+          if (!open) {
+            setDischargeReason("");
+            setDischargeNotes("");
+            setCauseOfDeath("");
+            setDateOfDeath("");
+            setTimeOfDeath("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discharge patient</DialogTitle>
+            <DialogDescription>Document why the patient is being discharged. This will free the assigned bed.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Discharge reason *</Label>
+              <Select value={dischargeReason || undefined} onValueChange={setDischargeReason}>
+                <SelectTrigger><SelectValue placeholder="Select reason" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="improved">Improved / stable</SelectItem>
+                  <SelectItem value="transferred">Transferred</SelectItem>
+                  <SelectItem value="left_against_medical_advice">Left against medical advice</SelectItem>
+                  <SelectItem value="referred">Referred</SelectItem>
+                  <SelectItem value="deceased">Deceased</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Additional notes</Label>
+              <Textarea
+                value={dischargeNotes}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setDischargeNotes(e.target.value)}
+                rows={3}
+                className="resize-none"
+                placeholder="Optional details…"
+              />
+            </div>
+            {dischargeReason === "deceased" ? (
+              <div className="space-y-3 rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                <div className="space-y-2">
+                  <Label>Cause of Death *</Label>
+                  <Input value={causeOfDeath} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCauseOfDeath(e.target.value)} placeholder="e.g. Sepsis" />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <Label>Date of Death *</Label>
+                    <Input
+                      type="date"
+                      value={dateOfDeath}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDateOfDeath(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Time of Death *</Label>
+                    <Input
+                      type="time"
+                      value={timeOfDeath}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTimeOfDeath(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="secondary" onClick={() => setDischargeOpen(false)}>Cancel</Button>
+            <Button
+              type="button"
+              onClick={() => dischargeMutation.mutate()}
+              disabled={
+                !dischargeReason.trim() ||
+                dischargeMutation.isPending ||
+                (dischargeReason === "deceased" && (!causeOfDeath.trim() || !dateOfDeath.trim() || !timeOfDeath.trim()))
+              }
+            >
+              {dischargeMutation.isPending ? "Discharging…" : "Discharge"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

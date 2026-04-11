@@ -10,6 +10,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  SidebarTabsNavLayout,
+  SIDEBAR_TABS_LIST_CLASS,
+  SIDEBAR_TABS_TRIGGER_CLASS,
+} from "@/components/sidebar-tabs-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -195,12 +200,19 @@ export default function EncounterDetailPage() {
       )}
 
       <Tabs defaultValue="soap">
-        <TabsList>
-          <TabsTrigger value="soap" data-testid="tab-soap">SOAP Notes</TabsTrigger>
-          <TabsTrigger value="vitals" data-testid="tab-vitals">Vitals</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="soap" className="space-y-4 mt-4">
+        <SidebarTabsNavLayout
+          sidebar={
+            <TabsList className={SIDEBAR_TABS_LIST_CLASS}>
+              <TabsTrigger value="soap" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-soap">
+                SOAP Notes
+              </TabsTrigger>
+              <TabsTrigger value="vitals" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-vitals">
+                Vitals
+              </TabsTrigger>
+            </TabsList>
+          }
+        >
+        <TabsContent value="soap" className="mt-0 space-y-4 focus-visible:outline-none">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Card>
               <CardHeader className="pb-2"><h4 className="text-sm font-medium">Subjective</h4></CardHeader>
@@ -270,7 +282,7 @@ export default function EncounterDetailPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="vitals" className="space-y-4 mt-4">
+        <TabsContent value="vitals" className="mt-0 space-y-4 focus-visible:outline-none">
           {latestVitals && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
@@ -341,6 +353,7 @@ export default function EncounterDetailPage() {
             </Card>
           )}
         </TabsContent>
+        </SidebarTabsNavLayout>
       </Tabs>
     </div>
   );

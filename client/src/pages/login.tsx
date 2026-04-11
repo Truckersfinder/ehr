@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,8 +9,11 @@ import { useToast } from "@/hooks/use-toast";
 import { Heart, Lock, User, Shield } from "lucide-react";
 import { MutedIconBox } from "@/components/muted-icon-box";
 import { useLocation } from "wouter";
+import { LanguageSwitcher } from "@/components/language-switcher";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export default function LoginPage() {
+  const { t } = useTranslation();
   const { login } = useAuth();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
@@ -27,14 +31,13 @@ export default function LoginPage() {
       } else if (loggedInUser.role === "reception") {
         setLocation("/appointments");
       } else if (loggedInUser.role === "security") {
-        setLocation("/admin");
+        setLocation("/systems-dashboard");
       } else {
-        // Dashboard at "/" (LandingByRole) for super_admin, facility_admin, lab_tech, pharmacist, finance, etc.
         setLocation("/");
       }
-      toast({ title: "Welcome back", description: "You have been logged in successfully." });
+      toast({ title: t("auth.welcomeBack"), description: t("auth.loggedInSuccess") });
     } catch (error: any) {
-      toast({ title: "Login failed", description: error.message, variant: "destructive" });
+      toast({ title: t("auth.loginFailed"), description: error.message, variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -42,6 +45,10 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen relative flex items-center justify-center px-6 py-10" data-testid="login-page">
+      <div className="absolute top-3 right-3 z-10 flex items-center gap-1 sm:gap-2">
+        <LanguageSwitcher />
+        <ThemeToggle />
+      </div>
       <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-background to-primary/10" />
       <div className="absolute -top-24 -left-24 h-72 w-72 rounded-full bg-primary/20 blur-3xl" />
       <div className="absolute -bottom-24 -right-24 h-72 w-72 rounded-full bg-primary/15 blur-3xl" />
@@ -51,25 +58,25 @@ export default function LoginPage() {
           <MutedIconBox icon={Heart} size="lg" className="shadow-sm" />
           <div className="text-center">
             <h1 className="text-2xl font-bold tracking-tight leading-tight">Pin Point Health</h1>
-            <p className="text-muted-foreground text-sm">Electronic Health Records</p>
+            <p className="text-muted-foreground text-sm">{t("auth.brandSubtitle")}</p>
           </div>
         </div>
 
         <Card className="bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/70">
           <CardHeader className="pb-4">
-            <h2 className="text-2xl font-semibold tracking-tight">Sign in</h2>
-            <p className="text-muted-foreground text-sm">Enter your credentials to access the system</p>
+            <h2 className="text-2xl font-semibold tracking-tight">{t("auth.signIn")}</h2>
+            <p className="text-muted-foreground text-sm">{t("auth.signInDescription")}</p>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="username">Username</Label>
+                <Label htmlFor="username">{t("auth.username")}</Label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     id="username"
                     data-testid="input-username"
-                    placeholder="Enter your username"
+                    placeholder={t("auth.usernamePlaceholder")}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="pl-10"
@@ -78,14 +85,14 @@ export default function LoginPage() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
+                <Label htmlFor="password">{t("auth.password")}</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     id="password"
                     data-testid="input-password"
                     type="password"
-                    placeholder="Enter your password"
+                    placeholder={t("auth.passwordPlaceholder")}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-10"
@@ -93,17 +100,16 @@ export default function LoginPage() {
                   />
                 </div>
               </div>
-              <Button
-                type="submit"
-                data-testid="button-login"
-                className="w-full"
-                disabled={isLoading}
-              >
-                {isLoading ? "Signing in..." : "Sign In"}
+              <Button type="submit" data-testid="button-login" className="w-full" disabled={isLoading}>
+                {isLoading ? t("auth.signingIn") : t("auth.signInButton")}
               </Button>
             </form>
 
             <div className="mt-6 pt-6 border-t">
+              <p className="text-xs text-muted-foreground mb-2">
+                Open the app at <span className="font-mono text-foreground">http://127.0.0.1:3000</span> after running{" "}
+                <span className="font-mono text-foreground">npm run dev</span> so sign-in can reach the API.
+              </p>
               <p className="text-xs text-muted-foreground mb-3">Demo accounts:</p>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="p-2 rounded-md bg-accent/50">
