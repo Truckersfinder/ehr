@@ -1,9 +1,25 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, boolean, timestamp, date, decimal, jsonb, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  varchar,
+  integer,
+  boolean,
+  timestamp,
+  date,
+  decimal,
+  jsonb,
+  pgEnum,
+  uniqueIndex,
+  primaryKey,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-/** Canonical role ids (DB enum + Zod). Facility Admin, Pharmacist, and Finance were removed — use Clinic Administrator / super_admin for those duties. */
+/**
+ * Canonical role ids (DB enum + Zod). Facility Admin and Finance were removed — use Clinic Administrator / super_admin for those duties.
+ * `pharmacist` is kept for legacy DB rows / enum compatibility; prefer clinician or super_admin for new users.
+ */
 export const USER_ROLE_VALUES = [
   "super_admin",
   "clinician",
@@ -11,6 +27,7 @@ export const USER_ROLE_VALUES = [
   "lab_tech",
   "reception",
   "security",
+  "pharmacist",
 ] as const;
 
 export const userRoleEnum = pgEnum("user_role", USER_ROLE_VALUES);
@@ -45,6 +62,8 @@ export const facilities = pgTable("facilities", {
   patientIdentifierLabel: text("patient_identifier_label").notNull().default("MRN"),
   /** Organization / facility logo URL (e.g. /uploads/org-….png). */
   logoUrl: text("logo_url"),
+  /** Patient portal visibility & copy (JSON). See shared/patient-portal-config.ts */
+  patientPortalConfig: jsonb("patient_portal_config"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -83,8 +102,17 @@ export const patients = pgTable("patients", {
   billingGuarantorRelation: text("billing_guarantor_relation"),
   billingNotes: text("billing_notes"),
   isActive: boolean("is_active").notNull().default(true),
+  /** Patient-facing portal: staff opt-in; invitation email + optional dedicated portal email. */
+  portalEnabled: boolean("portal_enabled").notNull().default(false),
+  portalAccessEmail: text("portal_access_email"),
+  /** One-time setup link token (cleared after PIN is set). Unique when present. */
+  portalInviteToken: text("portal_invite_token"),
+  portalPinHash: text("portal_pin_hash"),
+  portalInviteSentAt: timestamp("portal_invite_sent_at"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+}, (t) => ({
+  portalInviteTokenUnique: uniqueIndex("patients_portal_invite_token_uidx").on(t.portalInviteToken),
+}));
 
 export const patientProblems = pgTable("patient_problems", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -496,6 +524,63 @@ export const auditLogs = pgTable("audit_logs", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+/**
+ * Managed via raw SQL in `storage.ts` (`ensureUiSchema`); also declared here so `drizzle-kit push`
+ * does not treat these as orphan tables and offer to drop them.
+ */
+export const roleCapabilityOverrides = pgTable(
+  "role_capability_overrides",
+  {
+    role: text("role").notNull(),
+    capabilityId: varchar("capability_id", { length: 128 }).notNull(),
+    allowed: boolean("allowed").notNull().default(true),
+  },
+  (t) => ({
+    pk: primaryKey({ name: "role_capability_overrides_pkey", columns: [t.role, t.capabilityId] }),
+  }),
+);
+
+export const uiTableColumnOverrides = pgTable(
+  "ui_table_column_overrides",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    role: text("role").notNull(),
+    tableKey: varchar("table_key", { length: 128 }).notNull(),
+    columnId: varchar("column_id", { length: 128 }).notNull(),
+    hidden: boolean("hidden").notNull().default(false),
+    label: text("label"),
+    sortOrder: integer("sort_order"),
+  },
+  (t) => ({
+    roleTableColumnUnq: uniqueIndex("ui_table_column_overrides_role_table_key_column_id_key").on(
+      t.role,
+      t.tableKey,
+      t.columnId,
+    ),
+  }),
+);
+
+export const uiActivityLayout = pgTable(
+  "ui_activity_layout",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    role: text("role").notNull(),
+    context: varchar("context", { length: 64 }).notNull(),
+    activityId: varchar("activity_id", { length: 128 }).notNull(),
+    labelOverride: text("label_override"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    hidden: boolean("hidden").notNull().default(false),
+    readOnly: boolean("read_only").notNull().default(false),
+  },
+  (t) => ({
+    roleContextActivityUnq: uniqueIndex("ui_activity_layout_role_context_activity_id_key").on(
+      t.role,
+      t.context,
+      t.activityId,
+    ),
+  }),
+);
+
 /** Whether a clinical template is a general form or a consent document (systems admin chooses at creation). */
 export const clinicalFormTemplateKinds = ["form", "consent"] as const;
 export type ClinicalFormTemplateKind = (typeof clinicalFormTemplateKinds)[number];
@@ -559,6 +644,92 @@ export const clinicalFormPatientCompletions = pgTable("clinical_form_patient_com
   completedByUserId: varchar("completed_by_user_id"),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+/** External REST integrations: API keys, webhooks, idempotency, and third-party ID mapping. */
+export const integrationApiKeys = pgTable("integration_api_keys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  secretHash: text("secret_hash").notNull(),
+  scopes: jsonb("scopes").notNull().$type<string[]>(),
+  facilityId: varchar("facility_id"),
+  createdByUserId: varchar("created_by_user_id").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  expiresAt: timestamp("expires_at"),
+  lastUsedAt: timestamp("last_used_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const integrationWebhookSubscriptions = pgTable("integration_webhook_subscriptions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  integrationApiKeyId: varchar("integration_api_key_id")
+    .notNull()
+    .references(() => integrationApiKeys.id, { onDelete: "cascade" }),
+  url: text("url").notNull(),
+  /** Optional HMAC secret (server-generated if omitted at create). */
+  secret: text("secret").notNull(),
+  eventTypes: jsonb("event_types").notNull().$type<string[]>(),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const integrationWebhookDeliveries = pgTable(
+  "integration_webhook_deliveries",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    subscriptionId: varchar("subscription_id")
+      .notNull()
+      .references(() => integrationWebhookSubscriptions.id, { onDelete: "cascade" }),
+    eventType: varchar("event_type", { length: 120 }).notNull(),
+    payload: jsonb("payload").notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at").notNull().defaultNow(),
+    lastAttemptAt: timestamp("last_attempt_at"),
+    lastError: text("last_error"),
+    lastStatusCode: integer("last_status_code"),
+    createdAt: timestamp("created_at").defaultNow(),
+    deliveredAt: timestamp("delivered_at"),
+  },
+);
+
+export const integrationExternalMappings = pgTable(
+  "integration_external_mappings",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    resourceType: varchar("resource_type", { length: 64 }).notNull(),
+    internalId: varchar("internal_id").notNull(),
+    externalSystem: varchar("external_system", { length: 128 }).notNull(),
+    externalId: varchar("external_id", { length: 512 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("integration_extmap_system_type_extid").on(
+      t.externalSystem,
+      t.resourceType,
+      t.externalId,
+    ),
+  }),
+);
+
+export const integrationIdempotencyKeys = pgTable(
+  "integration_idempotency_keys",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    integrationApiKeyId: varchar("integration_api_key_id").notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 256 }).notNull(),
+    requestFingerprint: varchar("request_fingerprint", { length: 128 }).notNull(),
+    responseStatus: integer("response_status").notNull(),
+    responseBody: jsonb("response_body"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("integration_idem_key_per_apikey").on(t.integrationApiKeyId, t.idempotencyKey),
+  }),
+);
+
+export type IntegrationApiKey = typeof integrationApiKeys.$inferSelect;
+export type IntegrationWebhookSubscription = typeof integrationWebhookSubscriptions.$inferSelect;
+export type IntegrationWebhookDelivery = typeof integrationWebhookDeliveries.$inferSelect;
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export const insertFacilitySchema = createInsertSchema(facilities).omit({ id: true, createdAt: true });
@@ -726,6 +897,16 @@ export const patchOrganizationSettingsBodySchema = z.object({
   country: z.string().min(2).max(2).optional(),
   timeZone: z.string().min(1).max(120).optional(),
   logoUrl: z.union([z.string().max(500), z.literal(""), z.null()]).optional(),
+  patientPortalConfig: z
+    .object({
+      showOverview: z.boolean().optional(),
+      showVisits: z.boolean().optional(),
+      showProblems: z.boolean().optional(),
+      showMedications: z.boolean().optional(),
+      showAllergies: z.boolean().optional(),
+      welcomeMessage: z.union([z.string().max(2000), z.null()]).optional(),
+    })
+    .optional(),
 });
 
 export const patchRoleCapabilityBodySchema = z.object({
@@ -769,6 +950,14 @@ export const patchUiActivityLayoutBodySchema = z.object({
   sortOrder: z.number().int().min(0).max(9999),
   hidden: z.boolean(),
   readOnly: z.boolean(),
+});
+
+/** Systems admin: create a third-party integration API key (plaintext key returned once). */
+export const createIntegrationApiKeyBodySchema = z.object({
+  name: z.string().min(1).max(200),
+  scopes: z.array(z.string().min(1).max(80)).min(1),
+  facilityId: z.union([z.string().uuid(), z.literal(""), z.null()]).optional(),
+  expiresAt: z.union([z.string().datetime(), z.null()]).optional(),
 });
 
 export type InsertUser = z.infer<typeof insertUserSchema>;

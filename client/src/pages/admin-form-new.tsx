@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation, useSearch } from "wouter";
+import { useTranslation } from "react-i18next";
 import { ArrowLeft, Building2, FileText, Shield, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,6 +32,7 @@ const sidebarLinkClass = cn(
 );
 
 export default function AdminFormNewPage() {
+  const { t } = useTranslation();
   const { user, token, isLoading } = useAuth();
   const [, setLocation] = useLocation();
   const search = useSearch();
@@ -79,13 +81,16 @@ export default function AdminFormNewPage() {
       void queryClient.invalidateQueries({ queryKey: ["/api/audit-logs"] });
       void queryClient.invalidateQueries({ queryKey: ["/api/clinical-form-templates"] });
       toast({
-        title: templateKind === "consent" ? "Consent template created" : "Form template created",
-        description: "The template is saved under Administration → Forms & Consent.",
+        title:
+          templateKind === "consent"
+            ? t("pages.adminFormNew.toastConsentCreated")
+            : t("pages.adminFormNew.toastFormCreated"),
+        description: t("pages.adminFormNew.toastCreatedDesc"),
       });
       setLocation("/admin?tab=forms");
     },
     onError: (e: Error) =>
-      toast({ title: "Could not create template", description: e.message, variant: "destructive" }),
+      toast({ title: t("pages.adminFormNew.toastCouldNotCreateTitle"), description: e.message, variant: "destructive" }),
   });
 
   if (isLoading) {
@@ -105,34 +110,35 @@ export default function AdminFormNewPage() {
     return null;
   }
 
-  const pageTitle = templateKind === "consent" ? "Create consent document" : "Create form";
+  const pageTitle =
+    templateKind === "consent" ? t("pages.adminFormNew.pageTitleConsent") : t("pages.adminFormNew.pageTitleForm");
   const sidebarLabel =
-    templateKind === "consent" ? "Forms & Consent · New consent" : "Forms & Consent · New form";
+    templateKind === "consent" ? t("pages.adminFormNew.sidebarNewConsent") : t("pages.adminFormNew.sidebarNewForm");
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto w-full" data-testid="admin-form-new-page">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Administration</h1>
-        <p className="text-muted-foreground text-sm mt-1">System management and audit logs</p>
+        <h1 className="text-2xl font-bold tracking-tight">{t("pages.adminFormNew.adminTitle")}</h1>
+        <p className="text-muted-foreground text-sm mt-1">{t("pages.adminFormNew.adminSubtitle")}</p>
       </div>
 
       <SidebarTabsNavLayout
         sidebar={
-          <nav className={SIDEBAR_TABS_LIST_CLASS} aria-label="Administration sections">
+          <nav className={SIDEBAR_TABS_LIST_CLASS} aria-label={t("pages.adminFormNew.sidebarAria")}>
             <Link href="/admin?tab=users">
               <a className={sidebarLinkClass}>
-                <Users className="w-3.5 h-3.5 shrink-0" /> Users
+                <Users className="w-3.5 h-3.5 shrink-0" /> {t("pages.adminFormNew.users")}
               </a>
             </Link>
             <Link href="/admin?tab=facilities">
               <a className={sidebarLinkClass}>
-                <Building2 className="w-3.5 h-3.5 shrink-0" /> Facilities
+                <Building2 className="w-3.5 h-3.5 shrink-0" /> {t("pages.adminFormNew.facilities")}
               </a>
             </Link>
             {canManageBeds ? (
               <Link href="/admin?tab=beds">
                 <a className={sidebarLinkClass}>
-                  <Building2 className="w-3.5 h-3.5 shrink-0" /> Bed management
+                  <Building2 className="w-3.5 h-3.5 shrink-0" /> {t("pages.adminFormNew.bedManagement")}
                 </a>
               </Link>
             ) : null}
@@ -147,7 +153,7 @@ export default function AdminFormNewPage() {
             </span>
             <Link href="/admin?tab=audit">
               <a className={sidebarLinkClass}>
-                <Shield className="w-3.5 h-3.5 shrink-0" /> Audit Log
+                <Shield className="w-3.5 h-3.5 shrink-0" /> {t("pages.adminFormNew.auditLog")}
               </a>
             </Link>
           </nav>
@@ -161,7 +167,7 @@ export default function AdminFormNewPage() {
                 variant="ghost"
                 size="icon"
                 className="shrink-0 mt-0.5"
-                aria-label="Back to Forms & Consent list"
+                aria-label={t("pages.adminFormNew.backToFormsAria")}
                 onClick={() => setLocation("/admin?tab=forms")}
               >
                 <ArrowLeft className="h-4 w-4" />
@@ -169,8 +175,7 @@ export default function AdminFormNewPage() {
               <div className="min-w-0">
                 <h2 className="text-lg font-semibold tracking-tight">{pageTitle}</h2>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Add a title, optional description, and any additional fields. Patient MRN, name, and date of birth are
-                  included automatically. For dropdowns, use comma-separated options.
+                  {t("pages.adminFormNew.hint")}
                 </p>
               </div>
             </div>
@@ -187,7 +192,7 @@ export default function AdminFormNewPage() {
             footer={
               <>
                 <Button type="button" variant="secondary" onClick={() => setLocation("/admin?tab=forms")}>
-                  Cancel
+                  {t("pages.adminFormNew.cancel")}
                 </Button>
                 <Button
                   type="button"
@@ -195,7 +200,7 @@ export default function AdminFormNewPage() {
                   disabled={createMutation.isPending}
                   data-testid="button-submit-create-form"
                 >
-                  {createMutation.isPending ? "Saving…" : "Create"}
+                  {createMutation.isPending ? t("pages.adminFormNew.saving") : t("pages.adminFormNew.create")}
                 </Button>
               </>
             }

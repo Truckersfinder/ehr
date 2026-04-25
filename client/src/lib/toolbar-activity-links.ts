@@ -6,10 +6,14 @@ export function toolbarActivityHref(id: string): string {
       return "/systems-dashboard";
     case "tb_administrative":
       return "/admin?section=administrative";
+    case "tb_api":
+      return "/systems-dashboard?tab=api";
     case "tb_application_config":
       return "/admin?section=application_config";
     case "tb_organization_config":
       return "/admin?section=organization";
+    case "tb_patient_portal_config":
+      return "/patient-portal-configuration";
     case "tb_user_management":
       return "/admin?section=users";
     case "tb_role_management":
@@ -45,6 +49,8 @@ export function toolbarActivityTestId(id: string): string {
       return "toolbar-application-configuration";
     case "tb_organization_config":
       return "toolbar-organization-configuration";
+    case "tb_patient_portal_config":
+      return "toolbar-patient-portal-configuration";
     case "tb_user_management":
       return "toolbar-user-management";
     case "tb_role_management":

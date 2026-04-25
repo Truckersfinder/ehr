@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Camera, X } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { Patient, User as UserType } from "@shared/schema";
 import { readApiJsonOrThrow } from "@/lib/api-response";
 import { normalizePatientRow } from "@/lib/patient-photo";
@@ -51,6 +52,8 @@ const emptyForm = () => ({
   billingGuarantorPhone: "",
   billingGuarantorRelation: "",
   billingNotes: "",
+  portalEnabled: false,
+  portalAccessEmail: "",
 });
 
 export default function RegisterPatientPage() {
@@ -236,6 +239,8 @@ export default function RegisterPatientPage() {
         billingGuarantorPhone: data.billingGuarantorPhone || undefined,
         billingGuarantorRelation: data.billingGuarantorRelation || undefined,
         billingNotes: data.billingNotes || undefined,
+        portalEnabled: data.portalEnabled,
+        portalAccessEmail: data.portalAccessEmail.trim() || undefined,
       };
       const res = await fetch("/api/patients", {
         method: "POST",
@@ -262,6 +267,18 @@ export default function RegisterPatientPage() {
       }
       if (!String(formData.state).trim()) {
         toast({ title: "State required", description: "Please select a state / province / region.", variant: "destructive" });
+        return;
+      }
+      if (
+        formData.portalEnabled &&
+        !String(formData.portalAccessEmail).trim() &&
+        !String(formData.email).trim()
+      ) {
+        toast({
+          title: "Portal email required",
+          description: "Enter an email for portal access, or add one under Contact.",
+          variant: "destructive",
+        });
         return;
       }
       const created = await createMutation.mutateAsync(formData);
@@ -581,6 +598,43 @@ export default function RegisterPatientPage() {
                 value={formData.country}
                 onValueChange={(code) => set({ country: code, state: "" })}
                 data-testid="reg-select-country"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Patient portal access</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Patients can view their record online after they receive an email with a secure link and create a PIN.
+            </p>
+            <div className="flex items-start gap-3">
+              <Checkbox
+                id="reg-portal-enabled"
+                checked={formData.portalEnabled}
+                onCheckedChange={(v) => set({ portalEnabled: v === true })}
+                data-testid="reg-portal-enabled"
+              />
+              <div className="space-y-1">
+                <Label htmlFor="reg-portal-enabled" className="font-medium cursor-pointer">
+                  Send patient portal invitation after registration
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Requires an email address (below or in Contact). The hospital name appears as the email sender.
+                </p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Portal email (optional)</Label>
+              <Input
+                type="email"
+                placeholder="Defaults to Contact email if empty"
+                value={formData.portalAccessEmail}
+                onChange={(e) => set({ portalAccessEmail: e.target.value })}
+                data-testid="reg-portal-email"
               />
             </div>
           </CardContent>

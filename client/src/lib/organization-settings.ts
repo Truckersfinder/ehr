@@ -8,7 +8,7 @@ export function useOrganizationSettings() {
     patientIdentifierLabel: o?.patientIdentifierLabel?.trim() || "MRN",
     defaultCountry: o?.defaultCountry?.trim() || "",
     billingCurrency: o?.billingCurrency?.trim() || "KES",
-    organizationName: o?.name?.trim() || "Pin Point Health",
+    organizationName: o?.name?.trim() || "Electronic Health Records",
     logoUrl: o?.logoUrl ?? null,
   };
 }

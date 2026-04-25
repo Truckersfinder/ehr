@@ -24,6 +24,8 @@ const allowlist = [
   "passport",
   "passport-local",
   "pg",
+  "qrcode",
+  "resend",
   "stripe",
   "uuid",
   "ws",

@@ -4,6 +4,7 @@ import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -52,6 +53,8 @@ export type DemographicsDraft = {
   billingGuarantorPhone: string;
   billingGuarantorRelation: string;
   billingNotes: string;
+  portalEnabled: boolean;
+  portalAccessEmail: string;
 };
 
 export function patientToDemographicsDraft(p: Patient): DemographicsDraft {
@@ -86,6 +89,8 @@ export function patientToDemographicsDraft(p: Patient): DemographicsDraft {
     billingGuarantorPhone: p.billingGuarantorPhone ?? "",
     billingGuarantorRelation: p.billingGuarantorRelation ?? "",
     billingNotes: p.billingNotes ?? "",
+    portalEnabled: p.portalEnabled ?? false,
+    portalAccessEmail: p.portalAccessEmail ?? "",
   };
 }
 
@@ -114,6 +119,13 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
   }, [patient]);
 
   const set = (patch: Partial<DemographicsDraft>) => setDraft((d) => ({ ...d, ...patch }));
+
+  /** Same rule as server: portal email wins, else contact email. Shown so staff knows where Resend will deliver. */
+  const portalInviteDestination = useMemo(() => {
+    const p = draft.portalAccessEmail.trim();
+    const c = draft.email.trim();
+    return p || c || "";
+  }, [draft.portalAccessEmail, draft.email]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -153,6 +165,8 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
         billingGuarantorPhone: draft.billingGuarantorPhone.trim() || null,
         billingGuarantorRelation: draft.billingGuarantorRelation.trim() || null,
         billingNotes: draft.billingNotes.trim() || null,
+        portalEnabled: draft.portalEnabled,
+        portalAccessEmail: draft.portalAccessEmail.trim() || null,
       };
       const res = await fetch(`/api/patients/${patientId}`, {
         method: "PATCH",
@@ -178,6 +192,62 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
       toast({ title: "Patient demographics saved" });
     },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  });
+
+  const inviteMutation = useMutation({
+    mutationFn: async (regenerateToken: boolean) => {
+      const resolvedTo = draft.portalAccessEmail.trim() || draft.email.trim();
+      if (!resolvedTo) {
+        throw new Error("Add a contact email or portal email before sending an invitation.");
+      }
+      const portalPatch = {
+        portalEnabled: draft.portalEnabled,
+        portalAccessEmail: draft.portalAccessEmail.trim() || null,
+        /** Ensures the address shown in “Contact email” is saved; invite uses portal OR contact email. */
+        email: draft.email.trim() || null,
+      };
+      const patchRes = await fetch(`/api/patients/${patientId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(portalPatch),
+      });
+      if (!patchRes.ok) {
+        const err = await patchRes.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || "Failed to save portal settings");
+      }
+      const saved = normalizePatientRow(await patchRes.json());
+      queryClient.setQueryData<Patient>(["/api/patients", patientId], (prev) => {
+        const next = { ...saved };
+        if (next.profilePhotoUrl == null && prev?.profilePhotoUrl) {
+          next.profilePhotoUrl = prev.profilePhotoUrl;
+        }
+        return next;
+      });
+
+      const res = await fetch(`/api/patients/${patientId}/portal-invite`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ regenerateToken }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { message?: string }).message || "Failed to send");
+      }
+      return (await res.json()) as { ok?: boolean; sentTo?: string };
+    },
+    onSuccess: (data) => {
+      const to = data?.sentTo;
+      toast({
+        title: "Email queued for delivery",
+        description: [
+          to ? `Recipient: ${to}.` : null,
+          "If it does not arrive within a few minutes, ask the patient to check spam/junk and promotions tabs.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
+    },
+    onError: (e: Error) => toast({ title: "Could not send email", description: e.message, variant: "destructive" }),
   });
 
   const uploadPhotoMutation = useMutation({
@@ -460,6 +530,75 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
             />
           </div>
         </div>
+
+        {patient.isActive ? (
+          <div className="rounded-xl border bg-muted/20 p-4 sm:p-5 space-y-3 shadow-sm">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Patient portal access</p>
+            <p className="text-sm text-muted-foreground">
+              Read-only online access to their record. The patient receives an email from the hospital with a secure link
+              and QR code, then creates a PIN.
+            </p>
+            <div className="flex items-start gap-3">
+              <Checkbox
+                id="demo-portal-enabled"
+                checked={draft.portalEnabled}
+                onCheckedChange={(v) => set({ portalEnabled: v === true })}
+              />
+              <div className="space-y-1">
+                <Label htmlFor="demo-portal-enabled" className="font-medium cursor-pointer">
+                  Enable patient portal for this patient
+                </Label>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Portal email (optional)</Label>
+              <Input
+                type="email"
+                placeholder="Uses Contact email if empty"
+                value={draft.portalAccessEmail}
+                onChange={(e) => set({ portalAccessEmail: e.target.value })}
+              />
+            </div>
+            <p className="text-xs rounded-md border border-border/60 bg-background/80 px-2.5 py-2 text-foreground/90">
+              {portalInviteDestination ? (
+                <>
+                  <span className="font-medium text-foreground">Invitation will be sent to: </span>
+                  <span className="font-mono">{portalInviteDestination}</span>
+                  <span className="text-muted-foreground"> (portal email if set, otherwise contact email)</span>
+                </>
+              ) : (
+                <span className="text-destructive">Add a contact email or portal email — nothing is on file to send to.</span>
+              )}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {patient.portalPinHash
+                ? "Patient has completed portal setup (PIN created)."
+                : patient.portalInviteSentAt
+                  ? "An invitation email was sent previously. Sending again will email the current portal/contact address."
+                  : "Sending an invitation saves portal settings above, then emails the patient a secure link."}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={inviteMutation.isPending || !draft.portalEnabled || !portalInviteDestination}
+                onClick={() => inviteMutation.mutate(false)}
+              >
+                Send invitation
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={inviteMutation.isPending || !draft.portalEnabled || !portalInviteDestination}
+                onClick={() => inviteMutation.mutate(true)}
+              >
+                Resend (new link)
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         <div className="rounded-xl border bg-muted/20 p-4 sm:p-5 space-y-3 shadow-sm">
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Profile photo</p>

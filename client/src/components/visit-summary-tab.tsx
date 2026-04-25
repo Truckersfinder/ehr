@@ -57,18 +57,32 @@ type Props = {
   prescriberNameById: Map<string, string>;
   /** Billing / front desk review: hide edits to patient instructions */
   readOnly?: boolean;
+  /** Full URL for GET visit summary (default: staff API). Patient portal uses `/api/patient-portal/encounters/:id/visit-summary`. */
+  visitSummaryUrl?: string;
+  /** Patient portal: facility time zone when staff session is absent. */
+  orgTimeZone?: string;
 };
 
-export function VisitSummaryTab({ encounterId, authToken, prescriberNameById, readOnly = false }: Props) {
+export function VisitSummaryTab({
+  encounterId,
+  authToken,
+  prescriberNameById,
+  readOnly = false,
+  visitSummaryUrl,
+  orgTimeZone: orgTimeZoneProp,
+}: Props) {
   const { toast } = useToast();
-  const orgTz = useOrgTimeZone();
+  const hookTz = useOrgTimeZone();
+  const orgTz = orgTimeZoneProp ?? hookTz;
   const printRef = useRef<HTMLDivElement>(null);
   const [instructions, setInstructions] = useState("");
 
+  const summaryFetchUrl = visitSummaryUrl ?? `/api/encounters/${encounterId}/visit-summary`;
+
   const { data, isLoading, error } = useQuery<VisitSummaryPayload>({
-    queryKey: ["/api/encounters", encounterId, "visit-summary"],
+    queryKey: ["visit-summary", summaryFetchUrl],
     queryFn: async () => {
-      const res = await fetch(`/api/encounters/${encounterId}/visit-summary`, {
+      const res = await fetch(summaryFetchUrl, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       if (!res.ok) {

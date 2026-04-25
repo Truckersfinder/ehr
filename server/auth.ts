@@ -2,7 +2,10 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import type { Request, Response, NextFunction } from "express";
 
-const JWT_SECRET = process.env.SESSION_SECRET || "onehealthehr-secret-key";
+import { getAppJwtSecret, getPatientPortalJwtSecret } from "./config";
+
+const JWT_SECRET = getAppJwtSecret();
+const PATIENT_PORTAL_JWT_SECRET = getPatientPortalJwtSecret();
 
 export function hashPassword(password: string): string {
   return bcrypt.hashSync(password, 10);
@@ -20,8 +23,41 @@ export function verifyToken(token: string): any {
   return jwt.verify(token, JWT_SECRET);
 }
 
+export const PATIENT_PORTAL_SCOPE = "patient_portal";
+
+export function generatePatientPortalToken(patientId: string): string {
+  return jwt.sign({ patientId, scope: PATIENT_PORTAL_SCOPE }, PATIENT_PORTAL_JWT_SECRET, { expiresIn: "30d" });
+}
+
+export function verifyPatientPortalToken(token: string): { patientId: string } {
+  const d = jwt.verify(token, PATIENT_PORTAL_JWT_SECRET) as { patientId?: string; scope?: string };
+  if (d.scope !== PATIENT_PORTAL_SCOPE || typeof d.patientId !== "string") {
+    throw new Error("Invalid patient portal token");
+  }
+  return { patientId: d.patientId };
+}
+
 export interface AuthRequest extends Request {
   user?: { id: string; username: string; role: string; fullName: string };
+}
+
+export interface PatientPortalAuthRequest extends Request {
+  patientPortalPatientId?: string;
+}
+
+export function patientPortalAuthMiddleware(req: PatientPortalAuthRequest, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Authentication required" });
+  }
+  try {
+    const token = authHeader.split(" ")[1];
+    const { patientId } = verifyPatientPortalToken(token);
+    req.patientPortalPatientId = patientId;
+    next();
+  } catch {
+    return res.status(401).json({ message: "Invalid or expired session" });
+  }
 }
 
 export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction) {

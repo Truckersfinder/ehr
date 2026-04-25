@@ -14,6 +14,8 @@ import {
   Settings2,
   Users,
   ShieldCheck,
+  LayoutGrid,
+  Plug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toolbarActivityHref, toolbarActivityTestId } from "@/lib/toolbar-activity-links";
@@ -26,10 +28,14 @@ function iconFor(id: string) {
       return LayoutDashboard;
     case "tb_administrative":
       return Building2;
+    case "tb_api":
+      return Plug;
     case "tb_application_config":
       return SlidersHorizontal;
     case "tb_organization_config":
       return Settings2;
+    case "tb_patient_portal_config":
+      return LayoutGrid;
     case "tb_user_management":
       return Users;
     case "tb_role_management":

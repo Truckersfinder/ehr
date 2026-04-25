@@ -87,8 +87,10 @@ export const HEADER_NAV_ACTIVITY_ORDER: { id: string; defaultLabel: string; titl
 export const TOOLBAR_ACTIVITY_ORDER: { id: string; defaultLabel: string }[] = [
   { id: "tb_systems_dashboard", defaultLabel: "Dashboard" },
   { id: "tb_administrative", defaultLabel: "Administrative" },
+  { id: "tb_api", defaultLabel: "API" },
   { id: "tb_application_config", defaultLabel: "Application configuration" },
   { id: "tb_organization_config", defaultLabel: "Organization configuration" },
+  { id: "tb_patient_portal_config", defaultLabel: "Patient portal configuration" },
   { id: "tb_user_management", defaultLabel: "User management" },
   { id: "tb_role_management", defaultLabel: "Role management" },
   { id: "tb_schedule", defaultLabel: "Schedule" },
@@ -115,6 +117,7 @@ export const TOOLBAR_UNIFIED_ACTIVITY_ORDER: { id: string; defaultLabel: string;
 export const PATIENT_CHART_REVIEW_ORDER: { id: string; defaultLabel: string }[] = [
   { id: "pc_demographics", defaultLabel: "Demographics" },
   { id: "pc_patient_call", defaultLabel: "Patient call" },
+  { id: "pc_patient_record", defaultLabel: "Patient Record" },
   { id: "pc_overview", defaultLabel: "Overview" },
   { id: "pc_history", defaultLabel: "History" },
   { id: "pc_immunization", defaultLabel: "Immunization" },
@@ -181,6 +184,8 @@ export function isActivityApplicableForRole(
     case "patient_chart_review": {
       if (!capabilities.has("activity.patient_search")) return false;
       switch (activityId) {
+        case "pc_patient_record":
+          return role !== "security";
         case "pc_immunization":
           return capabilities.has("nav.laboratory");
         case "pc_results":
@@ -258,6 +263,7 @@ export function toolbarActivityIdsForRole(role: string): string[] {
         "tb_administrative",
         "tb_application_config",
         "tb_organization_config",
+        "tb_patient_portal_config",
         "tb_user_management",
         "tb_role_management",
       ];
@@ -285,6 +291,7 @@ export function toolbarSecondaryRequiredCapabilities(activityId: string, role: s
     tb_administrative: { security: ["admin.facilities"] },
     tb_application_config: { security: ["admin.organization"] },
     tb_organization_config: { security: ["admin.organization"] },
+    tb_patient_portal_config: { security: ["admin.organization"] },
     tb_user_management: { security: ["admin.users"] },
     tb_role_management: { security: ["admin.roles"] },
     tb_schedule: {

@@ -1,0 +1,88 @@
+{
+  "info": {
+    "name": "EHR Integration API v1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Set collection variables: `baseUrl` (e.g. https://host), `apiKey` (ehr_live_…), optional `accessToken` from OAuth."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:3000" },
+    { "key": "apiKey", "value": "" },
+    { "key": "accessToken", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "OAuth — client_credentials",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"grant_type\": \"client_credentials\",\n  \"client_id\": \"{{clientId}}\",\n  \"client_secret\": \"{{clientSecret}}\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/oauth/token"
+      }
+    },
+    {
+      "name": "Meta",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+        "url": "{{baseUrl}}/api/v1/meta"
+      }
+    },
+    {
+      "name": "Patients — list",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{apiKey}}" }],
+        "url": "{{baseUrl}}/api/v1/patients?limit=20&offset=0"
+      }
+    },
+    {
+      "name": "Patients — create",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Idempotency-Key", "value": "{{$guid}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"Patient\",\n  \"dateOfBirth\": \"1990-01-15\",\n  \"gender\": \"other\",\n  \"mrn\": \"POSTMAN-001\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/patients"
+      }
+    },
+    {
+      "name": "Appointments — create",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"patientId\": \"{{patientId}}\",\n  \"clinicianId\": \"{{clinicianId}}\",\n  \"scheduledDate\": \"2026-04-21T15:00:00.000Z\",\n  \"duration\": 30,\n  \"status\": \"scheduled\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/appointments"
+      }
+    },
+    {
+      "name": "Webhooks — register",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"url\": \"https://example.com/webhook\",\n  \"eventTypes\": [\"appointment.created\", \"patient.created\"]\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/webhooks"
+      }
+    }
+  ]
+}

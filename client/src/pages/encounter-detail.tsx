@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useRoute, useLocation } from "wouter";
@@ -26,6 +27,7 @@ import { format } from "date-fns";
 import type { Encounter, Patient, Vitals } from "@shared/schema";
 
 export default function EncounterDetailPage() {
+  const { t } = useTranslation();
   const [, params] = useRoute("/encounters/:id");
   const [, navigate] = useLocation();
   const { user, token } = useAuth();
@@ -94,9 +96,17 @@ export default function EncounterDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/encounters", id] });
-      toast({ title: "Notes saved", description: "Clinical notes have been updated." });
+      toast({
+        title: t("pages.encounterDetail.toastNotesSavedTitle"),
+        description: t("pages.encounterDetail.toastNotesSavedDesc"),
+      });
     },
-    onError: () => toast({ title: "Error", description: "Failed to save notes", variant: "destructive" }),
+    onError: () =>
+      toast({
+        title: t("pages.encounterDetail.toastErrorTitle"),
+        description: t("pages.encounterDetail.toastSaveNotesError"),
+        variant: "destructive",
+      }),
   });
 
   const vitalsMutation = useMutation({
@@ -121,10 +131,15 @@ export default function EncounterDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/vitals", id] });
-      toast({ title: "Vitals recorded" });
+      toast({ title: t("pages.encounterDetail.toastVitalsRecordedTitle") });
       setVitalsForm({ temperature: "", bloodPressureSystolic: "", bloodPressureDiastolic: "", heartRate: "", respiratoryRate: "", oxygenSaturation: "", weight: "", height: "" });
     },
-    onError: () => toast({ title: "Error", description: "Failed to record vitals", variant: "destructive" }),
+    onError: () =>
+      toast({
+        title: t("pages.encounterDetail.toastErrorTitle"),
+        description: t("pages.encounterDetail.toastRecordVitalsError"),
+        variant: "destructive",
+      }),
   });
 
   const completeMutation = useMutation({
@@ -139,10 +154,15 @@ export default function EncounterDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
-      toast({ title: "Encounter completed" });
+      toast({ title: t("pages.encounterDetail.toastEncounterCompletedTitle") });
       navigate("/encounters");
     },
-    onError: () => toast({ title: "Error", description: "Failed to complete encounter", variant: "destructive" }),
+    onError: () =>
+      toast({
+        title: t("pages.encounterDetail.toastErrorTitle"),
+        description: t("pages.encounterDetail.toastCompleteEncounterError"),
+        variant: "destructive",
+      }),
   });
 
   if (isLoading) {
@@ -150,7 +170,11 @@ export default function EncounterDetailPage() {
   }
 
   if (!encounter) {
-    return <div className="p-6"><p className="text-muted-foreground">Encounter not found.</p></div>;
+    return (
+      <div className="p-6">
+        <p className="text-muted-foreground">{t("pages.encounterDetail.notFound")}</p>
+      </div>
+    );
   }
 
   const latestVitals = vitalsList[0];
@@ -165,7 +189,7 @@ export default function EncounterDetailPage() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
-              {patient ? `${patient.firstName} ${patient.lastName}` : "Loading..."}
+              {patient ? `${patient.firstName} ${patient.lastName}` : t("pages.encounterDetail.loading")}
             </h1>
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               <Badge variant="secondary" className="text-[10px]">{encounter.type}</Badge>
@@ -180,11 +204,11 @@ export default function EncounterDetailPage() {
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => updateMutation.mutate(soap)} disabled={updateMutation.isPending} data-testid="button-save-notes">
               <Save className="w-4 h-4 mr-2" />
-              {updateMutation.isPending ? "Saving..." : "Save Notes"}
+              {updateMutation.isPending ? t("pages.encounterDetail.saving") : t("pages.encounterDetail.saveNotes")}
             </Button>
             <Button onClick={() => completeMutation.mutate()} disabled={completeMutation.isPending} data-testid="button-complete">
               <CheckCircle className="w-4 h-4 mr-2" />
-              Complete
+              {t("pages.encounterDetail.complete")}
             </Button>
           </div>
         )}
@@ -193,7 +217,7 @@ export default function EncounterDetailPage() {
       {encounter.chiefComplaint && (
         <Card>
           <CardContent className="p-4">
-            <p className="text-sm font-medium text-muted-foreground mb-1">Chief Complaint</p>
+            <p className="text-sm font-medium text-muted-foreground mb-1">{t("pages.encounterDetail.chiefComplaint")}</p>
             <p className="text-sm">{encounter.chiefComplaint}</p>
           </CardContent>
         </Card>
@@ -204,10 +228,10 @@ export default function EncounterDetailPage() {
           sidebar={
             <TabsList className={SIDEBAR_TABS_LIST_CLASS}>
               <TabsTrigger value="soap" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-soap">
-                SOAP Notes
+                {t("pages.encounterDetail.tabSoap")}
               </TabsTrigger>
               <TabsTrigger value="vitals" className={SIDEBAR_TABS_TRIGGER_CLASS} data-testid="tab-vitals">
-                Vitals
+                {t("pages.encounterDetail.tabVitals")}
               </TabsTrigger>
             </TabsList>
           }
@@ -215,52 +239,52 @@ export default function EncounterDetailPage() {
         <TabsContent value="soap" className="mt-0 space-y-4 focus-visible:outline-none">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Card>
-              <CardHeader className="pb-2"><h4 className="text-sm font-medium">Subjective</h4></CardHeader>
+              <CardHeader className="pb-2"><h4 className="text-sm font-medium">{t("pages.encounterDetail.subjective")}</h4></CardHeader>
               <CardContent>
                 <Textarea
                   data-testid="input-subjective"
                   value={soap.subjective}
                   onChange={(e) => setSoap({ ...soap, subjective: e.target.value })}
-                  placeholder="Patient's reported symptoms, history..."
+                  placeholder={t("pages.encounterDetail.placeholderSubjective")}
                   className="resize-none min-h-[120px]"
                   disabled={!isEditable}
                 />
               </CardContent>
             </Card>
             <Card>
-              <CardHeader className="pb-2"><h4 className="text-sm font-medium">Objective</h4></CardHeader>
+              <CardHeader className="pb-2"><h4 className="text-sm font-medium">{t("pages.encounterDetail.objective")}</h4></CardHeader>
               <CardContent>
                 <Textarea
                   data-testid="input-objective"
                   value={soap.objective}
                   onChange={(e) => setSoap({ ...soap, objective: e.target.value })}
-                  placeholder="Physical examination findings..."
+                  placeholder={t("pages.encounterDetail.placeholderObjective")}
                   className="resize-none min-h-[120px]"
                   disabled={!isEditable}
                 />
               </CardContent>
             </Card>
             <Card>
-              <CardHeader className="pb-2"><h4 className="text-sm font-medium">Assessment</h4></CardHeader>
+              <CardHeader className="pb-2"><h4 className="text-sm font-medium">{t("pages.encounterDetail.assessment")}</h4></CardHeader>
               <CardContent>
                 <Textarea
                   data-testid="input-assessment"
                   value={soap.assessment}
                   onChange={(e) => setSoap({ ...soap, assessment: e.target.value })}
-                  placeholder="Clinical diagnosis and reasoning..."
+                  placeholder={t("pages.encounterDetail.placeholderAssessment")}
                   className="resize-none min-h-[120px]"
                   disabled={!isEditable}
                 />
               </CardContent>
             </Card>
             <Card>
-              <CardHeader className="pb-2"><h4 className="text-sm font-medium">Plan</h4></CardHeader>
+              <CardHeader className="pb-2"><h4 className="text-sm font-medium">{t("pages.encounterDetail.plan")}</h4></CardHeader>
               <CardContent>
                 <Textarea
                   data-testid="input-plan"
                   value={soap.plan}
                   onChange={(e) => setSoap({ ...soap, plan: e.target.value })}
-                  placeholder="Treatment plan, orders, follow-up..."
+                  placeholder={t("pages.encounterDetail.placeholderPlan")}
                   className="resize-none min-h-[120px]"
                   disabled={!isEditable}
                 />
@@ -269,12 +293,12 @@ export default function EncounterDetailPage() {
           </div>
           <Card>
             <CardContent className="p-4">
-              <Label className="text-sm">ICD-10 Codes</Label>
+              <Label className="text-sm">{t("pages.encounterDetail.icd10Codes")}</Label>
               <Input
                 data-testid="input-icd-codes"
                 value={soap.icdCodes}
                 onChange={(e) => setSoap({ ...soap, icdCodes: e.target.value })}
-                placeholder="e.g., G44.2, I10"
+                placeholder={t("pages.encounterDetail.placeholderIcd10")}
                 className="mt-2"
                 disabled={!isEditable}
               />
@@ -286,12 +310,12 @@ export default function EncounterDetailPage() {
           {latestVitals && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
-                { icon: Thermometer, label: "Temp", value: latestVitals.temperature ? `${latestVitals.temperature}°C` : "-" },
-                { icon: HeartIcon, label: "BP", value: latestVitals.bloodPressureSystolic ? `${latestVitals.bloodPressureSystolic}/${latestVitals.bloodPressureDiastolic}` : "-" },
-                { icon: Activity, label: "HR", value: latestVitals.heartRate ? `${latestVitals.heartRate} bpm` : "-" },
-                { icon: Wind, label: "RR", value: latestVitals.respiratoryRate ? `${latestVitals.respiratoryRate}/min` : "-" },
-                { icon: Droplets, label: "SpO2", value: latestVitals.oxygenSaturation ? `${latestVitals.oxygenSaturation}%` : "-" },
-                { icon: Weight, label: "Weight", value: latestVitals.weight ? `${latestVitals.weight} kg` : "-" },
+                { icon: Thermometer, label: t("pages.encounterDetail.temp"), value: latestVitals.temperature ? `${latestVitals.temperature}°C` : "-" },
+                { icon: HeartIcon, label: t("pages.encounterDetail.bp"), value: latestVitals.bloodPressureSystolic ? `${latestVitals.bloodPressureSystolic}/${latestVitals.bloodPressureDiastolic}` : "-" },
+                { icon: Activity, label: t("pages.encounterDetail.hr"), value: latestVitals.heartRate ? `${latestVitals.heartRate} bpm` : "-" },
+                { icon: Wind, label: t("pages.encounterDetail.rr"), value: latestVitals.respiratoryRate ? `${latestVitals.respiratoryRate}/min` : "-" },
+                { icon: Droplets, label: t("pages.encounterDetail.spo2"), value: latestVitals.oxygenSaturation ? `${latestVitals.oxygenSaturation}%` : "-" },
+                { icon: Weight, label: t("pages.encounterDetail.weight"), value: latestVitals.weight ? `${latestVitals.weight} kg` : "-" },
               ].map((v) => (
                 <Card key={v.label}>
                   <CardContent className="p-4 flex items-center gap-3">
@@ -308,7 +332,7 @@ export default function EncounterDetailPage() {
 
           {isEditable && (
             <Card>
-              <CardHeader className="pb-2"><h4 className="text-sm font-medium">Record New Vitals</h4></CardHeader>
+              <CardHeader className="pb-2"><h4 className="text-sm font-medium">{t("pages.encounterDetail.recordNewVitals")}</h4></CardHeader>
               <CardContent>
                 <form onSubmit={(e) => { e.preventDefault(); vitalsMutation.mutate(vitalsForm); }} className="space-y-4">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -346,7 +370,7 @@ export default function EncounterDetailPage() {
                     </div>
                   </div>
                   <Button type="submit" disabled={vitalsMutation.isPending} data-testid="button-record-vitals">
-                    {vitalsMutation.isPending ? "Recording..." : "Record Vitals"}
+                    {vitalsMutation.isPending ? t("pages.encounterDetail.recording") : t("pages.encounterDetail.recordVitals")}
                   </Button>
                 </form>
               </CardContent>

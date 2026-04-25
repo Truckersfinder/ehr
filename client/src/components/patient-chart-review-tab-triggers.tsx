@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { TabsTrigger } from "@/components/ui/tabs";
-import { LayoutGrid, History, ShieldCheck, FileCheck, PhoneCall, FileText } from "lucide-react";
+import { LayoutGrid, History, ShieldCheck, FileCheck, PhoneCall, FileText, FolderOpen } from "lucide-react";
 import { PATIENT_CHART_SIDEBAR_TAB_TRIGGER_CLASS } from "@/components/patient-chart-review-constants";
 import { reviewActivityIdToMainTabValue } from "@/lib/patient-chart-activity-ui";
 
@@ -10,6 +10,8 @@ function iconForReview(id: string): LucideIcon {
   switch (id) {
     case "pc_patient_call":
       return PhoneCall;
+    case "pc_patient_record":
+      return FolderOpen;
     case "pc_overview":
       return LayoutGrid;
     case "pc_history":

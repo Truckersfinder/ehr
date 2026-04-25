@@ -48,6 +48,10 @@ import PatientClinicalFormFillPage from "@/pages/patient-clinical-form-fill";
 import PatientClinicalFormCompletionReviewPage from "@/pages/patient-clinical-form-completion-review";
 import PublicClinicalFormFillPage from "@/pages/public-clinical-form-fill";
 import SystemsAdminDashboardPage from "@/pages/systems-admin-dashboard";
+import PatientPortalConfigurationPage from "@/pages/patient-portal-configuration";
+import PatientPortalLoginPage from "@/pages/patient-portal-login";
+import PatientPortalInvitePage from "@/pages/patient-portal-invite";
+import PatientPortalRecordPage from "@/pages/patient-portal-record";
 
 function LandingByRole() {
   const { user } = useAuth();
@@ -90,6 +94,7 @@ function AuthenticatedRoutes() {
       <Route path="/forms-activity" component={FormsConsentEnterPatientChart} />
       <Route path="/forms" component={FormsConsentEnterPatientChart} />
       <Route path="/systems-dashboard" component={SystemsAdminDashboardPage} />
+      <Route path="/patient-portal-configuration" component={PatientPortalConfigurationPage} />
       <Route path="/admin/forms/new" component={AdminFormNewPage} />
       <Route path="/admin/forms/:formId/edit" component={AdminFormEditPage} />
       <Route path="/admin" component={AdminPage} />
@@ -181,6 +186,16 @@ function AuthenticatedApp() {
 
   const { organizationName, logoUrl } = useOrganizationSettings();
 
+  useEffect(() => {
+    document.title = t("app.documentTitleEhr", { name: organizationName });
+  }, [organizationName, t]);
+
+  /** Security toolbar without the dashboard item — we always render a dedicated Systems dashboard link so it is never missing when UI layout omits `tb_systems_dashboard`. */
+  const securityToolbarWithoutDashboard = useMemo(() => {
+    if (user?.role !== "security" || !user.activityUi?.toolbar?.length) return [];
+    return user.activityUi.toolbar.filter((x) => x.id !== "tb_systems_dashboard");
+  }, [user?.role, user?.activityUi?.toolbar]);
+
   return (
     <>
       <div className="flex h-screen w-full flex-col">
@@ -205,15 +220,7 @@ function AuthenticatedApp() {
               </div>
               {isAdminRole ? (
                 <>
-                  {user.activityUi?.toolbar?.length && user.role === "security" ? (
-                    <ToolbarActionLinks
-                      items={user.activityUi.toolbar}
-                      pathOnly={pathOnly}
-                      location={location}
-                      isAdminGeneralNav={isAdminGeneralNav}
-                      isAdminBedManagementNav={isAdminBedManagementNav}
-                    />
-                  ) : user.role === "security" ? (
+                  {user.role === "security" ? (
                     <Link href="/systems-dashboard">
                       <a
                         className={cn(
@@ -227,6 +234,15 @@ function AuthenticatedApp() {
                         {t("toolbar.dashboard")}
                       </a>
                     </Link>
+                  ) : null}
+                  {securityToolbarWithoutDashboard.length > 0 ? (
+                    <ToolbarActionLinks
+                      items={securityToolbarWithoutDashboard}
+                      pathOnly={pathOnly}
+                      location={location}
+                      isAdminGeneralNav={isAdminGeneralNav}
+                      isAdminBedManagementNav={isAdminBedManagementNav}
+                    />
                   ) : null}
                   <AppHeaderNav user={user} />
                   {user.activityUi?.toolbar?.length && user.role !== "security" ? (
@@ -423,13 +439,54 @@ function AuthenticatedApp() {
   );
 }
 
+function PublicRouteChrome({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="relative min-h-screen">
+      <div className="absolute top-3 right-3 z-50 flex items-center gap-1 sm:gap-2">
+        <LanguageSwitcher />
+        <ThemeToggle />
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function AppContent() {
   const { t } = useTranslation();
   const [matchPublicClinicalForm, publicClinicalParams] = useRoute("/p/clinical-form/:token");
+  const [matchPortalLogin] = useRoute("/portal");
+  const [matchPortalInvite] = useRoute("/portal/invite/:token");
+  const [matchPortalRecord] = useRoute("/portal/record");
   const { user, isLoading } = useAuth();
 
   if (matchPublicClinicalForm && publicClinicalParams?.token) {
-    return <PublicClinicalFormFillPage token={decodeURIComponent(publicClinicalParams.token)} />;
+    return (
+      <PublicRouteChrome>
+        <PublicClinicalFormFillPage token={decodeURIComponent(publicClinicalParams.token)} />
+      </PublicRouteChrome>
+    );
+  }
+
+  if (matchPortalInvite) {
+    return (
+      <PublicRouteChrome>
+        <PatientPortalInvitePage />
+      </PublicRouteChrome>
+    );
+  }
+  if (matchPortalRecord) {
+    return (
+      <PublicRouteChrome>
+        <PatientPortalRecordPage />
+      </PublicRouteChrome>
+    );
+  }
+  if (matchPortalLogin) {
+    return (
+      <PublicRouteChrome>
+        <PatientPortalLoginPage />
+      </PublicRouteChrome>
+    );
   }
 
   if (isLoading) {

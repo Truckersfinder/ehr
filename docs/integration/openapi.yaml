@@ -1,0 +1,222 @@
+openapi: 3.0.3
+info:
+  title: EMR Integration API
+  version: "1.0.0"
+  description: |
+    External REST API under `/api/v1`. See `README.md` for authentication, scopes, and webhooks.
+
+servers:
+  - url: /api/v1
+    description: Relative to deployment host
+
+tags:
+  - name: OAuth
+  - name: Meta
+  - name: Patients
+  - name: Providers
+  - name: Appointments
+  - name: Encounters
+  - name: Medications
+  - name: Allergies
+  - name: Problems
+  - name: Labs
+  - name: Vitals
+  - name: Notes
+  - name: Documents
+  - name: Billing
+  - name: Facilities
+  - name: Users
+  - name: Audit
+  - name: Webhooks
+
+paths:
+  /oauth/token:
+    post:
+      tags: [OAuth]
+      summary: OAuth2 client credentials token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [grant_type, client_id, client_secret]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials]
+                client_id:
+                  type: string
+                  format: uuid
+                client_secret:
+                  type: string
+      responses:
+        "200":
+          description: Access token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  token_type:
+                    type: string
+                    example: Bearer
+                  expires_in:
+                    type: integer
+                    example: 3600
+
+  /meta:
+    get:
+      tags: [Meta]
+      summary: API metadata
+      security: [{ BearerAuth: [] }]
+      responses:
+        "200":
+          description: OK
+
+  /patients:
+    get:
+      tags: [Patients]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
+        - in: query
+          name: q
+          schema: { type: string }
+      responses:
+        "200":
+          description: Search bundle
+    post:
+      tags: [Patients]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: Created
+
+  /patients/{id}:
+    get:
+      tags: [Patients]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Patient
+    patch:
+      tags: [Patients]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Updated
+    delete:
+      tags: [Patients]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "204":
+          description: Deactivated
+
+  /patients/by-external-id:
+    get:
+      tags: [Patients]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: query
+          name: system
+          schema: { type: string }
+        - in: query
+          name: external_id
+          schema: { type: string }
+      responses:
+        "200":
+          description: Patient
+
+  /appointments:
+    get:
+      tags: [Appointments]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - in: query
+          name: patient_id
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: List
+    post:
+      tags: [Appointments]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: Created
+
+  /webhooks:
+    get:
+      tags: [Webhooks]
+      security: [{ BearerAuth: [] }]
+      responses:
+        "200":
+          description: Subscriptions
+    post:
+      tags: [Webhooks]
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "201":
+          description: Created
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key or OAuth access token
+      description: |
+        Use `Authorization: Bearer ehr_live_<uuid>_<secret>` or OAuth JWT from `/oauth/token`.
+
+  parameters:
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 256
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}
+
+security:
+  - BearerAuth: []
+
+# Note: Webhooks use a durable queue and retry with backoff.

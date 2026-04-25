@@ -41,6 +41,7 @@ import { ChartContainer } from "@/components/ui/chart";
 import type { Patient, Encounter, Prescription, EncounterMedicationAdministration, LabOrder, PatientProblem, PatientNote, FamilyMember, FamilyMemberCondition, ImagingResult, ImagingOrder, PatientDocument, Vitals, PatientAllergy, Appointment, FollowUpContact } from "@shared/schema";
 import { normalizePatientRow } from "@/lib/patient-photo";
 import { formatInOrgTimeZone } from "@/lib/org-timezone";
+import { PatientRecordTab } from "@/components/patient-record-tab";
 import {
   mergeLatestStoryboardVitals,
   storyboardVitalsHasAnyValue,
@@ -2921,6 +2922,18 @@ export default function PatientDetailPage() {
               readOnly={documentationReadOnly}
             />
           )}
+        </TabsContent>
+
+        <TabsContent value="patient-record" className="mt-0 data-[state=inactive]:hidden">
+          <PatientRecordTab
+            token={authToken ?? null}
+            patient={patient}
+            prescriptions={prescriptions}
+            problems={problems}
+            allergies={patientAllergies}
+            users={users}
+            prescriberNameById={prescriberNameById}
+          />
         </TabsContent>
 
         <TabsContent value="history" className="space-y-4 mt-4">

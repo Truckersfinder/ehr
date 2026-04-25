@@ -47,6 +47,8 @@ export function reviewActivityIdToMainTabValue(id: string): string | null {
       return null;
     case "pc_patient_call":
       return "patient-call";
+    case "pc_patient_record":
+      return "patient-record";
     case "pc_overview":
       return "overview";
     case "pc_history":

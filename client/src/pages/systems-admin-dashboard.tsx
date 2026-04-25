@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Link, Redirect } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -36,20 +37,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import type { User } from "@shared/schema";
-
-function actionLabel(action: string): string {
-  const map: Record<string, string> = {
-    UPDATE_ROLE_CAPABILITY: "Role capability changed",
-    CREATE_USER: "User account created",
-    RESET_USER_PASSWORD: "Password reset",
-    UPDATE_ORGANIZATION_SETTINGS: "Organization settings updated",
-    UPDATE_ORGANIZATION_LOGO: "Organization logo updated",
-    UPDATE_UI_TABLE_COLUMN: "Admin table columns updated",
-    CREATE_CLINICAL_FORM: "Form / consent template created",
-    UPDATE_CLINICAL_FORM: "Form / consent template updated",
-  };
-  return map[action] ?? action;
-}
+import { SystemsApiDocsPanel } from "@/components/systems-api-docs-panel";
 
 function StatCard({
   title,
@@ -86,7 +74,14 @@ function StatCard({
 }
 
 export default function SystemsAdminDashboardPage() {
+  const { t } = useTranslation();
   const { user, token } = useAuth();
+  const location = window.location?.search ?? "";
+  const tab = useMemo(() => {
+    const qs = location.startsWith("?") ? location.slice(1) : location;
+    const sp = new URLSearchParams(qs);
+    return sp.get("tab") || "dashboard";
+  }, [location]);
 
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ["/api/admin/systems-dashboard"],
@@ -95,6 +90,10 @@ export default function SystemsAdminDashboardPage() {
   });
 
   const todayLine = useMemo(() => format(new Date(), "EEEE, MMMM d, yyyy"), []);
+
+  function auditActionLabel(action: string): string {
+    return t(`pages.systemsDashboard.action_${action}`, { defaultValue: action });
+  }
 
   if (user && user.role !== "security") {
     return <Redirect to="/" />;
@@ -106,10 +105,8 @@ export default function SystemsAdminDashboardPage() {
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-4 flex-1 min-w-0">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
-              <SectionTitleWithHint
-                hint={`${todayLine} — Security posture, accounts, and administration at a glance.`}
-              >
-                Systems dashboard
+              <SectionTitleWithHint hint={t("pages.systemsDashboard.titleHint", { date: todayLine })}>
+                {t("pages.systemsDashboard.title")}
               </SectionTitleWithHint>
             </h1>
           </div>
@@ -123,28 +120,38 @@ export default function SystemsAdminDashboardPage() {
             data-testid="systems-dashboard-refresh"
           >
             <RefreshCw className={cn("w-4 h-4", isFetching && "animate-spin")} />
-            Refresh
+            {t("pages.systemsDashboard.refresh")}
           </Button>
         </div>
         <div className="flex flex-wrap gap-2 pt-2 sm:pt-0">
+          <Link href="/systems-dashboard">
+            <a className={cn(buttonVariants({ variant: tab === "dashboard" ? "default" : "outline", size: "sm" }), "gap-1")}>
+              {t("pages.systemsDashboard.tabDashboard", { defaultValue: "Dashboard" })}
+            </a>
+          </Link>
+          <Link href="/systems-dashboard?tab=api">
+            <a className={cn(buttonVariants({ variant: tab === "api" ? "default" : "outline", size: "sm" }), "gap-1")}>
+              {t("pages.systemsDashboard.tabApi", { defaultValue: "API" })}
+            </a>
+          </Link>
           <Link href="/admin?section=organization">
             <a className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1")}>
-              Organization <ExternalLink className="w-3.5 h-3.5" />
+              {t("pages.systemsDashboard.linkOrganization")} <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </Link>
           <Link href="/admin?section=users">
             <a className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1")}>
-              User management <ExternalLink className="w-3.5 h-3.5" />
+              {t("pages.systemsDashboard.linkUserManagement")} <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </Link>
           <Link href="/admin?section=roles">
             <a className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1")}>
-              Role capabilities <ExternalLink className="w-3.5 h-3.5" />
+              {t("pages.systemsDashboard.linkRoleCapabilities")} <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </Link>
           <Link href="/admin?section=administrative&adminTab=audit">
             <a className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1")}>
-              Audit log <ExternalLink className="w-3.5 h-3.5" />
+              {t("pages.systemsDashboard.linkAuditLog")} <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </Link>
         </div>
@@ -153,7 +160,7 @@ export default function SystemsAdminDashboardPage() {
       {isError && (
         <Card className="border-destructive/50">
           <CardContent className="p-4 text-sm text-destructive">
-            {(error as Error)?.message ?? "Could not load dashboard."}
+            {(error as Error)?.message ?? t("pages.systemsDashboard.loadError")}
           </CardContent>
         </Card>
       )}
@@ -166,37 +173,59 @@ export default function SystemsAdminDashboardPage() {
         </div>
       )}
 
-      {data && (
+      {tab === "api" ? (
+        <SystemsApiDocsPanel />
+      ) : data && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard title="Staff accounts (active)" value={data.users.active} description={`${data.users.total} total`} icon={Users} />
             <StatCard
-              title="Deactivated accounts"
+              title={t("pages.systemsDashboard.statStaffActive")}
+              value={data.users.active}
+              description={t("pages.systemsDashboard.statTotalSuffix", { count: data.users.total })}
+              icon={Users}
+            />
+            <StatCard
+              title={t("pages.systemsDashboard.statDeactivated")}
               value={data.users.deactivated}
-              description="Cannot sign in"
+              description={t("pages.systemsDashboard.statCannotSignIn")}
               icon={Users}
               variant={data.users.deactivated > 0 ? "warn" : "default"}
             />
             <StatCard
-              title="Stale logins (30 days)"
+              title={t("pages.systemsDashboard.statStaleLogins")}
               value={data.staleActiveAccounts.count}
-              description="Active users with no login in 30 days"
+              description={t("pages.systemsDashboard.statStaleLoginsDesc")}
               icon={AlertTriangle}
               variant={data.staleActiveAccounts.count > 0 ? "warn" : "default"}
             />
-            <StatCard title="Successful logins (7 days)" value={data.audit.loginsLast7Days} description="Audit trail" icon={LogIn} />
             <StatCard
-              title="Admin / security events (24h)"
+              title={t("pages.systemsDashboard.statLogins7d")}
+              value={data.audit.loginsLast7Days}
+              description={t("pages.systemsDashboard.statAuditTrail")}
+              icon={LogIn}
+            />
+            <StatCard
+              title={t("pages.systemsDashboard.statSecurity24h")}
               value={data.audit.securityEventsLast24h}
-              description="Role, org, users, forms"
+              description={t("pages.systemsDashboard.statSecurity24hDesc")}
               icon={ShieldAlert}
             />
-            <StatCard title="Facilities" value={data.facilities.active} description={`${data.facilities.inactive} inactive`} icon={Building2} />
-            <StatCard title="Form & consent templates" value={data.clinicalForms.active} description={`${data.clinicalForms.inactive} inactive`} icon={FileStack} />
             <StatCard
-              title="Role capability overrides"
+              title={t("pages.systemsDashboard.statFacilities")}
+              value={data.facilities.active}
+              description={t("pages.systemsDashboard.statInactiveSuffix", { count: data.facilities.inactive })}
+              icon={Building2}
+            />
+            <StatCard
+              title={t("pages.systemsDashboard.statFormsTemplates")}
+              value={data.clinicalForms.active}
+              description={t("pages.systemsDashboard.statInactiveSuffix", { count: data.clinicalForms.inactive })}
+              icon={FileStack}
+            />
+            <StatCard
+              title={t("pages.systemsDashboard.statRoleOverrides")}
               value={data.roleCapabilityOverrideRows}
-              description="Custom toggles vs defaults"
+              description={t("pages.systemsDashboard.statRoleOverridesDesc")}
               icon={SlidersHorizontal}
             />
           </div>
@@ -206,8 +235,8 @@ export default function SystemsAdminDashboardPage() {
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
                   <ShieldAlert className="w-4 h-4 shrink-0" />
-                  <SectionTitleWithHint hint="Use this checklist to keep access appropriate and auditable. Numbers update from live data.">
-                    Security awareness
+                  <SectionTitleWithHint hint={t("pages.systemsDashboard.securityAwarenessHint")}>
+                    {t("pages.systemsDashboard.securityAwareness")}
                   </SectionTitleWithHint>
                 </CardTitle>
               </CardHeader>
@@ -215,39 +244,40 @@ export default function SystemsAdminDashboardPage() {
                 <div className="flex gap-2">
                   <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
                   <span>
-                    Review <strong>role-based capabilities</strong> when onboarding new roles or locations —{" "}
+                    {t("pages.systemsDashboard.secBullet1Before")}{" "}
+                    <strong>{t("pages.systemsDashboard.secBullet1Strong")}</strong> {t("pages.systemsDashboard.secBullet1Mid")}{" "}
                     <Link href="/admin?section=roles" className="text-primary underline-offset-4 hover:underline">
-                      open Role management
+                      {t("pages.systemsDashboard.secBullet1Link")}
                     </Link>
-                    .
+                    {t("pages.systemsDashboard.secBullet1After")}
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
+                  <span>{t("pages.systemsDashboard.secBullet2")}</span>
+                </div>
+                <div className="flex gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
+                  <span>
+                    {t("pages.systemsDashboard.secBullet3Before")} <strong>{t("pages.systemsDashboard.secBullet3Strong")}</strong>{" "}
+                    {t("pages.systemsDashboard.secBullet3After")}
                   </span>
                 </div>
                 <div className="flex gap-2">
                   <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
                   <span>
-                    Deactivate accounts that no longer need access; inactive staff should not remain <strong>active</strong> in User management.
-                  </span>
-                </div>
-                <div className="flex gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
-                  <span>
-                    Investigate <strong>stale logins</strong> (below): users who have not authenticated in 30 days may need password resets or offboarding.
-                  </span>
-                </div>
-                <div className="flex gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
-                  <span>
-                    Organization branding and identifiers affect every facility — confirm under{" "}
+                    {t("pages.systemsDashboard.secBullet4Before")}{" "}
                     <Link href="/admin?section=organization" className="text-primary underline-offset-4 hover:underline">
-                      Organization configuration
+                      {t("pages.systemsDashboard.secBullet4Link")}
                     </Link>
-                    .
+                    {t("pages.systemsDashboard.secBullet4After")}
                   </span>
                 </div>
                 <div className="flex gap-2">
                   <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 mt-0.5" />
                   <span>
-                    Use the <strong>audit log</strong> for a full history; the table on this page shows high-impact events only.
+                    {t("pages.systemsDashboard.secBullet5Before")} <strong>{t("pages.systemsDashboard.secBullet5Strong")}</strong>{" "}
+                    {t("pages.systemsDashboard.secBullet5After")}
                   </span>
                 </div>
               </CardContent>
@@ -257,26 +287,28 @@ export default function SystemsAdminDashboardPage() {
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
                   <Activity className="w-4 h-4 shrink-0" />
-                  <SectionTitleWithHint hint="Jump to common administration tasks.">Quick actions</SectionTitleWithHint>
+                  <SectionTitleWithHint hint={t("pages.systemsDashboard.quickActionsHint")}>
+                    {t("pages.systemsDashboard.quickActions")}
+                  </SectionTitleWithHint>
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">
                 <Link href="/admin?section=administrative&adminTab=forms">
                   <a className={cn(buttonVariants({ variant: "secondary", size: "sm" }), "w-full justify-start gap-2")}>
                     <ClipboardList className="w-4 h-4" />
-                    Forms &amp; consent templates
+                    {t("pages.systemsDashboard.quickFormsConsent")}
                   </a>
                 </Link>
                 <Link href="/admin?section=administrative&adminTab=facilities">
                   <a className={cn(buttonVariants({ variant: "secondary", size: "sm" }), "w-full justify-start gap-2")}>
                     <Building2 className="w-4 h-4" />
-                    Facilities
+                    {t("pages.systemsDashboard.quickFacilities")}
                   </a>
                 </Link>
                 <Link href="/admin?section=users">
                   <a className={cn(buttonVariants({ variant: "secondary", size: "sm" }), "w-full justify-start gap-2")}>
                     <Users className="w-4 h-4" />
-                    Create or review user accounts
+                    {t("pages.systemsDashboard.quickUsers")}
                   </a>
                 </Link>
               </CardContent>
@@ -288,27 +320,27 @@ export default function SystemsAdminDashboardPage() {
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                 <div>
                   <CardTitle className="text-base">
-                    <SectionTitleWithHint hint="Active users who have not signed in during the last 30 days, or who never signed in and were created more than 30 days ago.">
-                      Accounts with no recent login
+                    <SectionTitleWithHint hint={t("pages.systemsDashboard.staleAccountsHint")}>
+                      {t("pages.systemsDashboard.staleAccountsTitle")}
                     </SectionTitleWithHint>
                   </CardTitle>
                 </div>
                 <Button size="sm" variant="outline" asChild>
-                  <Link href="/admin?section=users">Manage users</Link>
+                  <Link href="/admin?section=users">{t("pages.systemsDashboard.manageUsers")}</Link>
                 </Button>
               </div>
             </CardHeader>
             <CardContent className="overflow-x-auto">
               {data.staleActiveAccounts.items.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-6 text-center">No stale accounts — all active users have logged in within 30 days (or are new).</p>
+                <p className="text-sm text-muted-foreground py-6 text-center">{t("pages.systemsDashboard.staleAccountsEmpty")}</p>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Username</TableHead>
-                      <TableHead>Role</TableHead>
-                      <TableHead>Last login</TableHead>
+                      <TableHead>{t("pages.systemsDashboard.colName")}</TableHead>
+                      <TableHead>{t("pages.systemsDashboard.colUsername")}</TableHead>
+                      <TableHead>{t("pages.systemsDashboard.colRole")}</TableHead>
+                      <TableHead>{t("pages.systemsDashboard.colLastLogin")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -325,7 +357,9 @@ export default function SystemsAdminDashboardPage() {
                           {row.lastLoginAt
                             ? format(new Date(row.lastLoginAt), "MMM d, yyyy HH:mm")
                             : row.createdAt
-                              ? `Never — created ${format(new Date(row.createdAt), "MMM d, yyyy")}`
+                              ? t("pages.systemsDashboard.lastLoginNever", {
+                                  date: format(new Date(row.createdAt), "MMM d, yyyy"),
+                                })
                               : "—"}
                         </TableCell>
                       </TableRow>
@@ -339,22 +373,22 @@ export default function SystemsAdminDashboardPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">
-                <SectionTitleWithHint hint="Role changes, account creation, password resets, organization settings, forms, and column layout updates.">
-                  Recent high-impact audit events
+                <SectionTitleWithHint hint={t("pages.systemsDashboard.recentAuditHint")}>
+                  {t("pages.systemsDashboard.recentAuditTitle")}
                 </SectionTitleWithHint>
               </CardTitle>
             </CardHeader>
             <CardContent className="overflow-x-auto">
               {data.audit.recentSecurityEvents.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-6 text-center">No matching events recorded yet.</p>
+                <p className="text-sm text-muted-foreground py-6 text-center">{t("pages.systemsDashboard.recentAuditEmpty")}</p>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>When</TableHead>
-                      <TableHead>Event</TableHead>
-                      <TableHead>Actor</TableHead>
-                      <TableHead>Details</TableHead>
+                      <TableHead>{t("pages.systemsDashboard.colWhen")}</TableHead>
+                      <TableHead>{t("pages.systemsDashboard.colEvent")}</TableHead>
+                      <TableHead>{t("pages.systemsDashboard.colActor")}</TableHead>
+                      <TableHead>{t("pages.systemsDashboard.colDetails")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -363,7 +397,7 @@ export default function SystemsAdminDashboardPage() {
                         <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
                           {format(new Date(ev.createdAt), "MMM d, yyyy HH:mm")}
                         </TableCell>
-                        <TableCell className="text-sm">{actionLabel(ev.action)}</TableCell>
+                        <TableCell className="text-sm">{auditActionLabel(ev.action)}</TableCell>
                         <TableCell className="text-sm">{ev.actorFullName ?? ev.userId.slice(0, 8) + "…"}</TableCell>
                         <TableCell className="text-sm max-w-md truncate" title={ev.details ?? undefined}>
                           {ev.details ?? "—"}

@@ -43,6 +43,7 @@ import {
   putUiTableColumnOrderBodySchema,
   deleteUiTableColumnQuerySchema,
   patchUiActivityLayoutBodySchema,
+  createIntegrationApiKeyBodySchema,
 } from "@shared/schema";
 import {
   inferClinicalFormPrefill,
@@ -79,6 +80,11 @@ import {
   syncCapabilitiesFromActivityLayoutPatch,
 } from "./activity-capability-sync";
 import { getMedsAdminCounts } from "./meds-admin-counts";
+import { mergePatientPortalConfig, atLeastOnePortalSectionVisible } from "@shared/patient-portal-config";
+import { registerPatientPortalRoutes } from "./patient-portal-routes";
+import { registerIntegrationRoutes } from "./integration/register-integration-routes";
+import { emitIntegrationWebhookEvent } from "./integration/webhook-delivery";
+import { issuePortalInviteAndSendEmail } from "./patient-portal-invite";
 
 /** Create patient: never take legacy free-text `allergies` from the request (autofill / stray JSON). Use structured patient_allergies + clinical workflow instead. */
 const insertPatientCreateSchema = insertPatientSchema.omit({ allergies: true, profilePhotoUrl: true });
@@ -225,6 +231,9 @@ export async function registerRoutes(
   await storage.ensureBedsAndBedAssignmentsTables();
   await storage.ensureClinicalFormsTable();
   await storage.ensureFacilityOrganizationAndRoleTables();
+  await storage.ensureIntegrationTables();
+
+  registerIntegrationRoutes(app);
 
   app.get("/api/meds-admin-counts", authMiddleware as any, async (req: any, res) => {
     try {
@@ -1039,6 +1048,7 @@ export async function registerRoutes(
       if (!user?.facilityId) return res.status(400).json({ message: "Your account is not linked to a facility" });
       const fac = await storage.getFacility(user.facilityId);
       if (!fac) return res.status(404).json({ message: "Facility not found" });
+      const patientPortalConfig = mergePatientPortalConfig((fac as { patientPortalConfig?: unknown }).patientPortalConfig);
       return res.json({
         id: fac.id,
         name: fac.name,
@@ -1051,6 +1061,7 @@ export async function registerRoutes(
         address: fac.address ?? null,
         phone: fac.phone ?? null,
         email: fac.email ?? null,
+        patientPortalConfig,
       });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -1077,6 +1088,17 @@ export async function registerRoutes(
         if (body.country !== undefined) update.country = body.country;
         if (body.timeZone !== undefined) update.timeZone = body.timeZone;
         if (body.logoUrl !== undefined) update.logoUrl = body.logoUrl === "" || body.logoUrl === null ? null : body.logoUrl;
+        if (body.patientPortalConfig !== undefined) {
+          const facCurrent = await storage.getFacility(user.facilityId!);
+          const merged = mergePatientPortalConfig({
+            ...mergePatientPortalConfig(facCurrent?.patientPortalConfig),
+            ...body.patientPortalConfig,
+          });
+          if (!atLeastOnePortalSectionVisible(merged)) {
+            return res.status(400).json({ message: "At least one patient portal section must remain visible" });
+          }
+          update.patientPortalConfig = merged as unknown as Record<string, unknown>;
+        }
         const updated = await storage.updateFacility(user.facilityId, update as any);
         if (!updated) return res.status(404).json({ message: "Facility not found" });
         await storage.createAuditLog({
@@ -1484,6 +1506,20 @@ export async function registerRoutes(
       if (!parsed.success) return res.status(400).json({ message: "Invalid patient data", errors: parsed.error.flatten() });
       const patient = await storage.createPatient({ ...parsed.data, allergies: null, profilePhotoUrl: null });
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_PATIENT", resource: "patient", resourceId: patient.id, details: `Created patient ${patient.firstName} ${patient.lastName}` });
+      void emitIntegrationWebhookEvent({
+        type: "patient.created",
+        facilityId: patient.facilityId,
+        source: "app",
+        data: { patient },
+      });
+      if (patient.portalEnabled) {
+        const to = (patient.portalAccessEmail || patient.email || "").trim();
+        if (to) {
+          issuePortalInviteAndSendEmail(patient.id, { regenerateToken: true }).catch((e) =>
+            console.error("[patient portal] invite email after registration failed:", e),
+          );
+        }
+      }
       return res.status(201).json(patient);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -1493,12 +1529,18 @@ export async function registerRoutes(
   app.patch(
     "/api/patients/:id",
     authMiddleware as any,
-    requireRole("super_admin", "clinician", "nurse", "lab_tech", "reception") as any,
+    requireRole("super_admin", "security", "clinician", "nurse", "lab_tech", "reception") as any,
     async (req: any, res) => {
       try {
         const updated = await storage.updatePatient(req.params.id, req.body);
         if (!updated) return res.status(404).json({ message: "Patient not found" });
         await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_PATIENT", resource: "patient", resourceId: req.params.id });
+        void emitIntegrationWebhookEvent({
+          type: "patient.updated",
+          facilityId: updated.facilityId,
+          source: "app",
+          data: { patient: updated },
+        });
         return res.json(updated);
       } catch (error: any) {
         return res.status(500).json({ message: error.message });
@@ -1509,7 +1551,7 @@ export async function registerRoutes(
   app.post(
     "/api/patients/:patientId/profile-photo",
     authMiddleware as any,
-    requireRole("super_admin", "clinician", "nurse", "lab_tech", "reception") as any,
+    requireRole("super_admin", "security", "clinician", "nurse", "lab_tech", "reception") as any,
     (req: any, res: any, next: any) => {
       profilePhotoUpload.single("photo")(req, res, (err: unknown) => {
         if (err) {
@@ -1777,6 +1819,12 @@ export async function registerRoutes(
         ...(encounterIdNote ? { encounterId: encounterIdNote } : {}),
       } as any);
       await storage.createAuditLog({ userId: req.user.id, action: "ADD_PATIENT_NOTE", resource: "patient_note", resourceId: created.id });
+      void emitIntegrationWebhookEvent({
+        type: "clinical_note.created",
+        facilityId: null,
+        source: "app",
+        data: { note: created },
+      });
       res.status(201).json(created);
     };
     run().catch((err) => {
@@ -1811,6 +1859,12 @@ export async function registerRoutes(
       const updated = await storage.updatePatientNote(noteId, updates);
       if (!updated) return res.status(404).json({ message: "Note not found" });
       await storage.createAuditLog({ userId: req.user.id, action: "EDIT_PATIENT_NOTE", resource: "patient_note", resourceId: noteId });
+      void emitIntegrationWebhookEvent({
+        type: "clinical_note.updated",
+        facilityId: null,
+        source: "app",
+        data: { note: updated },
+      });
       return res.json(updated);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -2320,6 +2374,12 @@ export async function registerRoutes(
       if (!parsed.success) return res.status(400).json({ message: "Invalid vitals data", errors: parsed.error.flatten() });
       const v = await storage.createVitals(parsed.data);
       await storage.createAuditLog({ userId: req.user.id, action: "RECORD_VITALS", resource: "vitals", resourceId: v.id });
+      void emitIntegrationWebhookEvent({
+        type: "vitals.created",
+        facilityId: null,
+        source: "app",
+        data: { vitals: v },
+      });
       return res.status(201).json(v);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -2856,6 +2916,11 @@ export async function registerRoutes(
       }
       const appt = await storage.createAppointment(parsed.data);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_APPOINTMENT", resource: "appointment", resourceId: appt.id });
+      void emitIntegrationWebhookEvent({
+        type: "appointment.created",
+        facilityId: appt.facilityId,
+        data: { appointment: appt },
+      });
       return res.status(201).json(appt);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -2892,6 +2957,12 @@ export async function registerRoutes(
       const order = await storage.createLabOrder({ ...parsed.data, internalExternal });
       await applyLabOrderCharge(order);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_LAB_ORDER", resource: "lab_order", resourceId: order.id });
+      void emitIntegrationWebhookEvent({
+        type: "lab_order.created",
+        facilityId: null,
+        source: "app",
+        data: { labOrder: order },
+      });
       return res.status(201).json(order);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -2911,6 +2982,12 @@ export async function registerRoutes(
       if (!updated) return res.status(404).json({ message: "Lab order not found" });
       await syncLabOrderVisitCharge(updated);
       await storage.createAuditLog({ userId: req.user.id, action: "UPDATE_LAB_ORDER", resource: "lab_order", resourceId: req.params.id });
+      void emitIntegrationWebhookEvent({
+        type: "lab_order.updated",
+        facilityId: null,
+        source: "app",
+        data: { labOrder: updated },
+      });
       return res.json(updated);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -3035,6 +3112,12 @@ export async function registerRoutes(
       }
       const doc = await storage.createPatientDocument(merged);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_PATIENT_DOCUMENT", resource: "patient_document", resourceId: doc.id });
+      void emitIntegrationWebhookEvent({
+        type: "document.created",
+        facilityId: null,
+        source: "app",
+        data: { document: doc },
+      });
       return res.status(201).json(normalizePatientDocumentRow(doc as PatientDocumentRow));
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -3212,6 +3295,12 @@ export async function registerRoutes(
       if (!parsed.success) return res.status(400).json({ message: "Invalid invoice data", errors: parsed.error.flatten() });
       const inv = await storage.createInvoice(parsed.data);
       await storage.createAuditLog({ userId: req.user.id, action: "CREATE_INVOICE", resource: "invoice", resourceId: inv.id });
+      void emitIntegrationWebhookEvent({
+        type: "invoice.created",
+        facilityId: inv.facilityId ?? null,
+        source: "app",
+        data: { invoice: inv },
+      });
       return res.status(201).json(inv);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -3446,6 +3535,101 @@ export async function registerRoutes(
       return res.status(500).json({ message: error.message });
     }
   });
+
+  app.post(
+    "/api/admin/integration/api-keys",
+    authMiddleware as any,
+    requireRole("super_admin", "security") as any,
+    async (req: any, res) => {
+      try {
+        const parsed = createIntegrationApiKeyBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ message: "Invalid body", errors: parsed.error.flatten() });
+        }
+        const { name, scopes, facilityId, expiresAt } = parsed.data;
+        const fac =
+          facilityId === "" || facilityId === null || facilityId === undefined ? null : facilityId;
+        const exp = expiresAt ? new Date(expiresAt) : null;
+        const { row, plaintextKey } = await storage.createIntegrationApiKey({
+          name,
+          scopes,
+          facilityId: fac,
+          expiresAt: exp,
+          createdByUserId: req.user.id,
+        });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: "CREATE_INTEGRATION_API_KEY",
+          resource: "integration_api_keys",
+          resourceId: row.id,
+          details: name,
+        });
+        return res.status(201).json({
+          id: row.id,
+          name: row.name,
+          scopes: row.scopes,
+          facilityId: row.facilityId,
+          expiresAt: row.expiresAt,
+          /** Shown only once — store securely; format: ehr_live_<uuid>_<secret> */
+          apiKey: plaintextKey,
+        });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.get(
+    "/api/admin/integration/api-keys",
+    authMiddleware as any,
+    requireRole("super_admin", "security") as any,
+    async (_req: any, res) => {
+      try {
+        const keys = await storage.listIntegrationApiKeys();
+        return res.json(
+          keys.map((k) => ({
+            id: k.id,
+            name: k.name,
+            scopes: k.scopes,
+            facilityId: k.facilityId,
+            isActive: k.isActive,
+            expiresAt: k.expiresAt,
+            lastUsedAt: k.lastUsedAt,
+            createdAt: k.createdAt,
+          })),
+        );
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  app.patch(
+    "/api/admin/integration/api-keys/:id",
+    authMiddleware as any,
+    requireRole("super_admin", "security") as any,
+    async (req: any, res) => {
+      try {
+        const isActive = req.body?.isActive;
+        if (typeof isActive !== "boolean") {
+          return res.status(400).json({ message: "isActive boolean required" });
+        }
+        const updated = await storage.setIntegrationApiKeyActive(req.params.id, isActive);
+        if (!updated) return res.status(404).json({ message: "API key not found" });
+        await storage.createAuditLog({
+          userId: req.user.id,
+          action: isActive ? "ACTIVATE_INTEGRATION_API_KEY" : "DEACTIVATE_INTEGRATION_API_KEY",
+          resource: "integration_api_keys",
+          resourceId: req.params.id,
+        });
+        return res.json({ id: updated.id, isActive: updated.isActive });
+      } catch (error: any) {
+        return res.status(500).json({ message: error.message });
+      }
+    },
+  );
+
+  registerPatientPortalRoutes(app);
 
   return httpServer;
 }

@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { Link, useLocation, useSearch } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,7 +27,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Shield, Building2, Users, UserPlus, KeyRound, FileText, Pencil } from "lucide-react";
+import { Shield, Building2, Users, UserPlus, KeyRound, FileText, Pencil, ExternalLink } from "lucide-react";
 import { OrganizationConfigPanel } from "@/components/admin/organization-config-panel";
 import { RoleManagementPanel } from "@/components/admin/role-management-panel";
 import { ApplicationConfigPanel } from "@/components/admin/application-config-panel";
@@ -749,6 +749,25 @@ export default function AdminPage() {
         {isSystemsAdministrator ? (
           <TabsContent value="organization" className="mt-0 space-y-4 focus-visible:outline-none">
             <OrganizationConfigPanel token={token} />
+            <Card className="border-dashed bg-muted/15">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Patient portal</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  Choose which read-only sections patients see at <span className="font-mono text-xs">/portal</span> and
+                  edit the welcome message on the Patient portal configuration page (toolbar), not on this tab.
+                </p>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/patient-portal-configuration">
+                    <a className="inline-flex items-center gap-2">
+                      <ExternalLink className="w-4 h-4 shrink-0" />
+                      Open Patient portal configuration
+                    </a>
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
           </TabsContent>
         ) : null}
 

@@ -10,6 +10,7 @@ export const USER_ROLE_LABELS: Record<User["role"], string> = {
   lab_tech: "Lab Tech",
   reception: "Receptionist",
   security: "Systems administrator",
+  pharmacist: "Pharmacist",
 };
 
 /** Role pickers (Admin → create user, etc.) */
@@ -33,5 +34,6 @@ export function headerUserDisplayName(user: {
 }): string {
   if (user.role === "super_admin") return USER_ROLE_LABELS.super_admin;
   if (user.role === "security") return USER_ROLE_LABELS.security;
+  if (user.role === "pharmacist") return USER_ROLE_LABELS.pharmacist;
   return user.fullName?.trim() || user.username;
 }

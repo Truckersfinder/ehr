@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useLocation } from "wouter";
 import { queryClient } from "@/lib/queryClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -15,6 +16,7 @@ import {
   fieldsForPublicConsentQrValidation,
 } from "@shared/consent-patient-signature";
 import { MutedIconBox } from "@/components/muted-icon-box";
+import { publicOrganizationNameFallback, usePatientPortalBranding } from "@/lib/patient-portal-branding";
 import { Heart } from "lucide-react";
 
 type SessionPayload = {
@@ -38,7 +40,10 @@ type SessionPayload = {
 };
 
 export default function PublicClinicalFormFillPage({ token }: { token: string }) {
+  const { t } = useTranslation();
   const [, setLocation] = useLocation();
+  const { data: branding } = usePatientPortalBranding();
+  const publicOrgName = branding?.organizationName ?? publicOrganizationNameFallback();
   const { data, isLoading, error, isError } = useQuery({
     queryKey: ["/api/public/clinical-form-session", token],
     queryFn: () => apiGetJsonPublic<SessionPayload>(`/api/public/clinical-form-session/${encodeURIComponent(token)}`),
@@ -97,7 +102,8 @@ export default function PublicClinicalFormFillPage({ token }: { token: string })
     submitMutation.mutate({ answers: norm.answers, patientId: data.patientId });
   };
 
-  const verb = data?.form.templateKind === "consent" ? "Sign consent" : "Submit form";
+  const verb =
+    data?.form.templateKind === "consent" ? t("publicClinicalForm.verbSign") : t("publicClinicalForm.verbSubmit");
 
   if (isLoading) {
     return (
@@ -108,18 +114,16 @@ export default function PublicClinicalFormFillPage({ token }: { token: string })
   }
 
   if (isError || !data) {
-    const msg =
-      (error as Error)?.message ||
-      "This link is invalid, has expired, or the form was already submitted.";
+    const msg = (error as Error)?.message || t("publicClinicalForm.errorGeneric");
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-muted/30">
         <div className="flex items-center gap-2 mb-6">
           <MutedIconBox icon={Heart} size="sm" />
-          <span className="font-semibold text-sm">Pin Point Health</span>
+          <span className="font-semibold text-sm">{publicOrgName}</span>
         </div>
         <Card className="w-full max-w-md">
           <CardHeader>
-            <CardTitle className="text-base">Form unavailable</CardTitle>
+            <CardTitle className="text-base">{t("publicClinicalForm.formUnavailable")}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">{msg}</p>
@@ -143,7 +147,7 @@ export default function PublicClinicalFormFillPage({ token }: { token: string })
       <div className="mx-auto w-full max-w-lg flex flex-col gap-6">
         <div className="flex items-center gap-2">
           <MutedIconBox icon={Heart} size="sm" />
-          <span className="font-semibold text-sm">Pin Point Health</span>
+          <span className="font-semibold text-sm">{publicOrgName}</span>
         </div>
         <Card>
           <CardHeader>
@@ -172,7 +176,9 @@ export default function PublicClinicalFormFillPage({ token }: { token: string })
             />
             {localError ? <p className="text-sm text-destructive">{localError}</p> : null}
             {submitMutation.isError ? (
-              <p className="text-sm text-destructive">{(submitMutation.error as Error)?.message ?? "Could not submit."}</p>
+              <p className="text-sm text-destructive">
+                {(submitMutation.error as Error)?.message ?? t("publicClinicalForm.submitError")}
+              </p>
             ) : null}
             <Button
               className="w-full sm:w-auto"
@@ -180,7 +186,7 @@ export default function PublicClinicalFormFillPage({ token }: { token: string })
               disabled={submitMutation.isPending}
               data-testid="button-public-submit-clinical-form"
             >
-              {submitMutation.isPending ? "Submitting…" : verb}
+              {submitMutation.isPending ? t("publicClinicalForm.submitting") : verb}
             </Button>
           </CardContent>
         </Card>

@@ -1,4 +1,5 @@
-import { randomBytes } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
+import bcrypt from "bcryptjs";
 import { db, pool } from "./db";
 import { eq, like, ilike, or, desc, and, sql, count, inArray, isNull, isNotNull, gte, asc, sum } from "drizzle-orm";
 import type { SystemsDashboardSnapshot } from "@shared/systems-admin-dashboard";
@@ -8,6 +9,11 @@ import {
   encounters, vitals, appointments, commonVisitReasons, beds, bedAssignments, labOrders, imagingOrders, prescriptions, medicationAdministrations, invoices, billingChargeCatalog, encounterVisitCharges, imagingResults, patientDocuments, auditLogs, clinicalForms, clinicalFormPatientCompletions,
   encounterMedicationAdministrations,
   followUpContacts,
+  integrationApiKeys,
+  integrationWebhookSubscriptions,
+  integrationWebhookDeliveries,
+  integrationExternalMappings,
+  integrationIdempotencyKeys,
   type InsertUser, type User, type InsertFacility, type Facility,
   type InsertPatient, type Patient, type InsertPatientProblem, type PatientProblem,
   type InsertPatientAllergy, type PatientAllergy, type InsertPatientNote, type PatientNote, type InsertFamilyMember, type FamilyMember,
@@ -22,6 +28,9 @@ import {
   type ClinicalForm, type ClinicalFormField, type ClinicalFormPatientCompletion,
   type InsertFollowUpContact, type FollowUpContact,
   type EncounterVisitCharge, type InsertEncounterVisitCharge,
+  type IntegrationApiKey,
+  type IntegrationWebhookSubscription,
+  type IntegrationWebhookDelivery,
 } from "@shared/schema";
 import { BILLING_CHARGE_CATALOG_SEEDS, buildLabOrderBillingChargeSeeds, VISIT_CHARGE_EXTRA_CATALOG_ROWS } from "@shared/billing-charge-seeds";
 
@@ -39,6 +48,9 @@ export interface IStorage {
 
   getPatients(): Promise<Patient[]>;
   getPatient(id: string): Promise<Patient | undefined>;
+  getPatientByPortalInviteToken(token: string): Promise<Patient | undefined>;
+  /** Portal login: MRN exact, or single match on email / portal_access_email (case-insensitive). */
+  findPatientForPortalLogin(mrn: string | null, email: string | null): Promise<Patient | undefined>;
   searchPatients(query: string): Promise<Patient[]>;
   createPatient(p: InsertPatient): Promise<Patient>;
   updatePatient(id: string, data: Partial<InsertPatient>): Promise<Patient | undefined>;
@@ -366,6 +378,96 @@ export interface IStorage {
     hidden: boolean;
     readOnly: boolean;
   }): Promise<void>;
+
+  /** Idempotent DDL for integration tables (safe on existing DBs). */
+  ensureIntegrationTables(): Promise<void>;
+
+  createIntegrationApiKey(args: {
+    name: string;
+    scopes: string[];
+    facilityId?: string | null;
+    expiresAt?: Date | null;
+    createdByUserId: string;
+  }): Promise<{ row: IntegrationApiKey; plaintextKey: string }>;
+
+  getIntegrationApiKeyById(id: string): Promise<IntegrationApiKey | undefined>;
+  listIntegrationApiKeys(): Promise<IntegrationApiKey[]>;
+  setIntegrationApiKeyActive(id: string, isActive: boolean): Promise<IntegrationApiKey | undefined>;
+  touchIntegrationApiKeyLastUsed(id: string): Promise<void>;
+
+  createIntegrationWebhookSubscription(args: {
+    integrationApiKeyId: string;
+    url: string;
+    secret: string;
+    eventTypes: string[];
+  }): Promise<IntegrationWebhookSubscription>;
+  listIntegrationWebhooksForApiKey(integrationApiKeyId: string): Promise<IntegrationWebhookSubscription[]>;
+  deleteIntegrationWebhook(id: string, integrationApiKeyId: string): Promise<boolean>;
+  listActiveWebhookSubscriptionsForEvent(eventType: string): Promise<
+    { subscription: IntegrationWebhookSubscription; integrationApiKeyFacilityId: string | null }[]
+  >;
+
+  enqueueIntegrationWebhookDeliveries(args: {
+    eventType: string;
+    facilityId?: string | null;
+    payload: unknown;
+  }): Promise<number>;
+  claimDueIntegrationWebhookDeliveries(args: {
+    limit: number;
+  }): Promise<
+    {
+      deliveryId: string;
+      subscription: IntegrationWebhookSubscription;
+      payload: unknown;
+      eventType: string;
+      attempts: number;
+    }[]
+  >;
+  markIntegrationWebhookDeliverySuccess(deliveryId: string, statusCode: number): Promise<void>;
+  rescheduleIntegrationWebhookDeliveryFailure(args: {
+    deliveryId: string;
+    statusCode: number | null;
+    error: string;
+    nextAttemptAt: Date;
+  }): Promise<void>;
+
+  upsertIntegrationExternalMapping(args: {
+    resourceType: string;
+    internalId: string;
+    externalSystem: string;
+    externalId: string;
+  }): Promise<void>;
+  findInternalIdByExternalMapping(
+    resourceType: string,
+    externalSystem: string,
+    externalId: string,
+  ): Promise<string | undefined>;
+  listIntegrationExternalMappingsForResource(
+    resourceType: string,
+    internalId: string,
+  ): Promise<{ id: string; externalSystem: string; externalId: string; createdAt: Date | null }[]>;
+  deleteIntegrationExternalMapping(id: string): Promise<void>;
+
+  getIntegrationIdempotencyRecord(
+    integrationApiKeyId: string,
+    idempotencyKey: string,
+  ): Promise<{ requestFingerprint: string; responseStatus: number; responseBody: unknown } | undefined>;
+  insertIntegrationIdempotencyRecord(args: {
+    integrationApiKeyId: string;
+    idempotencyKey: string;
+    requestFingerprint: string;
+    responseStatus: number;
+    responseBody: unknown;
+  }): Promise<void>;
+
+  listPatientsIntegration(args: {
+    facilityId?: string;
+    search?: string;
+    limit: number;
+    offset: number;
+  }): Promise<{ items: Patient[]; total: number }>;
+
+  getAuditLogsIntegration(args: { limit: number; offset: number; since?: Date }): Promise<AuditLog[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -419,6 +521,35 @@ export class DatabaseStorage implements IStorage {
   async getPatient(id: string): Promise<Patient | undefined> {
     const [p] = await db.select().from(patients).where(eq(patients.id, id));
     return p;
+  }
+
+  async getPatientByPortalInviteToken(token: string): Promise<Patient | undefined> {
+    const t = String(token ?? "").trim();
+    if (!t) return undefined;
+    const [p] = await db.select().from(patients).where(eq(patients.portalInviteToken, t));
+    return p;
+  }
+
+  async findPatientForPortalLogin(mrn: string | null, email: string | null): Promise<Patient | undefined> {
+    const m = mrn?.trim();
+    const e = email?.trim().toLowerCase();
+    if (m) {
+      const [p] = await db.select().from(patients).where(eq(patients.mrn, m));
+      return p;
+    }
+    if (!e) return undefined;
+    const list = await db
+      .select()
+      .from(patients)
+      .where(
+        or(
+          sql`lower(trim(coalesce(${patients.email}, ''))) = ${e}`,
+          sql`lower(trim(coalesce(${patients.portalAccessEmail}, ''))) = ${e}`,
+        ),
+      )
+      .limit(5);
+    if (list.length !== 1) return undefined;
+    return list[0];
   }
 
   async searchPatients(query: string): Promise<Patient[]> {
@@ -2472,6 +2603,471 @@ CREATE TABLE IF NOT EXISTS ui_activity_layout (
         })),
       },
     };
+  }
+
+  async ensureIntegrationTables(): Promise<void> {
+    await db.execute(sql.raw(`
+CREATE TABLE IF NOT EXISTS integration_api_keys (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  secret_hash text NOT NULL,
+  scopes jsonb NOT NULL,
+  facility_id varchar,
+  created_by_user_id varchar NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  expires_at timestamptz,
+  last_used_at timestamptz,
+  created_at timestamptz DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS integration_webhook_subscriptions (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+  integration_api_key_id varchar NOT NULL REFERENCES integration_api_keys(id) ON DELETE CASCADE,
+  url text NOT NULL,
+  secret text NOT NULL,
+  event_types jsonb NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS integration_webhook_deliveries (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+  subscription_id varchar NOT NULL REFERENCES integration_webhook_subscriptions(id) ON DELETE CASCADE,
+  event_type varchar(120) NOT NULL,
+  payload jsonb NOT NULL,
+  status varchar(32) NOT NULL DEFAULT 'pending',
+  attempts integer NOT NULL DEFAULT 0,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  last_attempt_at timestamptz,
+  last_error text,
+  last_status_code integer,
+  created_at timestamptz DEFAULT now(),
+  delivered_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS integration_webhook_deliveries_due ON integration_webhook_deliveries (status, next_attempt_at);
+CREATE TABLE IF NOT EXISTS integration_external_mappings (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+  resource_type varchar(64) NOT NULL,
+  internal_id varchar NOT NULL,
+  external_system varchar(128) NOT NULL,
+  external_id varchar(512) NOT NULL,
+  created_at timestamptz DEFAULT now(),
+  CONSTRAINT integration_extmap_system_type_extid UNIQUE (external_system, resource_type, external_id)
+);
+CREATE INDEX IF NOT EXISTS integration_extmap_internal ON integration_external_mappings (resource_type, internal_id);
+CREATE TABLE IF NOT EXISTS integration_idempotency_keys (
+  id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+  integration_api_key_id varchar NOT NULL,
+  idempotency_key varchar(256) NOT NULL,
+  request_fingerprint varchar(128) NOT NULL,
+  response_status integer NOT NULL,
+  response_body jsonb,
+  created_at timestamptz DEFAULT now(),
+  CONSTRAINT integration_idem_key_per_apikey UNIQUE (integration_api_key_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS integration_idem_created ON integration_idempotency_keys (created_at);
+    `));
+  }
+
+  async createIntegrationApiKey(args: {
+    name: string;
+    scopes: string[];
+    facilityId?: string | null;
+    expiresAt?: Date | null;
+    createdByUserId: string;
+  }): Promise<{ row: IntegrationApiKey; plaintextKey: string }> {
+    const id = randomUUID();
+    const secret = randomBytes(32).toString("hex");
+    const plaintextKey = `ehr_live_${id}_${secret}`;
+    const secretHash = bcrypt.hashSync(secret, 10);
+    const [row] = await db
+      .insert(integrationApiKeys)
+      .values({
+        id,
+        name: args.name,
+        secretHash,
+        scopes: args.scopes,
+        facilityId: args.facilityId ?? null,
+        createdByUserId: args.createdByUserId,
+        expiresAt: args.expiresAt ?? null,
+      })
+      .returning();
+    return { row, plaintextKey };
+  }
+
+  async getIntegrationApiKeyById(id: string): Promise<IntegrationApiKey | undefined> {
+    const [row] = await db.select().from(integrationApiKeys).where(eq(integrationApiKeys.id, id));
+    return row;
+  }
+
+  async listIntegrationApiKeys(): Promise<IntegrationApiKey[]> {
+    return db.select().from(integrationApiKeys).orderBy(desc(integrationApiKeys.createdAt));
+  }
+
+  async setIntegrationApiKeyActive(id: string, isActive: boolean): Promise<IntegrationApiKey | undefined> {
+    const [row] = await db
+      .update(integrationApiKeys)
+      .set({ isActive })
+      .where(eq(integrationApiKeys.id, id))
+      .returning();
+    return row;
+  }
+
+  async touchIntegrationApiKeyLastUsed(id: string): Promise<void> {
+    await db
+      .update(integrationApiKeys)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(integrationApiKeys.id, id));
+  }
+
+  async createIntegrationWebhookSubscription(args: {
+    integrationApiKeyId: string;
+    url: string;
+    secret: string;
+    eventTypes: string[];
+  }): Promise<IntegrationWebhookSubscription> {
+    const [row] = await db
+      .insert(integrationWebhookSubscriptions)
+      .values({
+        integrationApiKeyId: args.integrationApiKeyId,
+        url: args.url,
+        secret: args.secret,
+        eventTypes: args.eventTypes,
+      })
+      .returning();
+    return row;
+  }
+
+  async listIntegrationWebhooksForApiKey(integrationApiKeyId: string): Promise<IntegrationWebhookSubscription[]> {
+    return db
+      .select()
+      .from(integrationWebhookSubscriptions)
+      .where(eq(integrationWebhookSubscriptions.integrationApiKeyId, integrationApiKeyId))
+      .orderBy(desc(integrationWebhookSubscriptions.createdAt));
+  }
+
+  async deleteIntegrationWebhook(id: string, integrationApiKeyId: string): Promise<boolean> {
+    const deleted = await db
+      .delete(integrationWebhookSubscriptions)
+      .where(
+        and(
+          eq(integrationWebhookSubscriptions.id, id),
+          eq(integrationWebhookSubscriptions.integrationApiKeyId, integrationApiKeyId),
+        ),
+      )
+      .returning({ id: integrationWebhookSubscriptions.id });
+    return deleted.length > 0;
+  }
+
+  async listActiveWebhookSubscriptionsForEvent(
+    eventType: string,
+  ): Promise<{ subscription: IntegrationWebhookSubscription; integrationApiKeyFacilityId: string | null }[]> {
+    const rows = await db
+      .select({
+        subscription: integrationWebhookSubscriptions,
+        integrationApiKeyFacilityId: integrationApiKeys.facilityId,
+      })
+      .from(integrationWebhookSubscriptions)
+      .innerJoin(integrationApiKeys, eq(integrationWebhookSubscriptions.integrationApiKeyId, integrationApiKeys.id))
+      .where(
+        and(
+          eq(integrationWebhookSubscriptions.isActive, true),
+          eq(integrationApiKeys.isActive, true),
+          or(isNull(integrationApiKeys.expiresAt), gte(integrationApiKeys.expiresAt, new Date())),
+        ),
+      );
+    return rows.filter((r) => {
+      const types = r.subscription.eventTypes as string[];
+      return Array.isArray(types) && types.includes(eventType);
+    });
+  }
+
+  async enqueueIntegrationWebhookDeliveries(args: {
+    eventType: string;
+    facilityId?: string | null;
+    payload: unknown;
+  }): Promise<number> {
+    const subs = await this.listActiveWebhookSubscriptionsForEvent(args.eventType);
+    const target = subs.filter((r) => {
+      const fac = r.integrationApiKeyFacilityId;
+      return !fac || args.facilityId == null || fac === args.facilityId;
+    });
+    if (target.length === 0) return 0;
+
+    const rows = target.map((t) => ({
+      subscriptionId: t.subscription.id,
+      eventType: args.eventType,
+      payload: args.payload as any,
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: new Date(),
+    }));
+    await db.insert(integrationWebhookDeliveries).values(rows as any);
+    return target.length;
+  }
+
+  async claimDueIntegrationWebhookDeliveries(args: { limit: number }): Promise<
+    {
+      deliveryId: string;
+      subscription: IntegrationWebhookSubscription;
+      payload: unknown;
+      eventType: string;
+      attempts: number;
+    }[]
+  > {
+    const { rows } = await pool.query<{
+      delivery_id: string;
+      subscription_id: string;
+      event_type: string;
+      payload: any;
+      attempts: number;
+    }>(
+      `WITH claimed AS (
+         SELECT id
+         FROM integration_webhook_deliveries
+         WHERE status = 'pending' AND next_attempt_at <= NOW()
+         ORDER BY next_attempt_at ASC
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED
+       )
+       UPDATE integration_webhook_deliveries d
+       SET status = 'in_progress',
+           attempts = attempts + 1,
+           last_attempt_at = NOW()
+       FROM claimed
+       WHERE d.id = claimed.id
+       RETURNING d.id as delivery_id, d.subscription_id, d.event_type, d.payload, d.attempts`,
+      [args.limit],
+    );
+    if (rows.length === 0) return [];
+
+    const subIds = rows.map((r) => r.subscription_id);
+    const { rows: subRows } = await pool.query<{
+      id: string;
+      integration_api_key_id: string;
+      url: string;
+      secret: string;
+      event_types: any;
+      is_active: boolean;
+      created_at: Date;
+    }>(
+      `SELECT id, integration_api_key_id, url, secret, event_types, is_active, created_at
+       FROM integration_webhook_subscriptions
+       WHERE id = ANY($1::varchar[])`,
+      [subIds],
+    );
+    const byId = new Map(subRows.map((s) => [s.id, s]));
+
+    return rows
+      .map((d) => {
+        const s = byId.get(d.subscription_id);
+        if (!s) return null;
+        const subscription: IntegrationWebhookSubscription = {
+          id: s.id,
+          integrationApiKeyId: s.integration_api_key_id,
+          url: s.url,
+          secret: s.secret,
+          eventTypes: s.event_types as any,
+          isActive: s.is_active,
+          createdAt: s.created_at,
+        } as any;
+        return {
+          deliveryId: d.delivery_id,
+          subscription,
+          payload: d.payload,
+          eventType: d.event_type,
+          attempts: d.attempts,
+        };
+      })
+      .filter(Boolean) as any;
+  }
+
+  async markIntegrationWebhookDeliverySuccess(deliveryId: string, statusCode: number): Promise<void> {
+    await pool.query(
+      `UPDATE integration_webhook_deliveries
+       SET status = 'delivered', delivered_at = NOW(), last_status_code = $2
+       WHERE id = $1`,
+      [deliveryId, statusCode],
+    );
+  }
+
+  async rescheduleIntegrationWebhookDeliveryFailure(args: {
+    deliveryId: string;
+    statusCode: number | null;
+    error: string;
+    nextAttemptAt: Date;
+  }): Promise<void> {
+    await pool.query(
+      `UPDATE integration_webhook_deliveries
+       SET status = 'pending',
+           next_attempt_at = $2,
+           last_status_code = $3,
+           last_error = $4
+       WHERE id = $1`,
+      [args.deliveryId, args.nextAttemptAt.toISOString(), args.statusCode, args.error.slice(0, 4000)],
+    );
+  }
+
+  async upsertIntegrationExternalMapping(args: {
+    resourceType: string;
+    internalId: string;
+    externalSystem: string;
+    externalId: string;
+  }): Promise<void> {
+    await db
+      .insert(integrationExternalMappings)
+      .values({
+        resourceType: args.resourceType,
+        internalId: args.internalId,
+        externalSystem: args.externalSystem,
+        externalId: args.externalId,
+      })
+      .onConflictDoUpdate({
+        target: [
+          integrationExternalMappings.externalSystem,
+          integrationExternalMappings.resourceType,
+          integrationExternalMappings.externalId,
+        ],
+        set: { internalId: args.internalId },
+      });
+  }
+
+  async findInternalIdByExternalMapping(
+    resourceType: string,
+    externalSystem: string,
+    externalId: string,
+  ): Promise<string | undefined> {
+    const [row] = await db
+      .select({ internalId: integrationExternalMappings.internalId })
+      .from(integrationExternalMappings)
+      .where(
+        and(
+          eq(integrationExternalMappings.resourceType, resourceType),
+          eq(integrationExternalMappings.externalSystem, externalSystem),
+          eq(integrationExternalMappings.externalId, externalId),
+        ),
+      );
+    return row?.internalId;
+  }
+
+  async listIntegrationExternalMappingsForResource(
+    resourceType: string,
+    internalId: string,
+  ): Promise<{ id: string; externalSystem: string; externalId: string; createdAt: Date | null }[]> {
+    return db
+      .select({
+        id: integrationExternalMappings.id,
+        externalSystem: integrationExternalMappings.externalSystem,
+        externalId: integrationExternalMappings.externalId,
+        createdAt: integrationExternalMappings.createdAt,
+      })
+      .from(integrationExternalMappings)
+      .where(
+        and(eq(integrationExternalMappings.resourceType, resourceType), eq(integrationExternalMappings.internalId, internalId)),
+      )
+      .orderBy(desc(integrationExternalMappings.createdAt));
+  }
+
+  async deleteIntegrationExternalMapping(id: string): Promise<void> {
+    await db.delete(integrationExternalMappings).where(eq(integrationExternalMappings.id, id));
+  }
+
+  async getIntegrationIdempotencyRecord(
+    integrationApiKeyId: string,
+    idempotencyKey: string,
+  ): Promise<{ requestFingerprint: string; responseStatus: number; responseBody: unknown } | undefined> {
+    const [row] = await db
+      .select({
+        requestFingerprint: integrationIdempotencyKeys.requestFingerprint,
+        responseStatus: integrationIdempotencyKeys.responseStatus,
+        responseBody: integrationIdempotencyKeys.responseBody,
+      })
+      .from(integrationIdempotencyKeys)
+      .where(
+        and(
+          eq(integrationIdempotencyKeys.integrationApiKeyId, integrationApiKeyId),
+          eq(integrationIdempotencyKeys.idempotencyKey, idempotencyKey),
+        ),
+      );
+    if (!row) return undefined;
+    return {
+      requestFingerprint: row.requestFingerprint,
+      responseStatus: row.responseStatus,
+      responseBody: row.responseBody,
+    };
+  }
+
+  async insertIntegrationIdempotencyRecord(args: {
+    integrationApiKeyId: string;
+    idempotencyKey: string;
+    requestFingerprint: string;
+    responseStatus: number;
+    responseBody: unknown;
+  }): Promise<void> {
+    await db.insert(integrationIdempotencyKeys).values({
+      integrationApiKeyId: args.integrationApiKeyId,
+      idempotencyKey: args.idempotencyKey,
+      requestFingerprint: args.requestFingerprint,
+      responseStatus: args.responseStatus,
+      responseBody: args.responseBody as any,
+    });
+
+    // Best-effort retention: keep idempotency records for a short window.
+    const days = Math.min(
+      Math.max(parseInt(process.env.INTEGRATION_IDEMPOTENCY_TTL_DAYS ?? "7", 10) || 7, 1),
+      90,
+    );
+    await db.execute(
+      sql`DELETE FROM integration_idempotency_keys WHERE created_at < NOW() - (${days} || ' days')::interval`,
+    );
+  }
+
+  async listPatientsIntegration(args: {
+    facilityId?: string;
+    search?: string;
+    limit: number;
+    offset: number;
+  }): Promise<{ items: Patient[]; total: number }> {
+    const conditions = [];
+    if (args.facilityId) {
+      conditions.push(eq(patients.facilityId, args.facilityId));
+    }
+    const q = (args.search ?? "").trim();
+    if (q.length >= 1) {
+      const pattern = `%${q.replace(/%/g, "\\%")}%`;
+      conditions.push(
+        or(
+          ilike(patients.mrn, pattern),
+          ilike(patients.firstName, pattern),
+          ilike(patients.lastName, pattern),
+          ilike(patients.email, pattern),
+        ),
+      );
+    }
+    const where = conditions.length ? and(...conditions) : undefined;
+
+    const [totalRow] = await db.select({ c: count() }).from(patients).where(where);
+    const items = await db
+      .select()
+      .from(patients)
+      .where(where)
+      .orderBy(desc(patients.createdAt))
+      .limit(args.limit)
+      .offset(args.offset);
+    return { items, total: Number(totalRow?.c ?? 0) };
+  }
+
+  async getAuditLogsIntegration(args: { limit: number; offset: number; since?: Date }): Promise<AuditLog[]> {
+    const parts = [];
+    if (args.since) {
+      parts.push(gte(auditLogs.createdAt, args.since));
+    }
+    const where = parts.length ? and(...parts) : undefined;
+    return db
+      .select()
+      .from(auditLogs)
+      .where(where)
+      .orderBy(desc(auditLogs.createdAt))
+      .limit(args.limit)
+      .offset(args.offset);
   }
 }
 

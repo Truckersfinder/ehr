@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { MutedIconBox } from "@/components/muted-icon-box";
 import { useLocation } from "wouter";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { publicOrganizationNameFallback, usePatientPortalBranding } from "@/lib/patient-portal-branding";
 
 export default function LoginPage() {
   const { t } = useTranslation();
@@ -20,6 +21,12 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const { data: branding } = usePatientPortalBranding();
+  const publicOrgName = branding?.organizationName ?? publicOrganizationNameFallback();
+
+  useEffect(() => {
+    document.title = t("app.documentTitleEhr", { name: publicOrgName });
+  }, [publicOrgName, t]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -57,7 +64,7 @@ export default function LoginPage() {
         <div className="flex items-center gap-3 mb-6 justify-center">
           <MutedIconBox icon={Heart} size="lg" className="shadow-sm" />
           <div className="text-center">
-            <h1 className="text-2xl font-bold tracking-tight leading-tight">Pin Point Health</h1>
+            <h1 className="text-2xl font-bold tracking-tight leading-tight">{publicOrgName}</h1>
             <p className="text-muted-foreground text-sm">{t("auth.brandSubtitle")}</p>
           </div>
         </div>
