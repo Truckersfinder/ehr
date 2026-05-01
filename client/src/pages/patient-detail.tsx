@@ -32,6 +32,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useOrgTimeZone } from "@/hooks/use-org-timezone";
+import { useTranslation } from "react-i18next";
 import {
   Pill, FileText, History, ShieldCheck, ListChecks, Plus, ClipboardList, FileCheck, FlaskConical, ImageIcon, Mic, Sparkles, Pencil, Activity, AlertTriangle, Loader2, LayoutGrid, User, CalendarDays, Phone, PhoneCall, Mail, MapPin, Heart, ChevronLeft, ChevronRight, Trash2, ScrollText, Paperclip,
 } from "lucide-react";
@@ -90,11 +91,18 @@ import { queryKeys } from "@/lib/query-keys";
 import { getRecordDocumentTypeId, type PatientDocumentRow } from "@shared/patient-document-normalize";
 import { frequencyToIntervalMinutes } from "@/lib/medication-frequency";
 
-const ROUTE_OPTIONS: { id: "oral" | "injection" | "iv"; label: string }[] = [
-  { id: "oral", label: "Oral" },
-  { id: "injection", label: "Injection" },
-  { id: "iv", label: "Intravenous (IV)" },
-];
+const ROUTE_OPTIONS: { id: "oral" | "injection" | "iv" }[] = [{ id: "oral" }, { id: "injection" }, { id: "iv" }];
+
+function routeLabel(id: "oral" | "injection" | "iv", t: (key: string) => string): string {
+  switch (id) {
+    case "oral":
+      return t("pages.patientDetail.routeOral");
+    case "injection":
+      return t("pages.patientDetail.routeInjection");
+    case "iv":
+      return t("pages.patientDetail.routeIv");
+  }
+}
 
 const ALLERGY_REACTION_TYPES = [
   "Anaphylaxis",
@@ -109,6 +117,35 @@ const ALLERGY_REACTION_TYPES = [
   "Other",
   "Not specified",
 ];
+
+function allergyReactionTypeLabel(raw: string, t: (key: string) => string): string {
+  switch (raw) {
+    case "Anaphylaxis":
+      return t("pages.patientDetail.reactionTypeAnaphylaxis");
+    case "Angioedema":
+      return t("pages.patientDetail.reactionTypeAngioedema");
+    case "Rash":
+      return t("pages.patientDetail.reactionTypeRash");
+    case "Hives / Urticaria":
+      return t("pages.patientDetail.reactionTypeHivesUrticaria");
+    case "Bronchospasm":
+      return t("pages.patientDetail.reactionTypeBronchospasm");
+    case "Gastrointestinal":
+      return t("pages.patientDetail.reactionTypeGastrointestinal");
+    case "Dermatitis":
+      return t("pages.patientDetail.reactionTypeDermatitis");
+    case "Rhinitis":
+      return t("pages.patientDetail.reactionTypeRhinitis");
+    case "Conjunctivitis":
+      return t("pages.patientDetail.reactionTypeConjunctivitis");
+    case "Other":
+      return t("pages.patientDetail.other");
+    case "Not specified":
+      return t("pages.patientDetail.notSpecified");
+    default:
+      return raw;
+  }
+}
 
 const BLOOD_GROUP_OPTIONS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] as const;
 
@@ -152,6 +189,7 @@ export default function PatientDetailPage() {
   const { user, token } = useAuth();
   const orgTz = useOrgTimeZone();
   const { toast } = useToast();
+  const { t } = useTranslation();
   const id = params?.id;
   const authToken = token ?? getStoredAuthToken();
 
@@ -239,7 +277,7 @@ export default function PatientDetailPage() {
   const [discontinueReason, setDiscontinueReason] = useState("");
   const [mainTab, setMainTab] = useState("overview");
   const isClinicianOrNurse = user?.role === "clinician" || user?.role === "nurse";
-  /** Full navigator only after starting a visit from Schedule (session flag). Browse/search entry = Review only. */
+  /** Full Navigator only after starting a visit from Schedule (session flag). Browse/search entry = Review only. */
   const [clinVisitDocUnlocked, setClinVisitDocUnlocked] = useState(false);
   /** Admission documentation unlock: clinician/nurse opened an active admission from the admitted list. */
   const [admissionDocUnlocked, setAdmissionDocUnlocked] = useState(false);
@@ -429,7 +467,11 @@ export default function PatientDetailPage() {
         if (cancelled) return;
         if (enc.patientId !== id) {
           setBillingReviewEncounterValid(false);
-          toast({ title: "Invalid link", description: "This encounter is not for this patient.", variant: "destructive" });
+          toast({
+            title: t("pages.patientDetail.invalidLinkTitle"),
+            description: t("pages.patientDetail.invalidEncounterLinkDesc"),
+            variant: "destructive",
+          });
           return;
         }
         sessionStorage.setItem("ehr_active_encounter_id", enc.id);
@@ -440,8 +482,8 @@ export default function PatientDetailPage() {
         if (!cancelled) {
           setBillingReviewEncounterValid(false);
           toast({
-            title: "Could not open visit",
-            description: "Encounter not found or you do not have access.",
+            title: t("pages.patientDetail.couldNotOpenVisitTitle"),
+            description: t("pages.patientDetail.couldNotOpenVisitDesc"),
             variant: "destructive",
           });
         }
@@ -535,7 +577,7 @@ export default function PatientDetailPage() {
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
-          throw new Error(err.message || "Could not open admission documentation");
+          throw new Error(err.message || t("pages.patientDetail.couldNotOpenAdmissionDocumentation"));
         }
         const data = (await res.json()) as { encounter: { id: string }; admissionId: string };
         sessionStorage.setItem("ehr_active_encounter_id", data.encounter.id);
@@ -554,8 +596,8 @@ export default function PatientDetailPage() {
         setMainTab(docTab);
         pushTabInUrl(docTab);
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : "Could not open admission documentation";
-        toast({ title: "Error", description: msg, variant: "destructive" });
+        const msg = e instanceof Error ? e.message : t("pages.patientDetail.couldNotOpenAdmissionDocumentation");
+        toast({ title: t("common.error"), description: msg, variant: "destructive" });
         stripAdmissionQueryParams();
       }
     })();
@@ -603,14 +645,22 @@ export default function PatientDetailPage() {
           appt = await apiGetJson<Appointment>(`/api/appointments/${appointmentId}`, authToken);
         } catch {
           if (!cancelled) {
-            toast({ title: "Could not load appointment", description: "Request failed", variant: "destructive" });
+            toast({
+              title: t("pages.patientDetail.couldNotLoadAppointmentTitle"),
+              description: t("pages.patientDetail.requestFailed"),
+              variant: "destructive",
+            });
             stripScheduleQueryParams();
           }
           return;
         }
         if (cancelled) return;
         if (appt.patientId !== id) {
-          toast({ title: "Invalid link", description: "This appointment is not for this patient.", variant: "destructive" });
+          toast({
+            title: t("pages.patientDetail.invalidLinkTitle"),
+            description: t("pages.patientDetail.invalidAppointmentLinkDesc"),
+            variant: "destructive",
+          });
           stripScheduleQueryParams();
           return;
         }
@@ -621,8 +671,8 @@ export default function PatientDetailPage() {
             if (!cancelled) setReopenVisitPrompt({ appointmentId });
           } else {
             toast({
-              title: "Visit already signed",
-              description: "Opening the chart in review mode.",
+              title: t("pages.patientDetail.visitAlreadySignedTitle"),
+              description: t("pages.patientDetail.openingChartInReviewModeDesc"),
             });
             clearClinicianVisitDocumentationSession();
             setClinVisitDocUnlocked(false);
@@ -640,9 +690,9 @@ export default function PatientDetailPage() {
           );
         } catch (e) {
           if (!cancelled) {
-            const message = e instanceof Error ? e.message : "Request failed";
+            const message = e instanceof Error ? e.message : t("pages.patientDetail.requestFailed");
             toast({
-              title: "Could not start encounter",
+              title: t("pages.patientDetail.couldNotStartEncounterTitle"),
               description: message,
               variant: "destructive",
             });
@@ -659,12 +709,12 @@ export default function PatientDetailPage() {
         window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
         queryClient.invalidateQueries({ queryKey: queryKeys.encounters.root });
         queryClient.invalidateQueries({ queryKey: queryKeys.appointments.root });
-        toast({ title: "Encounter started", description: "Visit is in progress." });
+        toast({ title: t("pages.patientDetail.encounterStartedTitle"), description: t("pages.patientDetail.visitInProgressDesc") });
         stripScheduleQueryParams();
       } catch (e: unknown) {
         if (!cancelled) {
-          const message = e instanceof Error ? e.message : "Failed to start encounter";
-          toast({ title: "Error", description: message, variant: "destructive" });
+          const message = e instanceof Error ? e.message : t("pages.patientDetail.failedToStartEncounter");
+          toast({ title: t("common.error"), description: message, variant: "destructive" });
           const url = new URL(window.location.href);
           url.searchParams.delete("fromSchedule");
           url.searchParams.delete("appointmentId");
@@ -709,10 +759,10 @@ export default function PatientDetailPage() {
       window.setTimeout(() => {
         skipReopenDeclineRef.current = false;
       }, 0);
-      toast({ title: "Visit reopened", description: "You can edit visit documentation again." });
+      toast({ title: t("pages.patientDetail.visitReopenedTitle"), description: t("pages.patientDetail.canEditVisitDocumentationAgainDesc") });
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Could not reopen visit";
-      toast({ title: "Error", description: message, variant: "destructive" });
+      const message = e instanceof Error ? e.message : t("pages.patientDetail.couldNotReopenVisit");
+      toast({ title: t("common.error"), description: message, variant: "destructive" });
     } finally {
       setReopenVisitLoading(false);
     }
@@ -756,7 +806,7 @@ export default function PatientDetailPage() {
     queryKey: ["/api/patients", id, "problems"],
     queryFn: async () => {
       const res = await fetch(`/api/patients/${id}/problems`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error(t("common.error"));
       return res.json();
     },
     enabled: !!id,
@@ -766,7 +816,7 @@ export default function PatientDetailPage() {
     queryKey: ["/api/patients", id, "notes"],
     queryFn: async () => {
       const res = await fetch(`/api/patients/${id}/notes`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error(t("common.error"));
       return res.json();
     },
     enabled: !!id,
@@ -776,7 +826,7 @@ export default function PatientDetailPage() {
     queryKey: ["/api/patients", id, "vitals"],
     queryFn: async () => {
       const res = await fetch(`/api/patients/${id}/vitals`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error(t("common.error"));
       return res.json();
     },
     enabled: !!id,
@@ -788,7 +838,7 @@ export default function PatientDetailPage() {
     queryKey: ["/api/patients", id, "allergies"],
     queryFn: async () => {
       const res = await fetch(`/api/patients/${id}/allergies`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error(t("common.error"));
       return res.json();
     },
     enabled: !!id,
@@ -798,7 +848,7 @@ export default function PatientDetailPage() {
     queryKey: ["/api/patients", id, "family-history"],
     queryFn: async () => {
       const res = await fetch(`/api/patients/${id}/family-history`, { headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error(t("common.error"));
       return res.json();
     },
     enabled: !!id,
@@ -812,7 +862,7 @@ export default function PatientDetailPage() {
       apiGetJson<{ id: string; fullName: string; username?: string }[]>("/api/users", authToken),
     enabled: !!authToken,
   });
-  const prescriberNameById = new Map(users.map((u) => [u.id, u.fullName || u.username || "Unknown user"]));
+  const prescriberNameById = new Map(users.map((u) => [u.id, u.fullName || u.username || t("pages.patientDetail.unknownUser")]));
 
   const { data: labOrders = [] } = useQuery<LabOrder[]>({
     queryKey: id ? queryKeys.labOrders.list(id) : queryKeys.labOrders.root,
@@ -874,14 +924,14 @@ export default function PatientDetailPage() {
           queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "problems"] });
           return { id: "", problem: payload.problem, status: payload.status ?? "active", createdAt: new Date().toISOString() };
         }
-        throw new Error(`Server error (${res.status}). Open the app at http://localhost:3000 so API and UI use the same origin.`);
+        throw new Error(t("pages.patientDetail.serverErrorSameOrigin", { status: res.status }));
       }
-      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed");
+      if (!res.ok) throw new Error((data as { message?: string }).message || t("pages.patientDetail.requestFailed"));
       return data as { id: string; problem: string; status: string; createdAt: string };
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "problems"] });
-      toast({ title: variables.status === "past" ? "Past problem added" : "Problem added" });
+      toast({ title: variables.status === "past" ? t("pages.patientDetail.pastProblemAdded") : t("pages.patientDetail.problemAdded") });
       setAddProblemOpen(false);
       setNewProblemText("");
       setNewProblemStartDate("");
@@ -891,7 +941,7 @@ export default function PatientDetailPage() {
       setNewPastProblemStartDate("");
       setNewPastProblemResolution("resolved");
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const updateProblemMutation = useMutation({
@@ -908,19 +958,19 @@ export default function PatientDetailPage() {
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(res.ok ? "Invalid response" : `Server error (${res.status}).`);
+        throw new Error(res.ok ? t("pages.patientDetail.invalidResponse") : t("pages.patientDetail.serverError", { status: res.status }));
       }
-      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed");
+      if (!res.ok) throw new Error((data as { message?: string }).message || t("pages.patientDetail.requestFailed"));
       return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "problems"] });
-      toast({ title: "Problem updated" });
+      toast({ title: t("pages.patientDetail.problemUpdated") });
       setEditProblemOpen(false);
       setEditProblem(null);
       setEditProblemForm({ problemText: "", problemStartDate: "", symptoms: "", resolution: "resolved" });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const resolveProblemMutation = useMutation({
@@ -935,16 +985,16 @@ export default function PatientDetailPage() {
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(res.ok ? "Invalid response" : `Server error (${res.status}).`);
+        throw new Error(res.ok ? t("pages.patientDetail.invalidResponse") : t("pages.patientDetail.serverError", { status: res.status }));
       }
-      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed");
+      if (!res.ok) throw new Error((data as { message?: string }).message || t("pages.patientDetail.requestFailed"));
       return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "problems"] });
-      toast({ title: "Problem marked as resolved and moved to History" });
+      toast({ title: t("pages.patientDetail.problemResolvedMovedToHistory") });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const addFamilyMemberMutation = useMutation({
@@ -959,20 +1009,24 @@ export default function PatientDetailPage() {
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(res.ok ? "Invalid response from server" : `Server error (${res.status}). Ensure the app is running on the same origin (e.g. http://localhost:3000).`);
+        throw new Error(
+          res.ok
+            ? t("pages.patientDetail.invalidResponseFromServer")
+            : t("pages.patientDetail.serverErrorEnsureSameOrigin", { status: res.status }),
+        );
       }
-      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed");
+      if (!res.ok) throw new Error((data as { message?: string }).message || t("pages.patientDetail.requestFailed"));
       return data as { id: string; patientId: string; relationship: string; createdAt: string };
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "family-members"] });
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "family-history"] });
-      toast({ title: "Family member added" });
+      toast({ title: t("pages.patientDetail.familyMemberAdded") });
       setAddFamilyMemberOpen(false);
       setNewFamilyRelationship("");
       setNewFamilyRelationshipOther("");
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const addFamilyConditionMutation = useMutation({
@@ -987,21 +1041,23 @@ export default function PatientDetailPage() {
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(res.ok ? "Invalid response" : `Server error (${res.status}). Open the app at http://localhost:3000.`);
+        throw new Error(
+          res.ok ? t("pages.patientDetail.invalidResponse") : t("pages.patientDetail.serverErrorSameOriginShort", { status: res.status }),
+        );
       }
-      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed");
+      if (!res.ok) throw new Error((data as { message?: string }).message || t("pages.patientDetail.requestFailed"));
       return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "family-history"] });
-      toast({ title: "Condition added" });
+      toast({ title: t("pages.patientDetail.conditionAdded") });
       setAddConditionOpen(false);
       setAddConditionFamilyMember(null);
       setNewConditionSelect("");
       setNewConditionOther("");
       setNewConditionNotes("");
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const NOTE_TYPES = ["Progress Note", "SOAP Note", "Nursing Note", "H&P", "Discharge Summary", "Consult Note", "Procedure Note", "Admission Note"];
@@ -1065,11 +1121,15 @@ export default function PatientDetailPage() {
       noteRecognitionRef.current?.stop();
     } else {
       if (!noteRecognitionRef.current) {
-        toast({ title: "Dictation not supported", description: "Use a browser that supports speech recognition (e.g. Chrome).", variant: "destructive" });
+        toast({
+          title: t("pages.patientDetail.dictationNotSupportedTitle"),
+          description: t("pages.patientDetail.dictationNotSupportedDesc"),
+          variant: "destructive",
+        });
         return;
       }
       noteRecognitionRef.current.start();
-      toast({ title: "Listening...", description: "Speak into the microphone. Click the mic again to stop." });
+      toast({ title: t("pages.patientDetail.listeningTitle"), description: t("pages.patientDetail.listeningDesc") });
     }
   };
 
@@ -1128,11 +1188,20 @@ export default function PatientDetailPage() {
         body: JSON.stringify({ text: newNoteContent, noteKind: newNoteType }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message || "AI suggestion failed");
+      if (!res.ok) throw new Error(data.message || t("pages.patientDetail.aiSuggestionFailed"));
       if (data.suggested) setNewNoteContent(data.suggested);
-      else toast({ title: "No suggestion", description: "AI did not return text.", variant: "destructive" });
+      else
+        toast({
+          title: t("pages.patientDetail.noSuggestionTitle"),
+          description: t("pages.patientDetail.aiDidNotReturnText"),
+          variant: "destructive",
+        });
     } catch (e) {
-      toast({ title: "AI help unavailable", description: e instanceof Error ? e.message : "Could not get suggestion.", variant: "destructive" });
+      toast({
+        title: t("pages.patientDetail.aiHelpUnavailableTitle"),
+        description: e instanceof Error ? e.message : t("pages.patientDetail.couldNotGetSuggestion"),
+        variant: "destructive",
+      });
     } finally {
       setNoteAiLoading(false);
     }
@@ -1153,8 +1222,8 @@ export default function PatientDetailPage() {
         });
       } catch (e) {
         const msg = e instanceof Error && e.message === "Failed to fetch"
-          ? "Cannot reach the server. Make sure the app is running (npm run dev) and you're using the same URL (e.g. http://localhost:3000 or the port shown in the terminal)."
-          : (e instanceof Error ? e.message : "Network error");
+          ? t("pages.patientDetail.cannotReachServerLong")
+          : (e instanceof Error ? e.message : t("pages.patientDetail.networkError"));
         throw new Error(msg);
       }
       const text = await res.text();
@@ -1162,15 +1231,15 @@ export default function PatientDetailPage() {
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(res.ok ? "Invalid response" : `Server error (${res.status}).`);
+        throw new Error(res.ok ? t("pages.patientDetail.invalidResponse") : t("pages.patientDetail.serverError", { status: res.status }));
       }
-      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed to sign note");
+      if (!res.ok) throw new Error((data as { message?: string }).message || t("pages.patientDetail.failedToSignNote"));
       return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "notes"] });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Note signed and saved" });
+      toast({ title: t("pages.patientDetail.noteSignedAndSaved") });
       closeNotePanel();
       if (pendingLeavePath) {
         const next = pendingLeavePath;
@@ -1178,7 +1247,7 @@ export default function PatientDetailPage() {
         navigate(next);
       }
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const updateNoteMutation = useMutation({
@@ -1199,8 +1268,8 @@ export default function PatientDetailPage() {
         });
       } catch (e) {
         const msg = e instanceof Error && e.message === "Failed to fetch"
-          ? "Cannot reach the server. Make sure the app is running (npm run dev) and you're using the same URL."
-          : (e instanceof Error ? e.message : "Network error");
+          ? t("pages.patientDetail.cannotReachServerShort")
+          : (e instanceof Error ? e.message : t("pages.patientDetail.networkError"));
         throw new Error(msg);
       }
       if (!res.ok) {
@@ -1208,16 +1277,16 @@ export default function PatientDetailPage() {
         try {
           data = await res.json();
         } catch {
-          throw new Error(`Server error (${res.status})`);
+          throw new Error(t("pages.patientDetail.serverError", { status: res.status }));
         }
-        throw new Error(data.message || "Failed to update note");
+        throw new Error(data.message || t("pages.patientDetail.failedToUpdateNote"));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "notes"] });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Note updated" });
+      toast({ title: t("pages.patientDetail.noteUpdated") });
       closeNotePanel();
       if (pendingLeavePath) {
         const next = pendingLeavePath;
@@ -1225,12 +1294,12 @@ export default function PatientDetailPage() {
         navigate(next);
       }
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const saveIncompleteNoteMutation = useMutation({
     mutationFn: async (payload: { content: string; noteKind: string } | { noteId: string; content: string }) => {
-      const networkErrorMsg = "Cannot reach the server. Make sure the app is running (npm run dev) and you're using the same URL.";
+      const networkErrorMsg = t("pages.patientDetail.cannotReachServerShort");
       if ("noteId" in payload) {
         let res: Response;
         try {
@@ -1240,16 +1309,16 @@ export default function PatientDetailPage() {
             body: JSON.stringify({ content: payload.content, saveAsIncomplete: true }),
           });
         } catch (e) {
-          throw new Error(e instanceof Error && e.message === "Failed to fetch" ? networkErrorMsg : (e instanceof Error ? e.message : "Network error"));
+          throw new Error(e instanceof Error && e.message === "Failed to fetch" ? networkErrorMsg : (e instanceof Error ? e.message : t("pages.patientDetail.networkError")));
         }
         if (!res.ok) {
           let data: { message?: string };
           try {
             data = await res.json();
           } catch {
-            throw new Error("Server error");
+            throw new Error(t("pages.patientDetail.serverErrorNoStatus"));
           }
-          throw new Error(data.message || "Failed to save note");
+          throw new Error(data.message || t("pages.patientDetail.failedToSaveNote"));
         }
         return res.json();
       }
@@ -1266,22 +1335,22 @@ export default function PatientDetailPage() {
           }),
         });
       } catch (e) {
-        throw new Error(e instanceof Error && e.message === "Failed to fetch" ? networkErrorMsg : (e instanceof Error ? e.message : "Network error"));
+        throw new Error(e instanceof Error && e.message === "Failed to fetch" ? networkErrorMsg : (e instanceof Error ? e.message : t("pages.patientDetail.networkError")));
       }
       const text = await res.text();
       let data: { message?: string } | unknown;
       try {
         data = text ? JSON.parse(text) : {};
       } catch {
-        throw new Error(res.ok ? "Invalid response" : "Server error");
+        throw new Error(res.ok ? t("pages.patientDetail.invalidResponse") : t("pages.patientDetail.serverErrorNoStatus"));
       }
-      if (!res.ok) throw new Error((data as { message?: string }).message || "Failed to save note");
+      if (!res.ok) throw new Error((data as { message?: string }).message || t("pages.patientDetail.failedToSaveNote"));
       return data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "notes"] });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Note saved as incomplete" });
+      toast({ title: t("pages.patientDetail.noteSavedAsIncomplete") });
       closeNotePanel();
       if (pendingLeavePath) {
         const next = pendingLeavePath;
@@ -1289,7 +1358,7 @@ export default function PatientDetailPage() {
         navigate(next);
       }
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const recordVitalsMutation = useMutation({
@@ -1311,7 +1380,7 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message || "Failed to record vitals");
+        throw new Error(err.message || t("pages.patientDetail.failedToRecordVitals"));
       }
       return res.json();
     },
@@ -1319,10 +1388,10 @@ export default function PatientDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "vitals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "latest-vitals"] });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Vitals recorded" });
+      toast({ title: t("pages.patientDetail.vitalsRecorded") });
       setVitalsForm({ temperature: "", bloodPressureSystolic: "", bloodPressureDiastolic: "", heartRate: "", respiratoryRate: "", oxygenSaturation: "", weight: "", height: "" });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const updateVitalsMutation = useMutation({
@@ -1344,7 +1413,7 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message || "Failed to update vitals");
+        throw new Error(err.message || t("pages.patientDetail.failedToUpdateVitals"));
       }
       return res.json();
     },
@@ -1352,11 +1421,11 @@ export default function PatientDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "vitals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "latest-vitals"] });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Vitals updated" });
+      toast({ title: t("pages.patientDetail.vitalsUpdated") });
       setEditVitalsOpen(false);
       setEditVitals(null);
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const updateBloodGroupMutation = useMutation({
@@ -1368,16 +1437,16 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { message?: string }).message || "Failed to update blood group");
+        throw new Error((err as { message?: string }).message || t("pages.patientDetail.failedToUpdateBloodGroup"));
       }
       return normalizePatientRow(await res.json());
     },
     onSuccess: (updatedPatient) => {
       queryClient.setQueryData<Patient>(["/api/patients", id], updatedPatient);
       void queryClient.invalidateQueries({ queryKey: queryKeys.patients.root });
-      toast({ title: "Blood group updated" });
+      toast({ title: t("pages.patientDetail.bloodGroupUpdated") });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const addAllergyMutation = useMutation({
@@ -1388,7 +1457,7 @@ export default function PatientDetailPage() {
         body: JSON.stringify({ ...payload, reactionType: payload.reactionType === "Not specified" ? undefined : payload.reactionType }),
       });
       if (!res.ok) {
-        let message = "Failed to add allergy";
+        let message = t("pages.patientDetail.failedToAddAllergy");
         try {
           const err = await res.json();
           if (err && typeof err.message === "string" && err.message) message = err.message;
@@ -1400,30 +1469,30 @@ export default function PatientDetailPage() {
       try {
         return await res.json();
       } catch {
-        throw new Error("Invalid response from server");
+        throw new Error(t("pages.patientDetail.invalidResponseFromServer"));
       }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "allergies"] });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Allergy added" });
+      toast({ title: t("pages.patientDetail.allergyAdded") });
       setNewAllergyOpen(false);
       setNewAllergyForm({ allergen: "", severity: "LOW", reactionType: "Not specified", reactionTypeOther: "" });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const deleteAllergyMutation = useMutation({
     mutationFn: async (allergyId: string) => {
       const res = await fetch(`/api/patients/${id}/allergies/${allergyId}`, { method: "DELETE", headers: { Authorization: `Bearer ${authToken}` } });
-      if (!res.ok) throw new Error("Failed to remove allergy");
+      if (!res.ok) throw new Error(t("pages.patientDetail.failedToRemoveAllergy"));
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/patients", id, "allergies"] });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Allergy removed" });
+      toast({ title: t("pages.patientDetail.allergyRemoved") });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   useEffect(() => {
@@ -1480,19 +1549,19 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message || "Failed");
+        throw new Error(err.message || t("pages.patientDetail.requestFailed"));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.labOrders.list(id!) });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Lab order created" });
+      toast({ title: t("pages.patientDetail.labOrderCreated") });
       setNewOrderOpen(false);
       setOrderComposerType(null);
       setNewOrderForm({ testName: "", testCode: "", priority: "routine", internalExternal: "internal" });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const addImagingOrderMutation = useMutation({
@@ -1513,24 +1582,24 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message || "Failed");
+        throw new Error(err.message || t("pages.patientDetail.requestFailed"));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.imagingOrders.list(id!) });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Imaging order created" });
+      toast({ title: t("pages.patientDetail.imagingOrderCreated") });
       setNewOrderOpen(false);
       setOrderComposerType(null);
       setNewImagingOrderForm({ title: "", modality: "X-Ray", internalExternal: "internal", patientProblemId: "" });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const recordEncounterMedicationAdministrationMutation = useMutation({
     mutationFn: async (rx: Prescription) => {
-      if (!activeEncounterId) throw new Error("Missing encounter");
+      if (!activeEncounterId) throw new Error(t("pages.patientDetail.missingEncounter"));
       const res = await fetch(`/api/encounters/${activeEncounterId}/medication-administrations`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
@@ -1546,17 +1615,17 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Failed");
+        throw new Error(err.message || t("pages.patientDetail.requestFailed"));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/encounters", activeEncounterId, "medication-administrations"] });
-      toast({ title: "Administration recorded" });
+      toast({ title: t("pages.patientDetail.administrationRecorded") });
       setEncAdminOpen(null);
       setEncAdminForm({ doseGiven: "", notes: "" });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const addPrescriptionMutation = useMutation({
@@ -1582,20 +1651,20 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message || "Failed");
+        throw new Error(err.message || t("pages.patientDetail.requestFailed"));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.prescriptions.list(id!) });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Medication order created" });
+      toast({ title: t("pages.patientDetail.medicationOrderCreated") });
       setNewMedOrderOpen(false);
       setNewOrderOpen(false);
       setOrderComposerType(null);
       setNewMedOrderForm({ medicationName: "", dosage: "", frequency: "once daily", duration: "", instructions: "", patientProblemId: "", orderType: "prescription", route: "", rate: "" });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const discontinuePrescriptionMutation = useMutation({
@@ -1611,19 +1680,19 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message || "Failed");
+        throw new Error(err.message || t("pages.patientDetail.requestFailed"));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.prescriptions.list(id!) });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Medication discontinued" });
+      toast({ title: t("pages.patientDetail.medicationDiscontinued") });
       setDiscontinueRxOpen(false);
       setDiscontinuePrescription(null);
       setDiscontinueReason("");
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const deletePrescriptionMutation = useMutation({
@@ -1634,16 +1703,16 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { message?: string }).message || "Failed to delete medication");
+        throw new Error((err as { message?: string }).message || t("pages.patientDetail.failedToDeleteMedication"));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.prescriptions.list(id!) });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Medication deleted" });
+      toast({ title: t("pages.patientDetail.medicationDeleted") });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const deleteLabOrderMutation = useMutation({
@@ -1654,16 +1723,16 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { message?: string }).message || "Failed to delete lab order");
+        throw new Error((err as { message?: string }).message || t("pages.patientDetail.failedToDeleteLabOrder"));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.labOrders.list(id!) });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Order deleted" });
+      toast({ title: t("pages.patientDetail.orderDeleted") });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const deleteImagingOrderMutation = useMutation({
@@ -1674,23 +1743,23 @@ export default function PatientDetailPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { message?: string }).message || "Failed to delete imaging order");
+        throw new Error((err as { message?: string }).message || t("pages.patientDetail.failedToDeleteImagingOrder"));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.imagingOrders.list(id!) });
       invalidateVisitSummaryForScheduleSession();
-      toast({ title: "Order deleted" });
+      toast({ title: t("pages.patientDetail.orderDeleted") });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const role = user?.role?.toLowerCase?.() ?? "";
   const isClinician = role === "clinician";
   const canOrder = role === "clinician" || role === "nurse";
   const canAddNote = role === "clinician" || role === "nurse";
-  /** No visit-documentation tabs (e.g. reception, or browse entry): chart navigator + overview links stay in Review only. */
+  /** No visit-documentation tabs (e.g. reception, or browse entry): Navigator + overview links stay in Review only. */
   const reviewOnlyNavigator = !showVisitDocumentation;
   const pathOnly = location.split("?")[0];
   const onDemographicsPage = id ? pathOnly === `/patients/${id}/demographics` : false;
@@ -1707,7 +1776,7 @@ export default function PatientDetailPage() {
   if (!patient) {
     return (
       <div className="p-6">
-        <p className="text-muted-foreground">Patient not found.</p>
+        <p className="text-muted-foreground">{t("pages.patientDetail.patientNotFound")}</p>
       </div>
     );
   }
@@ -1734,15 +1803,17 @@ export default function PatientDetailPage() {
             role="status"
             data-testid="billing-visit-doc-readonly-banner"
           >
-            <span className="font-medium text-foreground">View only</span> — You can review visit documentation. Adding or
-            editing clinical content is disabled from this link.
+            <span className="font-medium text-foreground">{t("pages.patientDetail.viewOnlyLabel")}</span>{" "}
+            — {t("pages.patientDetail.viewOnlyDesc")}
           </div>
         ) : null}
         <Tabs value={mainTab} onValueChange={handleMainTabChange} className="flex flex-1 min-w-0 overflow-hidden">
           <nav className="w-52 flex-shrink-0 border border-border rounded-lg bg-muted/30 flex flex-col overflow-y-auto py-4">
           <div className="px-3 space-y-6">
             <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Review</p>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">
+                {t("pages.patientDetail.reviewSectionLabel")}
+              </p>
               <div className="flex flex-col gap-0.5">
                 {reviewNav.some((e) => e.id === "pc_demographics") ? (
                   <Link href={`/patients/${id}/demographics`} className="block w-full min-w-0">
@@ -1814,8 +1885,8 @@ export default function PatientDetailPage() {
         <TabsContent value="overview" className="mt-0 data-[state=inactive]:hidden">
           <div className="p-4 space-y-6 max-w-6xl">
             <div>
-              <h2 className="text-lg font-semibold tracking-tight">Chart overview</h2>
-              <p className="text-sm text-muted-foreground">Snapshot at a glance. Click a section header to open the full page.</p>
+              <h2 className="text-lg font-semibold tracking-tight">{t("pages.patientDetail.chartOverviewTitle")}</h2>
+              <p className="text-sm text-muted-foreground">{t("pages.patientDetail.chartOverviewDesc")}</p>
             </div>
 
             <Card className="hover:border-primary/50 transition-colors">
@@ -1823,7 +1894,7 @@ export default function PatientDetailPage() {
                 {reviewOnlyNavigator ? (
                   <div className="w-full text-left font-semibold text-foreground flex items-center gap-2 mb-3">
                     <Activity className="w-4 h-4 shrink-0" />
-                    Vitals
+                    {t("pages.patientDetail.vitalsTitle")}
                   </div>
                 ) : (
                   <button
@@ -1832,17 +1903,19 @@ export default function PatientDetailPage() {
                     className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
                   >
                     <Activity className="w-4 h-4 shrink-0" />
-                    Vitals
+                    {t("pages.patientDetail.vitalsTitle")}
                   </button>
                 )}
                 {vitalsList.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No vitals recorded. Record vitals in the Vitals section.</p>
+                  <p className="text-sm text-muted-foreground">{t("pages.patientDetail.noVitalsRecordedHint")}</p>
                 ) : !(storyboardVitals && storyboardVitalsHasAnyValue(storyboardVitals)) ? (
-                  <p className="text-sm text-muted-foreground">No vital measurements recorded yet.</p>
+                  <p className="text-sm text-muted-foreground">{t("pages.patientDetail.noVitalMeasurementsYet")}</p>
                 ) : (
                   <>
                     <div className="mb-4 space-y-2 text-sm">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Most recent values</p>
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                        {t("pages.patientDetail.mostRecentValues")}
+                      </p>
                       {(() => {
                         const latest = storyboardVitalsLatestTimestamp(storyboardVitals);
                         return (
@@ -1853,13 +1926,13 @@ export default function PatientDetailPage() {
                       })()}
                       <ul className="space-y-1.5">
                         <li className="flex flex-wrap gap-x-2">
-                          <span className="font-medium text-foreground">Temperature:</span>
+                          <span className="font-medium text-foreground">{t("pages.patientDetail.temperatureLabel")}</span>
                           <span>
                             {storyboardVitals.temperature != null ? `${storyboardVitals.temperature} °C` : "—"}
                           </span>
                         </li>
                         <li className="flex flex-wrap gap-x-2">
-                          <span className="font-medium text-foreground">Blood pressure:</span>
+                          <span className="font-medium text-foreground">{t("pages.patientDetail.bloodPressureLabel")}</span>
                           <span>
                             {storyboardVitals.bloodPressureSystolic != null || storyboardVitals.bloodPressureDiastolic != null
                               ? `${storyboardVitals.bloodPressureSystolic ?? "—"} / ${storyboardVitals.bloodPressureDiastolic ?? "—"} mmHg`
@@ -1867,25 +1940,25 @@ export default function PatientDetailPage() {
                           </span>
                         </li>
                         <li className="flex flex-wrap gap-x-2">
-                          <span className="font-medium text-foreground">Pulse rate:</span>
+                          <span className="font-medium text-foreground">{t("pages.patientDetail.pulseRateLabel")}</span>
                           <span>{storyboardVitals.pulseRate != null ? `${storyboardVitals.pulseRate} bpm` : "—"}</span>
                         </li>
                         <li className="flex flex-wrap gap-x-2">
-                          <span className="font-medium text-foreground">Respiration rate:</span>
+                          <span className="font-medium text-foreground">{t("pages.patientDetail.respirationRateLabel")}</span>
                           <span>{storyboardVitals.respiratoryRate != null ? `${storyboardVitals.respiratoryRate} /min` : "—"}</span>
                         </li>
                         <li className="flex flex-wrap gap-x-2">
-                          <span className="font-medium text-foreground">Oxygen saturation (SpO₂):</span>
+                          <span className="font-medium text-foreground">{t("pages.patientDetail.oxygenSaturationLabel")}</span>
                           <span>
                             {storyboardVitals.oxygenSaturation != null ? `${storyboardVitals.oxygenSaturation}%` : "—"}
                           </span>
                         </li>
                         <li className="flex flex-wrap gap-x-2">
-                          <span className="font-medium text-foreground">Weight:</span>
+                          <span className="font-medium text-foreground">{t("pages.patientDetail.weightLabel")}</span>
                           <span>{storyboardVitals.weight != null ? `${storyboardVitals.weight} kg` : "—"}</span>
                         </li>
                         <li className="flex flex-wrap gap-x-2">
-                          <span className="font-medium text-foreground">Height:</span>
+                          <span className="font-medium text-foreground">{t("pages.patientDetail.heightLabel")}</span>
                           <span>{storyboardVitals.height != null ? `${storyboardVitals.height} cm` : "—"}</span>
                         </li>
                       </ul>
@@ -1916,17 +1989,17 @@ export default function PatientDetailPage() {
                       const hasHt = chartData.some((d) => d.height != null);
                       return (
                         <div className="h-[240px] w-full">
-                          <p className="text-xs text-muted-foreground mb-2">Trend (last 3 recordings)</p>
+                          <p className="text-xs text-muted-foreground mb-2">{t("pages.patientDetail.trendLast3")}</p>
                           <ChartContainer
                             config={{
-                              systolic: { label: "BP systolic", color: "hsl(var(--chart-1))" },
-                              diastolic: { label: "BP diastolic", color: "hsl(var(--chart-2))" },
-                              heartRate: { label: "Pulse rate", color: "hsl(var(--chart-3))" },
-                              respiratoryRate: { label: "Respiration rate", color: "hsl(var(--chart-4))" },
-                              temperature: { label: "Temp °C", color: "hsl(var(--chart-5))" },
-                              oxygenSaturation: { label: "SpO₂ %", color: "hsl(var(--primary))" },
-                              weight: { label: "Weight kg", color: "hsl(var(--chart-5))" },
-                              height: { label: "Height cm", color: "hsl(var(--chart-2))" },
+                              systolic: { label: t("pages.patientDetail.chartBpSystolic"), color: "hsl(var(--chart-1))" },
+                              diastolic: { label: t("pages.patientDetail.chartBpDiastolic"), color: "hsl(var(--chart-2))" },
+                              heartRate: { label: t("pages.patientDetail.chartPulseRate"), color: "hsl(var(--chart-3))" },
+                              respiratoryRate: { label: t("pages.patientDetail.chartRespirationRate"), color: "hsl(var(--chart-4))" },
+                              temperature: { label: t("pages.patientDetail.chartTempC"), color: "hsl(var(--chart-5))" },
+                              oxygenSaturation: { label: t("pages.patientDetail.chartSpo2"), color: "hsl(var(--primary))" },
+                              weight: { label: t("pages.patientDetail.chartWeightKg"), color: "hsl(var(--chart-5))" },
+                              height: { label: t("pages.patientDetail.chartHeightCm"), color: "hsl(var(--chart-2))" },
                             }}
                             className="h-full w-full"
                           >
@@ -1936,12 +2009,12 @@ export default function PatientDetailPage() {
                               <YAxis tick={{ fontSize: 10 }} width={28} />
                               <Tooltip contentStyle={{ fontSize: 12 }} formatter={(value: number) => [value, ""]} />
                               <Legend verticalAlign="bottom" height={52} wrapperStyle={{ fontSize: 10 }} iconType="line" iconSize={8} />
-                              {hasBp && <Line type="monotone" dataKey="systolic" name="BP systolic" stroke="var(--color-systolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
-                              {hasBp && <Line type="monotone" dataKey="diastolic" name="BP diastolic" stroke="var(--color-diastolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
-                              {hasHr && <Line type="monotone" dataKey="heartRate" name="Pulse rate" stroke="var(--color-heartRate)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
-                              {hasRr && <Line type="monotone" dataKey="respiratoryRate" name="Respiration rate" stroke="var(--color-respiratoryRate)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
-                              {hasTemp && <Line type="monotone" dataKey="temperature" name="Temp °C" stroke="var(--color-temperature)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
-                              {hasSpo2 && <Line type="monotone" dataKey="oxygenSaturation" name="SpO₂ %" stroke="var(--color-oxygenSaturation)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasBp && <Line type="monotone" dataKey="systolic" name={t("pages.patientDetail.chartBpSystolic")} stroke="var(--color-systolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasBp && <Line type="monotone" dataKey="diastolic" name={t("pages.patientDetail.chartBpDiastolic")} stroke="var(--color-diastolic)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasHr && <Line type="monotone" dataKey="heartRate" name={t("pages.patientDetail.chartPulseRate")} stroke="var(--color-heartRate)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasRr && <Line type="monotone" dataKey="respiratoryRate" name={t("pages.patientDetail.chartRespirationRate")} stroke="var(--color-respiratoryRate)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasTemp && <Line type="monotone" dataKey="temperature" name={t("pages.patientDetail.chartTempC")} stroke="var(--color-temperature)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
+                              {hasSpo2 && <Line type="monotone" dataKey="oxygenSaturation" name={t("pages.patientDetail.chartSpo2")} stroke="var(--color-oxygenSaturation)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
                               {hasWt && <Line type="monotone" dataKey="weight" name="Weight kg" stroke="var(--color-weight)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
                               {hasHt && <Line type="monotone" dataKey="height" name="Height cm" stroke="var(--color-height)" strokeWidth={2} dot={{ r: 3 }} connectNulls />}
                             </LineChart>
@@ -1972,12 +2045,14 @@ export default function PatientDetailPage() {
                       return (
                         <>
                           {current.length > 0 && (
-                            <p>Current problems: {current.map((p) => p.problem).join(", ")}</p>
+                            <p>{t("pages.patientDetail.currentProblems", { list: current.map((p) => p.problem).join(", ") })}</p>
                           )}
-                          {past.length > 0 && <p>Past problems: {past.length} recorded</p>}
-                          {familyMembersList.length > 0 && <p>Family history: {familyMembersList.length} member(s)</p>}
+                          {past.length > 0 && <p>{t("pages.patientDetail.pastProblemsCount", { count: past.length })}</p>}
+                          {familyMembersList.length > 0 && (
+                            <p>{t("pages.patientDetail.familyHistoryCount", { count: familyMembersList.length })}</p>
+                          )}
                           {current.length === 0 && past.length === 0 && familyMembersList.length === 0 && (
-                            <p>No history recorded.</p>
+                            <p>{t("pages.patientDetail.noHistoryRecorded")}</p>
                           )}
                         </>
                       );
@@ -1991,7 +2066,7 @@ export default function PatientDetailPage() {
                   {reviewOnlyNavigator ? (
                     <div className="w-full text-left font-semibold text-foreground flex items-center gap-2 mb-3">
                       <AlertTriangle className="w-4 h-4 shrink-0" />
-                      Allergy
+                      {t("pages.patientDetail.allergyTitle")}
                     </div>
                   ) : (
                     <button
@@ -2000,7 +2075,7 @@ export default function PatientDetailPage() {
                       className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
                     >
                       <AlertTriangle className="w-4 h-4 shrink-0" />
-                      Allergy
+                      {t("pages.patientDetail.allergyTitle")}
                     </button>
                   )}
                   <div className="text-sm text-muted-foreground">
@@ -2015,7 +2090,7 @@ export default function PatientDetailPage() {
                     ) : patient?.allergies ? (
                       <p className="whitespace-pre-wrap">{patient.allergies}</p>
                     ) : (
-                      <p>No allergies documented.</p>
+                      <p>{t("pages.patientDetail.noAllergiesDocumentedShort")}</p>
                     )}
                   </div>
                 </CardContent>
@@ -2029,7 +2104,7 @@ export default function PatientDetailPage() {
                     className="w-full text-left font-semibold text-primary hover:underline underline-offset-2 flex items-center gap-2 mb-3"
                   >
                     <FileCheck className="w-4 h-4 shrink-0" />
-                    Results
+                    {t("pages.patientDetail.resultsTitle")}
                   </button>
                   <div className="text-sm text-muted-foreground space-y-1">
                     {(() => {
@@ -2039,10 +2114,10 @@ export default function PatientDetailPage() {
                       return (
                         <>
                           {hasLabs && (
-                            <p>Labs: {labResulted.length + labDocs.length} result(s)</p>
+                            <p>{t("pages.patientDetail.labsResultsCount", { count: labResulted.length + labDocs.length })}</p>
                           )}
-                          {imagingResults.length > 0 && <p>Imaging: {imagingResults.length} result(s)</p>}
-                          {!hasLabs && imagingResults.length === 0 && <p>No results yet.</p>}
+                          {imagingResults.length > 0 && <p>{t("pages.patientDetail.imagingResultsCount", { count: imagingResults.length })}</p>}
+                          {!hasLabs && imagingResults.length === 0 && <p>{t("pages.patientDetail.noResultsYet")}</p>}
                         </>
                       );
                     })()}
@@ -2154,13 +2229,13 @@ export default function PatientDetailPage() {
 
         <TabsContent value="vitals" className="space-y-4 mt-4">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-muted-foreground">Document office visit vitals</span>
+            <span className="text-sm text-muted-foreground">{t("pages.patientDetail.documentOfficeVisitVitals")}</span>
           </div>
           <Card>
             <CardContent className="p-2.5 space-y-2">
-              <h4 className="text-sm font-medium">Blood group</h4>
+              <h4 className="text-sm font-medium">{t("pages.patientDetail.bloodGroupTitle")}</h4>
               <p className="text-xs text-muted-foreground">
-                This value feeds the patient storyboard and all blood-group displays across the app.
+                {t("pages.patientDetail.bloodGroupHelp")}
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <Select
@@ -2169,10 +2244,10 @@ export default function PatientDetailPage() {
                   disabled={!canAddNote || updateBloodGroupMutation.isPending}
                 >
                   <SelectTrigger className="w-[12rem] h-8 text-xs">
-                    <SelectValue placeholder="Not specified" />
+                    <SelectValue placeholder={t("pages.patientDetail.notSpecified")} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none">— Not specified —</SelectItem>
+                    <SelectItem value="__none">{t("pages.patientDetail.notSpecifiedOption")}</SelectItem>
                     {BLOOD_GROUP_OPTIONS.map((g) => (
                       <SelectItem key={g} value={g}>
                         {g}
@@ -2189,7 +2264,7 @@ export default function PatientDetailPage() {
                     disabled={updateBloodGroupMutation.isPending || (vitalsBloodGroup || "") === (patient?.bloodGroup || "")}
                     data-testid="button-save-vitals-blood-group"
                   >
-                    {updateBloodGroupMutation.isPending ? "Saving..." : "Save blood group"}
+                    {updateBloodGroupMutation.isPending ? t("pages.patientDetail.saving") : t("pages.patientDetail.saveBloodGroup")}
                   </Button>
                 )}
               </div>
@@ -2198,7 +2273,7 @@ export default function PatientDetailPage() {
           {canAddNote && (
             <Card>
               <CardContent className="p-2.5">
-                <h4 className="text-sm font-medium mb-2">Record vitals</h4>
+                <h4 className="text-sm font-medium mb-2">{t("pages.patientDetail.recordVitalsTitle")}</h4>
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
@@ -2208,40 +2283,40 @@ export default function PatientDetailPage() {
                 >
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                     <div className="space-y-1 max-w-[11.5rem]">
-                      <Label className="text-[11px]">Temp (°C)</Label>
+                      <Label className="text-[11px]">{t("pages.patientDetail.vitalsTempLabel")}</Label>
                       <Input type="number" step="0.1" className="h-7 px-2 text-xs" value={vitalsForm.temperature} onChange={(e) => setVitalsForm((f) => ({ ...f, temperature: e.target.value }))} />
                     </div>
                     <div className="space-y-1 max-w-[11.5rem]">
-                      <Label className="text-[11px]">BP Systolic</Label>
+                      <Label className="text-[11px]">{t("pages.patientDetail.vitalsBpSystolicLabel")}</Label>
                       <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.bloodPressureSystolic} onChange={(e) => setVitalsForm((f) => ({ ...f, bloodPressureSystolic: e.target.value }))} />
                     </div>
                     <div className="space-y-1 max-w-[11.5rem]">
-                      <Label className="text-[11px]">BP Diastolic</Label>
+                      <Label className="text-[11px]">{t("pages.patientDetail.vitalsBpDiastolicLabel")}</Label>
                       <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.bloodPressureDiastolic} onChange={(e) => setVitalsForm((f) => ({ ...f, bloodPressureDiastolic: e.target.value }))} />
                     </div>
                     <div className="space-y-1 max-w-[11.5rem]">
-                      <Label className="text-[11px]">Heart rate</Label>
+                      <Label className="text-[11px]">{t("pages.patientDetail.heartRateLabel")}</Label>
                       <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.heartRate} onChange={(e) => setVitalsForm((f) => ({ ...f, heartRate: e.target.value }))} />
                     </div>
                     <div className="space-y-1 max-w-[11.5rem]">
-                      <Label className="text-[11px]">Resp rate</Label>
+                      <Label className="text-[11px]">{t("pages.patientDetail.respRateLabel")}</Label>
                       <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.respiratoryRate} onChange={(e) => setVitalsForm((f) => ({ ...f, respiratoryRate: e.target.value }))} />
                     </div>
                     <div className="space-y-1 max-w-[11.5rem]">
-                      <Label className="text-[11px]">SpO2 (%)</Label>
+                      <Label className="text-[11px]">{t("pages.patientDetail.spo2Label")}</Label>
                       <Input type="number" className="h-7 px-2 text-xs" value={vitalsForm.oxygenSaturation} onChange={(e) => setVitalsForm((f) => ({ ...f, oxygenSaturation: e.target.value }))} />
                     </div>
                     <div className="space-y-1 max-w-[11.5rem]">
-                      <Label className="text-[11px]">Weight (kg)</Label>
+                      <Label className="text-[11px]">{t("pages.patientDetail.vitalsWeightLabel")}</Label>
                       <Input type="number" step="0.1" className="h-7 px-2 text-xs" value={vitalsForm.weight} onChange={(e) => setVitalsForm((f) => ({ ...f, weight: e.target.value }))} />
                     </div>
                     <div className="space-y-1 max-w-[11.5rem]">
-                      <Label className="text-[11px]">Height (cm)</Label>
+                      <Label className="text-[11px]">{t("pages.patientDetail.vitalsHeightLabel")}</Label>
                       <Input type="number" step="0.1" className="h-7 px-2 text-xs" value={vitalsForm.height} onChange={(e) => setVitalsForm((f) => ({ ...f, height: e.target.value }))} />
                     </div>
                   </div>
                   <Button type="submit" size="sm" className="h-8 px-3 text-xs" disabled={recordVitalsMutation.isPending}>
-                    {recordVitalsMutation.isPending ? "Recording..." : "Record vitals"}
+                    {recordVitalsMutation.isPending ? t("pages.patientDetail.recording") : t("pages.patientDetail.recordVitalsCta")}
                   </Button>
                 </form>
               </CardContent>
@@ -2249,7 +2324,7 @@ export default function PatientDetailPage() {
           )}
           {vitalsList.length > 0 && (
             <div className="space-y-2">
-              <h4 className="text-sm font-medium">Recent vitals</h4>
+              <h4 className="text-sm font-medium">{t("pages.patientDetail.recentVitalsTitle")}</h4>
               <div className="space-y-2">
                 {vitalsList.slice(0, 5).map((v) => (
                   <Card key={v.id}>
@@ -2278,22 +2353,22 @@ export default function PatientDetailPage() {
                               setEditVitalsOpen(true);
                             }}
                           >
-                            {v.recordedAt ? formatInOrgTimeZone(v.recordedAt, "MMM d, yyyy HH:mm", orgTz) : "Edit vitals"}
+                            {v.recordedAt ? formatInOrgTimeZone(v.recordedAt, "MMM d, yyyy HH:mm", orgTz) : t("pages.patientDetail.editVitalsTitle")}
                           </button>
                         ) : v.recordedAt ? (
                           <span className="text-muted-foreground">
                             {formatInOrgTimeZone(v.recordedAt, "MMM d, yyyy HH:mm", orgTz)}
                           </span>
                         ) : null}
-                        {v.temperature != null && <span>Temp: {v.temperature} °C</span>}
+                        {v.temperature != null && <span>{t("pages.patientDetail.vitalsInlineTemp", { value: v.temperature })}</span>}
                         {(v.bloodPressureSystolic != null || v.bloodPressureDiastolic != null) && (
-                          <span>BP: {v.bloodPressureSystolic ?? "—"} / {v.bloodPressureDiastolic ?? "—"}</span>
+                          <span>{t("pages.patientDetail.vitalsInlineBp", { sys: v.bloodPressureSystolic ?? "—", dia: v.bloodPressureDiastolic ?? "—" })}</span>
                         )}
-                        {v.heartRate != null && <span>HR: {v.heartRate}</span>}
-                        {v.respiratoryRate != null && <span>RR: {v.respiratoryRate}</span>}
-                        {v.oxygenSaturation != null && <span>SpO2: {v.oxygenSaturation}%</span>}
-                        {v.weight != null && <span>Weight: {v.weight} kg</span>}
-                        {v.height != null && <span>Height: {v.height} cm</span>}
+                        {v.heartRate != null && <span>{t("pages.patientDetail.vitalsInlineHr", { value: v.heartRate })}</span>}
+                        {v.respiratoryRate != null && <span>{t("pages.patientDetail.vitalsInlineRr", { value: v.respiratoryRate })}</span>}
+                        {v.oxygenSaturation != null && <span>{t("pages.patientDetail.vitalsInlineSpo2", { value: v.oxygenSaturation })}</span>}
+                        {v.weight != null && <span>{t("pages.patientDetail.vitalsInlineWeight", { value: v.weight })}</span>}
+                        {v.height != null && <span>{t("pages.patientDetail.vitalsInlineHeight", { value: v.height })}</span>}
                       </div>
                     </CardContent>
                   </Card>
@@ -2304,7 +2379,7 @@ export default function PatientDetailPage() {
           <Dialog open={editVitalsOpen} onOpenChange={(open) => { setEditVitalsOpen(open); if (!open) setEditVitals(null); }}>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Edit vitals</DialogTitle>
+                <DialogTitle>{t("pages.patientDetail.editVitalsTitle")}</DialogTitle>
               </DialogHeader>
               <form
                 onSubmit={(e) => {
@@ -2314,7 +2389,7 @@ export default function PatientDetailPage() {
                 className="space-y-3 py-2"
               >
                 <div className="space-y-2">
-                  <Label className="text-xs">Date & time</Label>
+                  <Label className="text-xs">{t("pages.patientDetail.dateTimeLabel")}</Label>
                   <Input
                     type="datetime-local"
                     value={editVitalsForm.recordedAt}
@@ -2324,42 +2399,42 @@ export default function PatientDetailPage() {
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Temp (°C)</Label>
+                    <Label className="text-xs">{t("pages.patientDetail.vitalsTempLabel")}</Label>
                     <Input type="number" step="0.1" className="h-8 text-sm" value={editVitalsForm.temperature} onChange={(e) => setEditVitalsForm((f) => ({ ...f, temperature: e.target.value }))} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">BP Systolic</Label>
+                    <Label className="text-xs">{t("pages.patientDetail.vitalsBpSystolicLabel")}</Label>
                     <Input type="number" className="h-8 text-sm" value={editVitalsForm.bloodPressureSystolic} onChange={(e) => setEditVitalsForm((f) => ({ ...f, bloodPressureSystolic: e.target.value }))} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">BP Diastolic</Label>
+                    <Label className="text-xs">{t("pages.patientDetail.vitalsBpDiastolicLabel")}</Label>
                     <Input type="number" className="h-8 text-sm" value={editVitalsForm.bloodPressureDiastolic} onChange={(e) => setEditVitalsForm((f) => ({ ...f, bloodPressureDiastolic: e.target.value }))} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Heart rate</Label>
+                    <Label className="text-xs">{t("pages.patientDetail.heartRateLabel")}</Label>
                     <Input type="number" className="h-8 text-sm" value={editVitalsForm.heartRate} onChange={(e) => setEditVitalsForm((f) => ({ ...f, heartRate: e.target.value }))} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Resp rate</Label>
+                    <Label className="text-xs">{t("pages.patientDetail.respRateLabel")}</Label>
                     <Input type="number" className="h-8 text-sm" value={editVitalsForm.respiratoryRate} onChange={(e) => setEditVitalsForm((f) => ({ ...f, respiratoryRate: e.target.value }))} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">SpO2 (%)</Label>
+                    <Label className="text-xs">{t("pages.patientDetail.spo2Label")}</Label>
                     <Input type="number" className="h-8 text-sm" value={editVitalsForm.oxygenSaturation} onChange={(e) => setEditVitalsForm((f) => ({ ...f, oxygenSaturation: e.target.value }))} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Weight (kg)</Label>
+                    <Label className="text-xs">{t("pages.patientDetail.vitalsWeightLabel")}</Label>
                     <Input type="number" step="0.1" className="h-8 text-sm" value={editVitalsForm.weight} onChange={(e) => setEditVitalsForm((f) => ({ ...f, weight: e.target.value }))} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-xs">Height (cm)</Label>
+                    <Label className="text-xs">{t("pages.patientDetail.vitalsHeightLabel")}</Label>
                     <Input type="number" step="0.1" className="h-8 text-sm" value={editVitalsForm.height} onChange={(e) => setEditVitalsForm((f) => ({ ...f, height: e.target.value }))} />
                   </div>
                 </div>
                 <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setEditVitalsOpen(false)}>Cancel</Button>
+                  <Button type="button" variant="outline" onClick={() => setEditVitalsOpen(false)}>{t("common.cancel")}</Button>
                   <Button type="submit" disabled={updateVitalsMutation.isPending}>
-                    {updateVitalsMutation.isPending ? "Saving..." : "Save changes"}
+                    {updateVitalsMutation.isPending ? t("pages.patientDetail.saving") : t("pages.patientDetail.saveChanges")}
                   </Button>
                 </DialogFooter>
               </form>
@@ -2373,24 +2448,25 @@ export default function PatientDetailPage() {
           ) : (
             <>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-muted-foreground">Medications and prescriptions</span>
+                <span className="text-sm text-muted-foreground">{t("pages.patientDetail.medicationsAndPrescriptions")}</span>
                 {canOrder && (
                   <Button size="sm" onClick={() => setNewMedOrderOpen(true)} data-testid="button-new-med-order">
-                    <Plus className="w-3.5 h-3.5 mr-1.5" /> New Order
+                    <Plus className="w-3.5 h-3.5 mr-1.5" /> {t("pages.patientDetail.newOrderCta")}
                   </Button>
                 )}
               </div>
               <Tabs value={medicationTab} onValueChange={(v) => setMedicationTab(v as any)}>
                 <TabsList>
-                  <TabsTrigger value="history">Medication History</TabsTrigger>
-                  <TabsTrigger value="administration">Medication Administration</TabsTrigger>
+          <TabsTrigger value="history">{t("pages.patientDetail.medicationHistoryTab")}</TabsTrigger>
+          <TabsTrigger value="administration">{t("pages.patientDetail.medicationAdministrationTab")}</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="history" className="mt-3 space-y-3">
                   {prescriptions.length === 0 ? (
                     <Card>
                       <CardContent className="p-8 text-center text-muted-foreground">
-                        No medications on record. {canOrder ? "Use New Order to add a medication." : ""}
+                        {t("pages.patientDetail.noMedicationsOnRecord")}{" "}
+                        {canOrder ? t("pages.patientDetail.useNewOrderToAddMedication") : ""}
                       </CardContent>
                     </Card>
                   ) : prescriptions.map((rx) => {
@@ -2506,14 +2582,17 @@ export default function PatientDetailPage() {
                       for (const [rxId, dueAt] of Array.from(nextDueByRxId.entries())) {
                         if (dueAt <= medNowTick && !medDueToastRef.current.has(rxId)) {
                           medDueToastRef.current.add(rxId);
-                          toast({ title: "Medication dose due", description: "A medication dose is now due for administration." });
+                          toast({
+                            title: t("pages.patientDetail.medicationDoseDueTitle"),
+                            description: t("pages.patientDetail.medicationDoseDueDesc"),
+                          });
                         }
                       }
 
                       return medsToAdmin.length === 0 ? (
                         <Card>
                           <CardContent className="p-8 text-center text-muted-foreground">
-                            No medications to administer for this visit.
+                            {t("pages.patientDetail.noMedicationsToAdminister")}
                           </CardContent>
                         </Card>
                       ) : (
@@ -2532,10 +2611,12 @@ export default function PatientDetailPage() {
                                     <span className="text-muted-foreground shrink-0">{rx.frequency}</span>
                                     {dueAt != null ? (
                                       <Badge variant={isOverdue ? "destructive" : "secondary"} className="text-[10px] shrink-0">
-                                        {isOverdue ? `Due (was due at ${dueAtLabel})` : `Next dose at ${dueAtLabel}`}
+                                        {isOverdue
+                                          ? t("pages.patientDetail.dueWasDueAt", { time: dueAtLabel })
+                                          : t("pages.patientDetail.nextDoseAt", { time: dueAtLabel })}
                                       </Badge>
                                     ) : (
-                                      <Badge variant="secondary" className="text-[10px] shrink-0">Not started</Badge>
+                                      <Badge variant="secondary" className="text-[10px] shrink-0">{t("pages.patientDetail.notStarted")}</Badge>
                                     )}
                                     <Button
                                       type="button"
@@ -2547,7 +2628,7 @@ export default function PatientDetailPage() {
                                         setEncAdminForm({ doseGiven: rx.dosage ?? "", notes: "" });
                                       }}
                                     >
-                                      Administer
+                                      {t("pages.patientDetail.administer")}
                                     </Button>
                                 <Button
                                   type="button"
@@ -2561,7 +2642,7 @@ export default function PatientDetailPage() {
                                     setMedicationTab("history");
                                   }}
                                 >
-                                  Discontinue
+                                  {t("pages.patientDetail.discontinue")}
                                 </Button>
                                   </div>
                                   <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
@@ -2573,10 +2654,10 @@ export default function PatientDetailPage() {
                           })}
 
                           <div className="space-y-2">
-                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Administration log</p>
+                            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t("pages.patientDetail.administrationLog")}</p>
                             {encounterMedicationAdministrations.length === 0 ? (
                               <Card>
-                                <CardContent className="p-6 text-sm text-muted-foreground">No administrations recorded yet.</CardContent>
+                                <CardContent className="p-6 text-sm text-muted-foreground">{t("pages.patientDetail.noAdministrationsYet")}</CardContent>
                               </Card>
                             ) : (
                               <div className="space-y-2">
@@ -2669,7 +2750,7 @@ export default function PatientDetailPage() {
               />
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setDiscontinueRxOpen(false)}>Cancel</Button>
+              <Button variant="outline" onClick={() => setDiscontinueRxOpen(false)}>{t("common.cancel")}</Button>
               <Button
                 variant="destructive"
                 disabled={!discontinuePrescription || !discontinueReason.trim() || discontinuePrescriptionMutation.isPending}
@@ -2682,7 +2763,7 @@ export default function PatientDetailPage() {
                   }
                 }}
               >
-                {discontinuePrescriptionMutation.isPending ? "Saving..." : "Discontinue"}
+                {discontinuePrescriptionMutation.isPending ? t("pages.patientDetail.saving") : t("pages.patientDetail.discontinue")}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -2694,15 +2775,15 @@ export default function PatientDetailPage() {
           ) : (
             <>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-muted-foreground">Lab and clinical orders</span>
+                <span className="text-sm text-muted-foreground">{t("pages.patientDetail.labAndClinicalOrders")}</span>
                 {canOrder && (
                   <Button size="sm" onClick={() => setNewOrderOpen(true)} data-testid="button-new-order">
-                    <Plus className="w-3.5 h-3.5 mr-1.5" /> New Order
+                    <Plus className="w-3.5 h-3.5 mr-1.5" /> {t("pages.patientDetail.newOrderCta")}
                   </Button>
                 )}
               </div>
               {labOrders.length === 0 && imagingOrders.length === 0 ? (
-                <Card><CardContent className="p-8 text-center text-muted-foreground">No orders. {canOrder ? "Use New Order to add one." : ""}</CardContent></Card>
+                <Card><CardContent className="p-8 text-center text-muted-foreground">{t("pages.patientDetail.noOrders")} {canOrder ? t("pages.patientDetail.useNewOrderToAddOne") : ""}</CardContent></Card>
               ) : (
                 <div className="space-y-3">
               {labOrders.map((order) => (
@@ -2719,8 +2800,8 @@ export default function PatientDetailPage() {
                             target="_blank"
                             rel="noopener noreferrer"
                             className="shrink-0 text-primary hover:text-primary/80"
-                            title="View attached external result"
-                            aria-label="View attached external result"
+                            title={t("pages.patientDetail.viewAttachedExternalResult")}
+                            aria-label={t("pages.patientDetail.viewAttachedExternalResult")}
                           >
                             <Paperclip className="w-4 h-4" />
                           </a>
@@ -2772,8 +2853,8 @@ export default function PatientDetailPage() {
                           target="_blank"
                           rel="noopener noreferrer"
                           className="shrink-0 text-primary hover:text-primary/80"
-                          title="View attached external result"
-                          aria-label="View attached external result"
+                          title={t("pages.patientDetail.viewAttachedExternalResult")}
+                          aria-label={t("pages.patientDetail.viewAttachedExternalResult")}
                         >
                           <Paperclip className="w-4 h-4" />
                         </a>
@@ -3232,21 +3313,21 @@ export default function PatientDetailPage() {
 
         <TabsContent value="allergy" className="space-y-4 mt-4 data-[state=inactive]:hidden">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-muted-foreground">Known allergies and intolerances. HIGH severity allergies appear in red in the demographics section.</span>
+            <span className="text-sm text-muted-foreground">{t("pages.patientDetail.allergiesHint")}</span>
             {canAddNote && (
               <Button onClick={() => setNewAllergyOpen(true)} size="sm">
-                <Plus className="w-4 h-4 mr-1.5" /> New Allergy
+                <Plus className="w-4 h-4 mr-1.5" /> {t("pages.patientDetail.newAllergyCta")}
               </Button>
             )}
           </div>
           <Dialog open={newAllergyOpen} onOpenChange={setNewAllergyOpen}>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>New Allergy</DialogTitle>
+                <DialogTitle>{t("pages.patientDetail.newAllergyTitle")}</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 py-2">
                 <div className="space-y-2">
-                  <Label>Allergen</Label>
+                  <Label>{t("pages.patientDetail.allergenLabel")}</Label>
                   {/*
                     Avoid Radix Popover inside Dialog — nested portals/focus guards can throw at runtime.
                     Inline dropdown stays in the dialog layer.
@@ -3262,7 +3343,7 @@ export default function PatientDetailPage() {
                       onFocus={() => {
                         if (newAllergyForm.allergen.trim().length >= 2) setAllergenSuggestOpen(true);
                       }}
-                      placeholder="Search or type allergen (e.g. Penicillin, Peanuts)"
+                      placeholder={t("pages.patientDetail.allergenPlaceholder")}
                       autoComplete="off"
                     />
                     {allergenSuggestOpen && newAllergyForm.allergen.trim().length >= 2 ? (
@@ -3290,28 +3371,30 @@ export default function PatientDetailPage() {
                             ))}
                           </ul>
                         ) : (
-                          <p className="py-4 px-3 text-sm text-muted-foreground text-center">No suggestions. You can enter your own.</p>
+                        <p className="py-4 px-3 text-sm text-muted-foreground text-center">
+                          {t("pages.patientDetail.noSuggestionsYouCanEnterYourOwn")}
+                        </p>
                         )}
                       </div>
                     ) : null}
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Severity</Label>
+                  <Label>{t("pages.patientDetail.severityLabel")}</Label>
                   <Select
                     value={newAllergyForm.severity}
                     onValueChange={(v) => setNewAllergyForm((f) => ({ ...f, severity: v as "LOW" | "MEDIUM" | "HIGH" }))}
                   >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="LOW">Low</SelectItem>
-                      <SelectItem value="MEDIUM">Medium</SelectItem>
-                      <SelectItem value="HIGH">High</SelectItem>
+                      <SelectItem value="LOW">{t("pages.patientDetail.severityLow")}</SelectItem>
+                      <SelectItem value="MEDIUM">{t("pages.patientDetail.severityMedium")}</SelectItem>
+                      <SelectItem value="HIGH">{t("pages.patientDetail.severityHigh")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Reaction type</Label>
+                  <Label>{t("pages.patientDetail.reactionTypeLabel")}</Label>
                   <Select
                     value={newAllergyForm.reactionType}
                     onValueChange={(v) => setNewAllergyForm((f) => ({ ...f, reactionType: v }))}
@@ -3319,17 +3402,17 @@ export default function PatientDetailPage() {
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {ALLERGY_REACTION_TYPES.map((r) => (
-                        <SelectItem key={r} value={r}>{r}</SelectItem>
+                        <SelectItem key={r} value={r}>{allergyReactionTypeLabel(r, t)}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                   {newAllergyForm.reactionType === "Other" && (
                     <div className="pt-1">
-                      <Label className="text-xs text-muted-foreground">Describe reaction (optional)</Label>
+                      <Label className="text-xs text-muted-foreground">{t("pages.patientDetail.describeReactionOptional")}</Label>
                       <Input
                         value={newAllergyForm.reactionTypeOther}
                         onChange={(e) => setNewAllergyForm((f) => ({ ...f, reactionTypeOther: e.target.value }))}
-                        placeholder="e.g. Swelling of lips, nausea"
+                        placeholder={t("pages.patientDetail.describeReactionPlaceholder")}
                         className="mt-1"
                       />
                     </div>
@@ -3337,7 +3420,7 @@ export default function PatientDetailPage() {
                 </div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setNewAllergyOpen(false)}>Cancel</Button>
+                <Button variant="outline" onClick={() => setNewAllergyOpen(false)}>{t("common.cancel")}</Button>
                 <Button
                   onClick={() => {
                     const reactionType =
@@ -3354,14 +3437,14 @@ export default function PatientDetailPage() {
                   }}
                   disabled={!newAllergyForm.allergen.trim() || addAllergyMutation.isPending}
                 >
-                  {addAllergyMutation.isPending ? "Adding..." : "Add allergy"}
+                  {addAllergyMutation.isPending ? t("pages.patientDetail.adding") : t("pages.patientDetail.addAllergyCta")}
                 </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
           {patientAllergies.length > 0 ? (
             <div className="space-y-2">
-              <h4 className="text-sm font-medium">Documented allergies</h4>
+              <h4 className="text-sm font-medium">{t("pages.patientDetail.documentedAllergiesTitle")}</h4>
               <ul className="space-y-2">
                 {patientAllergies.map((a) => (
                   <Card key={a.id} className={a.severity === "HIGH" ? "border-destructive/50" : ""}>
@@ -3376,11 +3459,13 @@ export default function PatientDetailPage() {
                           )}
                         </div>
                         {canAddNote && (
-                          <Button size="sm" variant="ghost" onClick={() => deleteAllergyMutation.mutate(a.id)} disabled={deleteAllergyMutation.isPending}>Remove</Button>
+                          <Button size="sm" variant="ghost" onClick={() => deleteAllergyMutation.mutate(a.id)} disabled={deleteAllergyMutation.isPending}>
+                            {t("pages.patientDetail.remove")}
+                          </Button>
                         )}
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                        Documented {safeFormatDateTime(a.createdAt, orgTz)}
+                        {t("pages.patientDetail.documentedAt", { date: safeFormatDateTime(a.createdAt, orgTz) })}
                         {" · "}
                         By {a.addedBy ? (prescriberNameById.get(a.addedBy) ?? a.addedBy) : "Unknown user"}
                       </div>
@@ -3400,7 +3485,11 @@ export default function PatientDetailPage() {
             </Card>
           )}
           {patientAllergies.length === 0 && !patient?.allergies && (
-            <Card><CardContent className="p-8 text-center text-muted-foreground">No allergies documented. {canAddNote ? "Add an allergy above." : ""}</CardContent></Card>
+            <Card>
+              <CardContent className="p-8 text-center text-muted-foreground">
+                {t("pages.patientDetail.noAllergiesDocumented")} {canAddNote ? t("pages.patientDetail.addAllergyAbove") : ""}
+              </CardContent>
+            </Card>
           )}
         </TabsContent>
 
@@ -3419,9 +3508,13 @@ export default function PatientDetailPage() {
               }
             >
             <TabsContent value="labs" className="mt-0 space-y-3 focus-visible:outline-none">
-              <p className="text-sm text-muted-foreground">Completed lab results appear here once resulted in the Laboratory or uploaded via Uploads.</p>
+              <p className="text-sm text-muted-foreground">{t("pages.patientDetail.completedLabResultsHint")}</p>
               {labOrders.filter((o) => o.status === "resulted" || o.status === "completed").length === 0 && patientDocuments.filter((d) => d.documentType === "lab_result").length === 0 ? (
-                <Card><CardContent className="p-8 text-center text-muted-foreground">No lab results yet. Lab orders are resulted in Laboratory or upload external results via Uploads.</CardContent></Card>
+                <Card>
+                  <CardContent className="p-8 text-center text-muted-foreground">
+                    {t("pages.patientDetail.noLabResultsYet")}
+                  </CardContent>
+                </Card>
               ) : (
                 <div className="space-y-3">
                   {labOrders.filter((o) => o.status === "resulted" || o.status === "completed").map((order) => (
@@ -3435,8 +3528,8 @@ export default function PatientDetailPage() {
                               target="_blank"
                               rel="noopener noreferrer"
                               className="shrink-0 text-primary hover:text-primary/80"
-                              title="View attached external result"
-                              aria-label="View attached external result"
+                              title={t("pages.patientDetail.viewAttachedExternalResult")}
+                              aria-label={t("pages.patientDetail.viewAttachedExternalResult")}
                             >
                               <Paperclip className="w-4 h-4" />
                             </a>
@@ -3490,9 +3583,13 @@ export default function PatientDetailPage() {
               )}
             </TabsContent>
             <TabsContent value="imaging" className="mt-0 space-y-3 focus-visible:outline-none">
-              <p className="text-sm text-muted-foreground">Scans and uploaded imaging (X-Ray, CT, MRI, etc.). Results appear here after upload from Uploads or completion of an imaging order.</p>
+              <p className="text-sm text-muted-foreground">{t("pages.patientDetail.imagingHint")}</p>
               {imagingResults.length === 0 && imagingOrders.filter((o) => o.status === "completed" && o.documentUrl).length === 0 ? (
-                <Card><CardContent className="p-8 text-center text-muted-foreground">No imaging results yet.</CardContent></Card>
+                <Card>
+                  <CardContent className="p-8 text-center text-muted-foreground">
+                    {t("pages.patientDetail.noImagingResultsYet")}
+                  </CardContent>
+                </Card>
               ) : (
                 <div className="space-y-3">
                   {imagingOrders
@@ -3507,18 +3604,19 @@ export default function PatientDetailPage() {
                               target="_blank"
                               rel="noopener noreferrer"
                               className="shrink-0 text-primary hover:text-primary/80"
-                              title="View attached external result"
-                              aria-label="View attached external result"
+                              title={t("pages.patientDetail.viewAttachedExternalResult")}
+                              aria-label={t("pages.patientDetail.viewAttachedExternalResult")}
                             >
                               <Paperclip className="w-4 h-4" />
                             </a>
                             <span className="text-muted-foreground shrink-0">{o.modality}</span>
-                            <span className="text-muted-foreground shrink-0">Completed</span>
+                            <span className="text-muted-foreground shrink-0">{t("pages.patientDetail.completedStatus")}</span>
                           </div>
                           <div className="mt-1 text-xs text-muted-foreground whitespace-nowrap overflow-x-auto">
-                            Completed {formatInOrgTimeZone(o.completedAt, "MMM d, yyyy · HH:mm", orgTz)}
-                            {" · "}
-                            By {prescriberNameById.get(o.orderedBy) ?? o.orderedBy ?? "Unknown user"}
+                            {t("pages.patientDetail.completedAtBy", {
+                              date: formatInOrgTimeZone(o.completedAt, "MMM d, yyyy · HH:mm", orgTz),
+                              by: prescriberNameById.get(o.orderedBy) ?? o.orderedBy ?? t("pages.patientDetail.unknownUser"),
+                            })}
                           </div>
                         </CardContent>
                       </Card>
@@ -3534,8 +3632,8 @@ export default function PatientDetailPage() {
                               target="_blank"
                               rel="noopener noreferrer"
                               className="shrink-0 text-primary hover:text-primary/80"
-                              title="View attached result"
-                              aria-label="View attached result"
+                              title={t("pages.patientDetail.viewAttachedResult")}
+                              aria-label={t("pages.patientDetail.viewAttachedResult")}
                             >
                               <Paperclip className="w-4 h-4" />
                             </a>
@@ -3741,7 +3839,7 @@ export default function PatientDetailPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="secondary" onClick={() => setEditProblemOpen(false)}>Cancel</Button>
+            <Button variant="secondary" onClick={() => setEditProblemOpen(false)}>{t("common.cancel")}</Button>
             <Button
               onClick={() => editProblem && updateProblemMutation.mutate({
                 problemId: editProblem.id,
@@ -3753,7 +3851,7 @@ export default function PatientDetailPage() {
               })}
               disabled={!editProblem || !editProblemForm.problemText.trim() || updateProblemMutation.isPending}
             >
-              {updateProblemMutation.isPending ? "Saving..." : "Save changes"}
+              {updateProblemMutation.isPending ? t("pages.patientDetail.saving") : t("pages.patientDetail.saveChanges")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3968,22 +4066,22 @@ export default function PatientDetailPage() {
                 size="sm"
                 className="h-8 px-2.5 text-xs"
               >
-                {saveIncompleteNoteMutation.isPending ? "Saving..." : "Save"}
+                {saveIncompleteNoteMutation.isPending ? t("pages.patientDetail.saving") : t("common.save")}
               </Button>
               {newNoteOpen ? (
                 <Button size="sm" className="h-8 px-2.5 text-xs" onClick={() => addNoteMutation.mutate({ content: newNoteContent, noteKind: newNoteType })} disabled={!newNoteHasMinContent || addNoteMutation.isPending} data-testid="button-sign-note">
-                  {addNoteMutation.isPending ? "Signing..." : "Sign Note"}
+                  {addNoteMutation.isPending ? t("pages.patientDetail.signing") : t("pages.patientDetail.signNote")}
                 </Button>
               ) : (() => {
                 const editingNote = notes.find((n) => n.id === editNoteId);
                 const isIncomplete = (editingNote as PatientNote & { status?: string })?.status === "incomplete";
                 return isIncomplete ? (
                   <Button size="sm" className="h-8 px-2.5 text-xs" onClick={() => editNoteId && updateNoteMutation.mutate({ noteId: editNoteId, content: editNoteContent, signAndSave: true })} disabled={!editNoteHasMinContent || updateNoteMutation.isPending || !editNoteId} data-testid="button-sign-note">
-                    {updateNoteMutation.isPending ? "Signing..." : "Sign Note"}
+                    {updateNoteMutation.isPending ? t("pages.patientDetail.signing") : t("pages.patientDetail.signNote")}
                   </Button>
                 ) : (
                   <Button size="sm" className="h-8 px-2.5 text-xs" onClick={() => editNoteId && updateNoteMutation.mutate({ noteId: editNoteId, content: editNoteContent })} disabled={!editNoteHasMinContent || updateNoteMutation.isPending || !editNoteId} data-testid="button-save-edited-note">
-                    {updateNoteMutation.isPending ? "Saving..." : "Save changes"}
+                    {updateNoteMutation.isPending ? t("pages.patientDetail.saving") : t("pages.patientDetail.saveChanges")}
                   </Button>
                 );
               })()}
@@ -3998,21 +4096,22 @@ export default function PatientDetailPage() {
       <Dialog open={viewNoteOpen} onOpenChange={(open) => { setViewNoteOpen(open); if (!open) setViewNote(null); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Review note</DialogTitle>
+            <DialogTitle>{t("pages.patientDetail.reviewNoteTitle")}</DialogTitle>
           </DialogHeader>
           {viewNote && (
             <div className="space-y-3 py-2">
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge variant="secondary" className="text-[10px]">
-                  {(viewNote as PatientNote & { noteKind?: string }).noteKind ?? "Progress Note"}
+                  {(viewNote as PatientNote & { noteKind?: string }).noteKind ?? t("pages.patientDetail.progressNote")}
                 </Badge>
                 <Badge variant="outline" className="text-[10px]">
-                  {viewNote.authorRole === "nursing" ? "Nursing" : "Clinician"}
+                  {viewNote.authorRole === "nursing" ? t("pages.patientDetail.authorRoleNursing") : t("pages.patientDetail.authorRoleClinician")}
                 </Badge>
                 <span className="text-xs text-muted-foreground">
-                  Signed {formatInOrgTimeZone(viewNote.signedAt, "MMM d, yyyy · HH:mm", orgTz)}
-                  {" · "}
-                  By {viewNote.authorId ? (prescriberNameById.get(viewNote.authorId) ?? viewNote.authorId) : "Unknown user"}
+                  {t("pages.patientDetail.signedAtBy", {
+                    date: formatInOrgTimeZone(viewNote.signedAt, "MMM d, yyyy · HH:mm", orgTz),
+                    by: viewNote.authorId ? (prescriberNameById.get(viewNote.authorId) ?? viewNote.authorId) : t("pages.patientDetail.unknownUser"),
+                  })}
                 </span>
               </div>
               <div className="rounded-md border bg-muted/30 p-3">
@@ -4026,14 +4125,14 @@ export default function PatientDetailPage() {
       <Dialog open={leaveNotePromptOpen} onOpenChange={setLeaveNotePromptOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Finish the open note</DialogTitle>
+            <DialogTitle>{t("pages.patientDetail.finishOpenNoteTitle")}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            You have an open note. Sign it before leaving the appointment, or stay here and continue editing.
+            {t("pages.patientDetail.finishOpenNoteDesc")}
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => { setLeaveNotePromptOpen(false); setPendingLeavePath(null); }}>
-              Stay here
+              {t("pages.patientDetail.stayHere")}
             </Button>
             <Button
               onClick={() => {
@@ -4042,7 +4141,7 @@ export default function PatientDetailPage() {
               }}
               disabled={addNoteMutation.isPending || updateNoteMutation.isPending}
             >
-              Sign note
+              {t("pages.patientDetail.signNoteLower")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -4058,13 +4157,13 @@ export default function PatientDetailPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Visit already signed</AlertDialogTitle>
+            <AlertDialogTitle>{t("pages.patientDetail.visitAlreadySignedTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This appointment was completed. Do you want to edit visit documentation?
+              {t("pages.patientDetail.reopenVisitPromptDesc")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={reopenVisitLoading}>No, back to schedule</AlertDialogCancel>
+            <AlertDialogCancel disabled={reopenVisitLoading}>{t("pages.patientDetail.noBackToSchedule")}</AlertDialogCancel>
             <AlertDialogAction
               disabled={reopenVisitLoading}
               onClick={(e) => {
@@ -4072,7 +4171,7 @@ export default function PatientDetailPage() {
                 void confirmReopenVisit();
               }}
             >
-              {reopenVisitLoading ? "Opening…" : "Yes, edit documentation"}
+              {reopenVisitLoading ? t("pages.patientDetail.opening") : t("pages.patientDetail.yesEditDocumentation")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -4082,24 +4181,30 @@ export default function PatientDetailPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {orderComposerType === null ? "New Order" : orderComposerType === "lab" ? "New lab order" : orderComposerType === "imaging" ? "New imaging order" : "New medication order"}
+              {orderComposerType === null
+                ? t("pages.patientDetail.newOrderTitle")
+                : orderComposerType === "lab"
+                  ? t("pages.patientDetail.newLabOrderTitle")
+                  : orderComposerType === "imaging"
+                    ? t("pages.patientDetail.newImagingOrderTitle")
+                    : t("pages.patientDetail.newMedicationOrderTitle")}
             </DialogTitle>
           </DialogHeader>
           {orderComposerType === null ? (
             <div className="space-y-4 py-2">
-              <p className="text-sm text-muted-foreground">Choose the type of order to place.</p>
+              <p className="text-sm text-muted-foreground">{t("pages.patientDetail.chooseOrderTypeDesc")}</p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <Button variant="outline" className="h-auto py-4 flex flex-col items-center gap-1" onClick={() => setOrderComposerType("lab")}>
-                  <span className="font-medium">Lab order</span>
-                  <span className="text-xs text-muted-foreground">Blood tests, cultures, etc.</span>
+                  <span className="font-medium">{t("pages.patientDetail.orderTypeLab")}</span>
+                  <span className="text-xs text-muted-foreground">{t("pages.patientDetail.orderTypeLabHint")}</span>
                 </Button>
                 <Button variant="outline" className="h-auto py-4 flex flex-col items-center gap-1" onClick={() => setOrderComposerType("imaging")}>
-                  <span className="font-medium">Imaging order</span>
-                  <span className="text-xs text-muted-foreground">X-Ray, CT, MRI, etc.</span>
+                  <span className="font-medium">{t("pages.patientDetail.orderTypeImaging")}</span>
+                  <span className="text-xs text-muted-foreground">{t("pages.patientDetail.orderTypeImagingHint")}</span>
                 </Button>
                 <Button variant="outline" className="h-auto py-4 flex flex-col items-center gap-1" onClick={() => setOrderComposerType("medication")}>
-                  <span className="font-medium">Medication order</span>
-                  <span className="text-xs text-muted-foreground">Prescribe a medication</span>
+                  <span className="font-medium">{t("pages.patientDetail.orderTypeMedication")}</span>
+                  <span className="text-xs text-muted-foreground">{t("pages.patientDetail.orderTypeMedicationHint")}</span>
                 </Button>
               </div>
             </div>
@@ -4107,7 +4212,7 @@ export default function PatientDetailPage() {
             <>
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label>Test *</Label>
+                  <Label>{t("pages.patientDetail.testLabelRequired")}</Label>
                   <Select
                     value={COMMON_LAB_TESTS_AFRICA.some((t) => t.testName === newOrderForm.testName && t.testCode === newOrderForm.testCode) ? newOrderForm.testName : "other"}
                     onValueChange={(v) => {
@@ -4411,7 +4516,7 @@ export default function PatientDetailPage() {
                       <SelectContent>
                         {ROUTE_OPTIONS.map((r) => (
                           <SelectItem key={r.id} value={r.id}>
-                            {r.label}
+                            {routeLabel(r.id, t)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -4611,7 +4716,7 @@ export default function PatientDetailPage() {
                   <SelectContent>
                     {ROUTE_OPTIONS.map((r) => (
                       <SelectItem key={r.id} value={r.id}>
-                        {r.label}
+                        {routeLabel(r.id, t)}
                       </SelectItem>
                     ))}
                   </SelectContent>

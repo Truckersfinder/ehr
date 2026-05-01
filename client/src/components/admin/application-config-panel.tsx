@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { apiDeleteJson, apiGetJson, apiPatchJson, apiPostJson, apiPutJson } from "@/lib/api-client";
@@ -59,6 +60,7 @@ function effectiveCapabilityIdsForRole(
 }
 
 export function ApplicationConfigPanel({ token }: { token: string | null }) {
+  const { t } = useTranslation();
   const { toast } = useToast();
   const [tableRole, setTableRole] = useState<User["role"]>("super_admin");
   const [tableKey, setTableKey] = useState<string>("admin_users");
@@ -143,7 +145,8 @@ export function ApplicationConfigPanel({ token }: { token: string | null }) {
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/ui-table-columns"] });
       void queryClient.invalidateQueries({ queryKey: ["/api/ui-table-columns/effective"] });
     },
-    onError: (e: Error) => toast({ title: "Could not update column", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: t("pages.applicationConfig.toastCouldNotUpdateColumn"), description: e.message, variant: "destructive" }),
   });
 
   const putOrder = useMutation({
@@ -153,7 +156,8 @@ export function ApplicationConfigPanel({ token }: { token: string | null }) {
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/ui-table-columns"] });
       void queryClient.invalidateQueries({ queryKey: ["/api/ui-table-columns/effective"] });
     },
-    onError: (e: Error) => toast({ title: "Could not reorder", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: t("pages.applicationConfig.toastCouldNotReorder"), description: e.message, variant: "destructive" }),
   });
 
   const createCustom = useMutation({
@@ -163,9 +167,10 @@ export function ApplicationConfigPanel({ token }: { token: string | null }) {
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/ui-table-columns"] });
       void queryClient.invalidateQueries({ queryKey: ["/api/ui-table-columns/effective"] });
       setNewCustomLabel("");
-      toast({ title: "Column added" });
+      toast({ title: t("pages.applicationConfig.toastColumnAdded") });
     },
-    onError: (e: Error) => toast({ title: "Could not add column", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: t("pages.applicationConfig.toastCouldNotAddColumn"), description: e.message, variant: "destructive" }),
   });
 
   const deleteCustom = useMutation({
@@ -176,9 +181,10 @@ export function ApplicationConfigPanel({ token }: { token: string | null }) {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/ui-table-columns"] });
       void queryClient.invalidateQueries({ queryKey: ["/api/ui-table-columns/effective"] });
-      toast({ title: "Custom column removed" });
+      toast({ title: t("pages.applicationConfig.toastCustomColumnRemoved") });
     },
-    onError: (e: Error) => toast({ title: "Could not remove column", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: t("pages.applicationConfig.toastCouldNotRemoveColumn"), description: e.message, variant: "destructive" }),
   });
 
   const patchActivity = useMutation({
@@ -221,7 +227,7 @@ export function ApplicationConfigPanel({ token }: { token: string | null }) {
       if (context?.previous) {
         queryClient.setQueryData(["/api/admin/application-config"], context.previous);
       }
-      toast({ title: "Could not update activity", description: e.message, variant: "destructive" });
+      toast({ title: t("pages.applicationConfig.toastCouldNotUpdateActivity"), description: e.message, variant: "destructive" });
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["/api/admin/application-config"] });
@@ -570,8 +576,8 @@ export function ApplicationConfigPanel({ token }: { token: string | null }) {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="toolbar">Toolbar</SelectItem>
-                      <SelectItem value="patient_chart_review">Patient chart — Review</SelectItem>
-                      <SelectItem value="patient_chart_visit_doc">Patient chart — Visit documentation</SelectItem>
+                      <SelectItem value="patient_chart_review">Navigator — Review</SelectItem>
+                      <SelectItem value="patient_chart_visit_doc">Navigator — Visit documentation</SelectItem>
                       <SelectItem value="admin_activities">Activities</SelectItem>
                     </SelectContent>
                   </Select>

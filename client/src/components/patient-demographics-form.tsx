@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
@@ -102,6 +103,7 @@ type Props = {
 export function PatientDemographicsForm({ patientId, patient }: Props) {
   const { token } = useAuth();
   const { toast } = useToast();
+  const { t } = useTranslation();
   const [draft, setDraft] = useState<DemographicsDraft>(() => patientToDemographicsDraft(patient));
   const galleryPhotoInputRef = useRef<HTMLInputElement>(null);
   const cameraPhotoInputRef = useRef<HTMLInputElement>(null);
@@ -130,16 +132,16 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!String(draft.firstName).trim() || !String(draft.lastName).trim()) {
-        throw new Error("First and last name are required");
+        throw new Error(t("components.patientDemographicsForm.errFirstLastRequired"));
       }
       if (!draft.dateOfBirth) {
-        throw new Error("Date of birth is required");
+        throw new Error(t("components.patientDemographicsForm.errDobRequired"));
       }
       if (!String(draft.country).trim()) {
-        throw new Error("Country is required");
+        throw new Error(t("components.patientDemographicsForm.errCountryRequired"));
       }
       if (!String(draft.state).trim()) {
-        throw new Error("State / province / region is required");
+        throw new Error(t("components.patientDemographicsForm.errStateRequired"));
       }
       const body: Record<string, unknown> = {
         firstName: draft.firstName.trim(),
@@ -175,7 +177,7 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { message?: string }).message || "Failed to save");
+        throw new Error((err as { message?: string }).message || t("components.patientDemographicsForm.errFailedToSave"));
       }
       return normalizePatientRow(await res.json());
     },
@@ -189,16 +191,16 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
         return next;
       });
       void queryClient.invalidateQueries({ queryKey: ["/api/patients", ""], exact: true });
-      toast({ title: "Patient demographics saved" });
+      toast({ title: t("components.patientDemographicsForm.toastSaved") });
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const inviteMutation = useMutation({
     mutationFn: async (regenerateToken: boolean) => {
       const resolvedTo = draft.portalAccessEmail.trim() || draft.email.trim();
       if (!resolvedTo) {
-        throw new Error("Add a contact email or portal email before sending an invitation.");
+        throw new Error(t("components.patientDemographicsForm.errInviteNeedsEmail"));
       }
       const portalPatch = {
         portalEnabled: draft.portalEnabled,
@@ -213,7 +215,7 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
       });
       if (!patchRes.ok) {
         const err = await patchRes.json().catch(() => ({}));
-        throw new Error((err as { message?: string }).message || "Failed to save portal settings");
+        throw new Error((err as { message?: string }).message || t("components.patientDemographicsForm.errFailedToSavePortal"));
       }
       const saved = normalizePatientRow(await patchRes.json());
       queryClient.setQueryData<Patient>(["/api/patients", patientId], (prev) => {
@@ -231,23 +233,24 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error((err as { message?: string }).message || "Failed to send");
+        throw new Error((err as { message?: string }).message || t("components.patientDemographicsForm.errFailedToSend"));
       }
       return (await res.json()) as { ok?: boolean; sentTo?: string };
     },
     onSuccess: (data) => {
       const to = data?.sentTo;
       toast({
-        title: "Email queued for delivery",
+        title: t("components.patientDemographicsForm.toastInviteQueuedTitle"),
         description: [
-          to ? `Recipient: ${to}.` : null,
-          "If it does not arrive within a few minutes, ask the patient to check spam/junk and promotions tabs.",
+          to ? t("components.patientDemographicsForm.toastInviteQueuedRecipient", { to }) : null,
+          t("components.patientDemographicsForm.toastInviteQueuedHint"),
         ]
           .filter(Boolean)
           .join(" "),
       });
     },
-    onError: (e: Error) => toast({ title: "Could not send email", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: t("components.patientDemographicsForm.toastCouldNotSendEmail"), description: e.message, variant: "destructive" }),
   });
 
   const uploadPhotoMutation = useMutation({
@@ -268,11 +271,12 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
         ...updated,
         profilePhotoUrl: updated.profilePhotoUrl ?? prev?.profilePhotoUrl ?? null,
       }));
-      toast({ title: "Profile photo updated" });
+      toast({ title: t("components.patientDemographicsForm.toastProfilePhotoUpdated") });
       if (galleryPhotoInputRef.current) galleryPhotoInputRef.current.value = "";
       if (cameraPhotoInputRef.current) cameraPhotoInputRef.current.value = "";
     },
-    onError: (e: Error) => toast({ title: "Photo upload failed", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({ title: t("components.patientDemographicsForm.toastPhotoUploadFailed"), description: e.message, variant: "destructive" }),
   });
 
   const canUseCamera = useMemo(() => {
@@ -291,7 +295,7 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
 
   async function startCamera(nextDeviceId?: string) {
     if (!canUseCamera) {
-      setCameraError("Camera is not supported in this browser.");
+      setCameraError(t("components.patientDemographicsForm.errCameraNotSupported"));
       return;
     }
     setCameraError(null);
@@ -320,7 +324,7 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
         if (activeId) setCameraDeviceId(activeId);
       }
     } catch (e: any) {
-      setCameraError(e?.message || "Unable to access camera. Please allow camera permissions.");
+      setCameraError(e?.message || t("components.patientDemographicsForm.errCameraAccessDenied"));
       await stopCamera();
     }
   }
@@ -332,7 +336,7 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
     const w = video.videoWidth || 1280;
     const h = video.videoHeight || 720;
     if (!w || !h) {
-      toast({ title: "Camera not ready", description: "Please wait a moment and try again.", variant: "destructive" });
+      toast({ title: t("components.patientDemographicsForm.toastCameraNotReadyTitle"), description: t("components.patientDemographicsForm.toastCameraNotReadyDesc"), variant: "destructive" });
       return;
     }
     canvas.width = w;
@@ -345,7 +349,7 @@ export function PatientDemographicsForm({ patientId, patient }: Props) {
       canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9),
     );
     if (!blob) {
-      toast({ title: "Capture failed", description: "Could not create image.", variant: "destructive" });
+      toast({ title: t("components.patientDemographicsForm.toastCaptureFailedTitle"), description: t("components.patientDemographicsForm.toastCaptureFailedDesc"), variant: "destructive" });
       return;
     }
     const file = new File([blob], `profile-photo-${patientId}.jpg`, { type: "image/jpeg" });

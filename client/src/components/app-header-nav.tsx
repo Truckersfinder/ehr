@@ -21,7 +21,7 @@ const SYSTEMS_ADMIN_ONLY_NAV_TITLES = new Set([
   "Administrative",
 ]);
 
-/** Module nav (Dashboard, Billing, Laboratory, Uploads) — hidden for Systems administrator; they use admin toolbar + activities only. */
+/** Toolbar module links (Dashboard, Billing, Laboratory, Uploads) — hidden for Systems administrator; they use admin toolbar + activities only. */
 const MODULE_NAV_HIDDEN_FOR_SECURITY = new Set([
   "Dashboard",
   "Billing",

@@ -1,4 +1,4 @@
-/** Stable toolbar activity ids → routes (secondary row, not module header nav). */
+/** Stable toolbar activity ids → routes (secondary row; primary module links are also part of the Toolbar). */
 
 export function toolbarActivityHref(id: string): string {
   switch (id) {

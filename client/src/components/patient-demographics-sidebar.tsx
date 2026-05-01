@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -89,9 +90,10 @@ function ProfilePhotoAvatar({
   );
 }
 
-export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { patientId: string; onRequestLeave?: (path: string) => void }) {
+export function PatientStoryboard({ patientId, onRequestLeave }: { patientId: string; onRequestLeave?: (path: string) => void }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const { t } = useTranslation();
   const { token, user } = useAuth();
   const chartBackPath = user?.role === "reception" ? "/appointments" : "/schedule";
   const [scheduleEncounter, setScheduleEncounter] = useState(() => readScheduleEncounterSession(patientId));
@@ -123,11 +125,16 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
         ...updated,
         profilePhotoUrl: updated.profilePhotoUrl ?? prev?.profilePhotoUrl ?? null,
       }));
-      toast({ title: "Profile photo updated" });
+      toast({ title: t("components.patientStoryboard.toastProfilePhotoUpdated") });
       if (galleryPhotoInputRef.current) galleryPhotoInputRef.current.value = "";
       if (cameraPhotoInputRef.current) cameraPhotoInputRef.current.value = "";
     },
-    onError: (e: Error) => toast({ title: "Photo upload failed", description: e.message, variant: "destructive" }),
+    onError: (e: Error) =>
+      toast({
+        title: t("components.patientStoryboard.toastPhotoUploadFailed"),
+        description: e.message,
+        variant: "destructive",
+      }),
   });
 
   const refreshEncounterSession = useCallback(() => {
@@ -169,15 +176,15 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
       window.dispatchEvent(new CustomEvent("ehr-encounter-session"));
       queryClient.invalidateQueries({ queryKey: ["/api/encounters"] });
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
-      toast({ title: "Encounter closed", description: "Returning to Schedule." });
+      toast({ title: t("components.patientStoryboard.toastEncounterClosedTitle"), description: t("components.patientStoryboard.toastEncounterClosedDesc") });
       if (onRequestLeave) {
         onRequestLeave(chartBackPath);
       } else {
         navigate(chartBackPath);
       }
     } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : "Could not close encounter";
-      toast({ title: "Error", description: message, variant: "destructive" });
+      const message = e instanceof Error ? e.message : t("components.patientStoryboard.errCouldNotCloseEncounter");
+      toast({ title: t("common.error"), description: message, variant: "destructive" });
     }
   };
 
@@ -200,12 +207,12 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
 
   const dischargeMutation = useMutation({
     mutationFn: async () => {
-      if (!activeAdmission?.id) throw new Error("No active admission found");
-      if (!dischargeReason.trim()) throw new Error("Select a discharge reason");
+      if (!activeAdmission?.id) throw new Error(t("components.patientStoryboard.errNoActiveAdmission"));
+      if (!dischargeReason.trim()) throw new Error(t("components.patientStoryboard.errSelectDischargeReason"));
       if (dischargeReason.trim() === "deceased") {
-        if (!causeOfDeath.trim()) throw new Error("Cause of death is required");
-        if (!dateOfDeath.trim()) throw new Error("Date of death is required");
-        if (!timeOfDeath.trim()) throw new Error("Time of death is required");
+        if (!causeOfDeath.trim()) throw new Error(t("components.patientStoryboard.errCauseOfDeathRequired"));
+        if (!dateOfDeath.trim()) throw new Error(t("components.patientStoryboard.errDateOfDeathRequired"));
+        if (!timeOfDeath.trim()) throw new Error(t("components.patientStoryboard.errTimeOfDeathRequired"));
       }
       const timeOfDeathIso =
         dischargeReason.trim() === "deceased"
@@ -223,12 +230,12 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Could not discharge patient");
+        throw new Error(err.message || t("components.patientStoryboard.errCouldNotDischargePatient"));
       }
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Patient discharged" });
+      toast({ title: t("components.patientStoryboard.toastPatientDischarged") });
       setDischargeOpen(false);
       setDischargeReason("");
       setDischargeNotes("");
@@ -251,14 +258,14 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
         navigate(chartBackPath);
       }
     },
-    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: t("common.error"), description: e.message, variant: "destructive" }),
   });
 
   const { data: patient, isLoading } = useQuery<Patient>({
     queryKey: ["/api/patients", patientId],
     queryFn: async () => {
       const res = await fetch(`/api/patients/${patientId}`, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error(t("common.error"));
       return normalizePatientRow(await res.json());
     },
     enabled: !!patientId && !!token,
@@ -291,7 +298,7 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
     queryKey: ["/api/patients", patientId, "vitals"],
     queryFn: async () => {
       const res = await fetch(`/api/patients/${patientId}/vitals`, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error(t("common.error"));
       return res.json();
     },
     enabled: !!patientId && !!token,
@@ -778,3 +785,6 @@ export function PatientDemographicsSidebar({ patientId, onRequestLeave }: { pati
     </div>
   );
 }
+
+/** Backwards-compatible alias (internal code should prefer `PatientStoryboard`). */
+export const PatientDemographicsSidebar = PatientStoryboard;

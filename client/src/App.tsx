@@ -7,7 +7,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppHeaderNav } from "@/components/app-header-nav";
 import { PatientSearch } from "@/components/patient-search";
-import { PatientDemographicsSidebar } from "@/components/patient-demographics-sidebar";
+import { PatientStoryboard } from "@/components/patient-demographics-sidebar";
 import { PatientChartNavigatorEmbedded } from "@/components/patient-chart-navigator-embedded";
 import { ScheduleNewAppointmentToolbarDialog } from "@/components/schedule-new-appointment-toolbar-dialog";
 import { ToolbarActionLinks } from "@/components/toolbar-action-links";
@@ -154,7 +154,7 @@ function AuthenticatedApp() {
 
   /**
    * Toolbar: Schedule never shows the embedded storyboard.
-   * Laboratory & Uploads: full-width only (no demographics + chart navigator rail).
+   * Laboratory & Uploads: full-width only (no patient storyboard + navigator rail).
    * Other routes (dashboard, admin, etc.) never show the embedded chrome.
    */
   /** Lab and Uploads are full-width workflows; do not pin demographics / chart review beside them. */
@@ -167,9 +167,9 @@ function AuthenticatedApp() {
     !isScheduleView &&
     (showEmbeddedOnLaboratory || showEmbeddedOnUploadResults);
 
-  const showPatientDemographicsSidebar =
+  const showPatientStoryboard =
     (isPatientDetailRoute && !!patientIdFromRoute) || showEmbeddedPatientChrome;
-  const demographicsPatientId = patientIdFromRoute ?? activePatientId ?? "";
+  const storyboardPatientId = patientIdFromRoute ?? activePatientId ?? "";
 
   const showLabAndUpload = user && ["clinician", "nurse"].includes(user.role);
   const isReception = user && user.role === "reception";
@@ -415,16 +415,16 @@ function AuthenticatedApp() {
           </div>
         </header>
         <div className="flex min-h-0 min-w-0 flex-1">
-          {showPatientDemographicsSidebar && demographicsPatientId ? (
+          {showPatientStoryboard && storyboardPatientId ? (
             <>
-              <PatientDemographicsSidebar
-                patientId={demographicsPatientId}
+              <PatientStoryboard
+                patientId={storyboardPatientId}
                 onRequestLeave={(path) => window.dispatchEvent(new CustomEvent("ehr-request-leave", { detail: path }))}
               />
               {/* Laboratory / Uploads: embedded storyboard is review-only (no visit documentation) */}
               {showEmbeddedPatientChrome && (
                 <PatientChartNavigatorEmbedded
-                  patientId={demographicsPatientId}
+                  patientId={storyboardPatientId}
                   showVisitDocumentation={false}
                 />
               )}

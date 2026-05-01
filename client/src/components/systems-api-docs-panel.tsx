@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Copy } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 function CodeLine({ children }: { children: string }) {
   return <code className="block font-mono text-xs bg-muted/40 border rounded-md px-3 py-2 overflow-x-auto">{children}</code>;
@@ -12,40 +13,44 @@ function copy(text: string) {
 }
 
 export function SystemsApiDocsPanel() {
+  const { t } = useTranslation();
+  const coreResourcesRaw = t("pages.systemsApi.coreResources", { returnObjects: true });
+  const coreResources: string[] = Array.isArray(coreResourcesRaw)
+    ? (coreResourcesRaw.filter((x) => typeof x === "string") as string[])
+    : [];
   return (
     <div className="space-y-4" data-testid="systems-api-panel">
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center justify-between gap-2">
-            <span>Integration API (v1)</span>
+            <span>{t("pages.systemsApi.title")}</span>
             <Badge variant="secondary" className="font-normal">/api/v1</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground">
           <p>
-            This EMR exposes production-grade integration endpoints for third-party services (labs, pharmacies, billing vendors,
-            schedulers, telehealth, insurance verification, patient apps).
+            {t("pages.systemsApi.subtitle")}
           </p>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <Card className="border-dashed">
               <CardHeader className="py-3">
-                <CardTitle className="text-sm">Authentication</CardTitle>
+                <CardTitle className="text-sm">{t("pages.systemsApi.authTitle")}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm text-muted-foreground">
-                <p><span className="font-medium text-foreground">API key</span> (server-to-server):</p>
+                <p><span className="font-medium text-foreground">{t("pages.systemsApi.apiKeyLabel")}</span> {t("pages.systemsApi.apiKeyHint")}</p>
                 <CodeLine>{"Authorization: Bearer ehr_live_<uuid>_<secret>"}</CodeLine>
-                <p><span className="font-medium text-foreground">OAuth2</span> (client_credentials):</p>
+                <p><span className="font-medium text-foreground">{t("pages.systemsApi.oauthLabel")}</span> {t("pages.systemsApi.oauthHint")}</p>
                 <CodeLine>{"POST /api/v1/oauth/token"}</CodeLine>
               </CardContent>
             </Card>
             <Card className="border-dashed">
               <CardHeader className="py-3">
-                <CardTitle className="text-sm">Key patterns</CardTitle>
+                <CardTitle className="text-sm">{t("pages.systemsApi.patternsTitle")}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm text-muted-foreground">
-                <p><span className="font-medium text-foreground">Idempotency</span> on writes:</p>
+                <p><span className="font-medium text-foreground">{t("pages.systemsApi.idempotencyLabel")}</span> {t("pages.systemsApi.idempotencyHint")}</p>
                 <CodeLine>{"Idempotency-Key: <unique key per request>"}</CodeLine>
-                <p><span className="font-medium text-foreground">Webhooks</span> are queued + retried.</p>
+                <p><span className="font-medium text-foreground">{t("pages.systemsApi.webhooksLabel")}</span> {t("pages.systemsApi.webhooksHint")}</p>
               </CardContent>
             </Card>
           </div>
@@ -54,47 +59,31 @@ export function SystemsApiDocsPanel() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Core resources</CardTitle>
+          <CardTitle className="text-base">{t("pages.systemsApi.coreResourcesTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-muted-foreground">
           <div className="flex flex-wrap gap-2">
-            {[
-              "Patients",
-              "Providers",
-              "Appointments",
-              "Encounters",
-              "Medications",
-              "Allergies",
-              "Problems",
-              "Labs",
-              "Vitals",
-              "Notes",
-              "Documents",
-              "Billing/Invoices",
-              "Facilities",
-              "Users/Roles",
-              "Audit logs",
-              "Webhooks",
-            ].map((x) => (
+            {coreResources.map((x: string) => (
               <Badge key={x} variant="secondary" className="font-normal">{x}</Badge>
             ))}
           </div>
           <p className="pt-1">
-            Full endpoint list and examples live in <span className="font-mono text-xs text-foreground">docs/integration/README.md</span>.
+            {t("pages.systemsApi.fullDocsBefore")}{" "}
+            <span className="font-mono text-xs text-foreground">docs/integration/README.md</span>.
           </p>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Common workflow examples</CardTitle>
+          <CardTitle className="text-base">{t("pages.systemsApi.workflowsTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground">
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <p className="font-medium text-foreground">Create a patient</p>
+              <p className="font-medium text-foreground">{t("pages.systemsApi.workflowCreatePatient")}</p>
               <Button variant="outline" size="sm" className="gap-2" onClick={() => copy(CURL_CREATE_PATIENT)}>
-                <Copy className="w-4 h-4" /> Copy cURL
+                <Copy className="w-4 h-4" /> {t("pages.systemsApi.copyCurl")}
               </Button>
             </div>
             <CodeLine>{CURL_CREATE_PATIENT}</CodeLine>
@@ -102,9 +91,9 @@ export function SystemsApiDocsPanel() {
 
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <p className="font-medium text-foreground">Register a webhook</p>
+              <p className="font-medium text-foreground">{t("pages.systemsApi.workflowRegisterWebhook")}</p>
               <Button variant="outline" size="sm" className="gap-2" onClick={() => copy(CURL_REGISTER_WEBHOOK)}>
-                <Copy className="w-4 h-4" /> Copy cURL
+                <Copy className="w-4 h-4" /> {t("pages.systemsApi.copyCurl")}
               </Button>
             </div>
             <CodeLine>{CURL_REGISTER_WEBHOOK}</CodeLine>
@@ -114,11 +103,11 @@ export function SystemsApiDocsPanel() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Implementation references</CardTitle>
+          <CardTitle className="text-base">{t("pages.systemsApi.implementationTitle")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-muted-foreground">
           <p className="text-sm">
-            Source files (for internal implementers):
+            {t("pages.systemsApi.implementationSubtitle")}
           </p>
           <ul className="list-disc pl-5 space-y-1 text-sm">
             <li><span className="font-mono text-xs text-foreground">server/integration/v1-routes.ts</span> (REST handlers)</li>

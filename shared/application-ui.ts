@@ -5,7 +5,7 @@
 
 import { NAV_ITEM_CAPABILITY_ID } from "./role-capabilities-registry";
 
-/** Layout contexts stored in `ui_activity_layout`. Header strip (hdr_*) and secondary row (tb_*) share `toolbar`. */
+/** Layout contexts stored in `ui_activity_layout`. Primary module links (hdr_*) and secondary row (tb_*) share `toolbar`. */
 export const UI_ACTIVITY_CONTEXTS = [
   "toolbar",
   "patient_chart_review",
@@ -69,7 +69,7 @@ export type UiActivityLayoutRow = {
   readOnly: boolean;
 };
 
-/** Header module link ids (hdr_*) — rendered in AppHeaderNav; paired destinations also have tb_* (deduplicated in unified catalog). */
+/** Primary Toolbar module link ids (hdr_*) — rendered in AppHeaderNav; paired destinations also have tb_* (deduplicated in unified catalog). */
 export const HEADER_NAV_ACTIVITY_ORDER: { id: string; defaultLabel: string; titleKey: string }[] = [
   { id: "hdr_dashboard", defaultLabel: "Dashboard", titleKey: "Dashboard" },
   { id: "hdr_billing", defaultLabel: "Billing", titleKey: "Billing" },
@@ -104,7 +104,7 @@ export const TOOLBAR_ACTIVITY_ORDER: { id: string; defaultLabel: string }[] = [
 ];
 
 /**
- * Single Application configuration list: primary header links (hdr_*) plus secondary toolbar (tb_*).
+ * Single Application configuration list: primary module links (hdr_*) plus the secondary row (tb_*) — together these are the Toolbar.
  * Duplicates the same destination (e.g. hdr_laboratory + tb_laboratory) — only tb_* is listed.
  */
 export const TOOLBAR_UNIFIED_ACTIVITY_ORDER: { id: string; defaultLabel: string; titleKey?: string }[] = [

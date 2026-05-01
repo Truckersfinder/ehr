@@ -146,7 +146,7 @@ export function PatientChartNavigatorEmbedded({ patientId, showVisitDocumentatio
   return (
     <nav
       className="w-52 flex-shrink-0 border border-border rounded-lg bg-muted/30 flex flex-col overflow-y-auto py-4"
-      aria-label="Patient chart sections"
+      aria-label="Navigator"
     >
       <div className="px-3 space-y-6">
         <div>
