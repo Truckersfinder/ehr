@@ -7,6 +7,9 @@ export type PatientPortalBrandingResponse = {
   welcomeMessage?: string;
 };
 
+/** Product wordmark on staff surfaces (distinct from facility name in Admin / portal branding API). */
+export const APP_PRODUCT_DISPLAY_NAME = "Imani EHR";
+
 /** Public branding (facility name from Admin). Shared query key so React Query dedupes across login, portal, and public forms. */
 export function usePatientPortalBranding() {
   return useQuery({
@@ -22,5 +25,5 @@ export function usePatientPortalBranding() {
 
 /** When the branding API has not loaded or failed; matches server default after env + DB. */
 export function publicOrganizationNameFallback(): string {
-  return "Hospital";
+  return "Imani";
 }

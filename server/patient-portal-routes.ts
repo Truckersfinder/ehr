@@ -49,7 +49,7 @@ export function registerPatientPortalRoutes(app: Express): void {
       const fac = facilities.find((f) => f.isActive);
       const facilityName = fac?.name?.trim();
       /** Admin-configured facility name wins; env is only a fallback when no name is set. */
-      const name = facilityName || fromEnv || "Hospital";
+      const name = facilityName || fromEnv || "Imani";
       const cfg = mergePatientPortalConfig((fac as { patientPortalConfig?: unknown } | undefined)?.patientPortalConfig);
       return res.json({ organizationName: name, welcomeMessage: cfg.welcomeMessage });
     } catch (error: any) {
@@ -73,7 +73,7 @@ export function registerPatientPortalRoutes(app: Express): void {
       const facility = patient.facilityId ? await storage.getFacility(patient.facilityId) : undefined;
       return res.json({
         firstName: patient.firstName,
-        facilityName: facility?.name ?? "Hospital",
+        facilityName: facility?.name ?? "Imani",
         alreadyCompleted: false,
       });
     } catch (error: any) {

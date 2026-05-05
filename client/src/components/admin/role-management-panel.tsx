@@ -6,6 +6,7 @@ import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { apiGetJson, apiPatchJson } from "@/lib/api-client";
+import { cn } from "@/lib/utils";
 import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { USER_ROLE_LABELS } from "@/lib/user-role-labels";
@@ -78,9 +79,14 @@ export function RoleManagementPanel({ token }: { token: string | null }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/40">
-                    <th className="text-left p-2 font-medium sticky left-0 bg-muted/40 z-10 min-w-[220px]">Capability</th>
+                    <th className="sticky left-0 z-10 min-w-[220px] bg-muted/40 py-2 pl-2 pr-4 text-left font-medium">
+                      Capability
+                    </th>
                     {data.roles.map((r) => (
-                      <th key={r} className="text-center p-2 font-medium whitespace-nowrap min-w-[100px]">
+                      <th
+                        key={r}
+                        className="min-w-[100px] whitespace-nowrap py-2 pl-2 pr-4 text-center font-medium last:pr-6"
+                      >
                         {roleLabel(r)}
                       </th>
                     ))}
@@ -90,20 +96,30 @@ export function RoleManagementPanel({ token }: { token: string | null }) {
                   {Array.from(grouped.entries()).map(([group, defs]) => (
                     <Fragment key={group}>
                       <tr className="bg-muted/20">
-                        <td colSpan={data.roles.length + 1} className="p-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <td
+                          colSpan={data.roles.length + 1}
+                          className="px-3 py-2 pr-6 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                        >
                           {group}
                         </td>
                       </tr>
                       {defs.map((def) => (
                         <tr key={def.id} className="border-b border-border/60">
-                          <td className="p-2 align-top sticky left-0 bg-background z-10">
+                          <td className="sticky left-0 z-10 bg-background py-2 pl-3 pr-4 align-top">
                             <span className="font-medium">{def.label}</span>
                             <p className="text-[11px] text-muted-foreground font-mono">{def.id}</p>
                           </td>
-                          {data.roles.map((r) => {
+                          {data.roles.map((r, roleIdx) => {
                             const allowed = data.matrix[r]?.[def.id] ?? false;
+                            const isLastRole = roleIdx === data.roles.length - 1;
                             return (
-                              <td key={r} className="p-1 text-center align-middle">
+                              <td
+                                key={r}
+                                className={cn(
+                                  "py-2 pl-2 text-center align-middle",
+                                  isLastRole ? "pr-6" : "pr-4",
+                                )}
+                              >
                                 <Checkbox
                                   checked={allowed}
                                   disabled={patchCap.isPending}

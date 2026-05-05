@@ -1,0 +1,1299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Imani EHR — Built for Africa</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green-deep:    #0D3B2E;
+      --green-mid:     #1B5E43;
+      --green-light:   #2E8060;
+      --terra:         #C8722A;
+      --terra-light:   #E8934E;
+      --gold:          #D4A847;
+      --cream:         #FAF7F2;
+      --cream-warm:    #F3EDE3;
+      --text-dark:     #1A1A18;
+      --text-muted:    #6B6B5E;
+      --white:         #FFFFFF;
+      --border:        rgba(13,59,46,0.12);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Outfit', sans-serif;
+      background: var(--cream);
+      color: var(--text-dark);
+      overflow-x: hidden;
+    }
+
+    /* ── NAVIGATION ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 5vw;
+      height: 72px;
+      background: var(--green-deep);
+      backdrop-filter: none;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      text-decoration: none;
+    }
+    .nav-logo-img {
+      width: 44px;
+      height: 44px;
+      object-fit: contain;
+      flex-shrink: 0;
+    }
+    .nav-logo-text {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.3rem;
+      font-weight: 600;
+      color: var(--white);
+      letter-spacing: -0.01em;
+    }
+    .nav-logo-text span.ehr-gold { color: var(--gold); }
+
+    .nav-links {
+      display: flex; align-items: center; gap: 2rem;
+      list-style: none;
+    }
+    .nav-links a {
+      text-decoration: none;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: rgba(255,255,255,0.92);
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--gold); }
+
+    .nav-cta {
+      display: flex; gap: 0.75rem;
+    }
+    nav .btn-ghost {
+      padding: 0.5rem 1.25rem;
+      border: 1.5px solid rgba(255,255,255,0.85);
+      border-radius: 6px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: var(--white);
+      background: transparent;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+    nav .btn-ghost:hover {
+      background: rgba(255,255,255,0.12);
+      border-color: var(--white);
+      color: var(--white);
+    }
+    .btn-primary {
+      padding: 0.5rem 1.25rem;
+      border: none;
+      border-radius: 6px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.875rem;
+      font-weight: 600;
+      background: var(--terra);
+      color: var(--white);
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+    .btn-primary:hover { background: var(--terra-light); transform: translateY(-1px); }
+    nav .btn-primary {
+      background: transparent;
+      color: var(--white);
+      border: 1.5px solid var(--gold);
+    }
+    nav .btn-primary:hover {
+      background: var(--gold);
+      color: var(--green-deep);
+      transform: translateY(-1px);
+    }
+
+    /* ── HERO ── */
+    .hero {
+      min-height: 100vh;
+      padding: 72px 5vw 0;
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.22fr);
+      align-items: center;
+      gap: clamp(1.5rem, 3.5vw, 3.5rem);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Kente-inspired background pattern */
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        repeating-linear-gradient(
+          90deg,
+          transparent 0px, transparent 48px,
+          rgba(13,59,46,0.03) 48px, rgba(13,59,46,0.03) 49px
+        ),
+        repeating-linear-gradient(
+          0deg,
+          transparent 0px, transparent 48px,
+          rgba(13,59,46,0.03) 48px, rgba(13,59,46,0.03) 49px
+        );
+      pointer-events: none;
+    }
+
+    .hero::after {
+      content: '';
+      position: absolute;
+      top: -200px; right: -200px;
+      width: 700px; height: 700px;
+      background: radial-gradient(circle, rgba(212,168,71,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-content { position: relative; z-index: 1; }
+
+    .hero-headline {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: clamp(2.8rem, 5vw, 4.5rem);
+      font-weight: 700;
+      line-height: 1.05;
+      color: var(--green-deep);
+      margin-bottom: 1.5rem;
+      animation: fadeUp 0.6s 0.1s ease both;
+    }
+    .hero-headline em {
+      font-style: italic;
+      color: var(--terra);
+    }
+    .hero-headline .underline-gold {
+      position: relative; display: inline-block;
+    }
+    .hero-headline .underline-gold::after {
+      content: '';
+      position: absolute;
+      bottom: 2px; left: 0; right: 0;
+      height: 3px;
+      background: var(--gold);
+      border-radius: 2px;
+    }
+
+    .hero-sub {
+      font-size: 1.05rem;
+      line-height: 1.7;
+      color: var(--text-muted);
+      max-width: 480px;
+      margin-bottom: 2.5rem;
+      font-weight: 400;
+      animation: fadeUp 0.6s 0.2s ease both;
+    }
+
+    .hero-actions {
+      display: flex; align-items: center; gap: 1rem;
+      margin-bottom: 3rem;
+      animation: fadeUp 0.6s 0.3s ease both;
+    }
+    .btn-hero-primary {
+      padding: 0.85rem 2rem;
+      background: var(--green-deep);
+      color: var(--white);
+      border: none; border-radius: 8px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.95rem; font-weight: 600;
+      cursor: pointer; text-decoration: none;
+      transition: all 0.25s;
+      box-shadow: 0 4px 24px rgba(13,59,46,0.25);
+    }
+    .btn-hero-primary:hover {
+      background: var(--green-mid);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(13,59,46,0.3);
+    }
+    .btn-hero-ghost {
+      display: flex; align-items: center; gap: 8px;
+      color: var(--green-deep);
+      font-weight: 500; font-size: 0.95rem;
+      text-decoration: none;
+      transition: gap 0.2s;
+    }
+    .btn-hero-ghost:hover { gap: 12px; }
+    .btn-hero-ghost svg { transition: transform 0.2s; }
+    .btn-hero-ghost:hover svg { transform: translateX(4px); }
+
+    .hero-trust {
+      display: flex; align-items: center; gap: 1rem;
+      animation: fadeUp 0.6s 0.4s ease both;
+    }
+    .trust-avatars {
+      display: flex;
+    }
+    .trust-avatar {
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      border: 2.5px solid var(--cream);
+      margin-left: -8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; font-weight: 700;
+      color: var(--white);
+    }
+    .trust-avatar:first-child { margin-left: 0; }
+    .ta1 { background: #2E8060; }
+    .ta2 { background: #C8722A; }
+    .ta3 { background: #D4A847; }
+    .ta4 { background: #1B5E43; }
+    .trust-text { font-size: 0.82rem; color: var(--text-muted); line-height: 1.4; }
+    .trust-text strong { color: var(--text-dark); display: block; }
+
+    @keyframes fadeHeroVisual {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+
+    /* Hero laptop: PNG uses real alpha for outer knock-out; wrap matches .hero cream + grid + gold wash. */
+    .hero-visual {
+      position: relative; z-index: 1;
+      animation: fadeHeroVisual 0.65s 0.15s ease both;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      min-height: 0;
+      isolation: isolate;
+    }
+    .hero-laptop-wrap {
+      position: relative;
+      width: 100%;
+      max-width: min(1040px, 100%);
+      margin: 0;
+      padding: 0.25rem;
+      border-radius: 4px;
+      box-shadow:
+        0 32px 64px rgba(13,59,46,0.08),
+        0 12px 24px rgba(13,59,46,0.06);
+    }
+    /* Same visual language as .hero::before + ::after, clipped to the mockup card */
+    .hero-laptop-wrap::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 4px;
+      z-index: 0;
+      pointer-events: none;
+      background-color: var(--cream);
+      background-image:
+        repeating-linear-gradient(
+          90deg,
+          transparent 0px, transparent 48px,
+          rgba(13,59,46,0.03) 48px, rgba(13,59,46,0.03) 49px
+        ),
+        repeating-linear-gradient(
+          0deg,
+          transparent 0px, transparent 48px,
+          rgba(13,59,46,0.03) 48px, rgba(13,59,46,0.03) 49px
+        ),
+        radial-gradient(circle at 92% -8%, rgba(212,168,71,0.08) 0%, transparent 58%);
+    }
+    .hero-laptop-img {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      height: auto;
+      display: block;
+      margin: 0 auto;
+      object-fit: contain;
+      object-position: center;
+      image-rendering: auto;
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+
+    .screen-card {
+      background: var(--white);
+      border-radius: 20px;
+      box-shadow: 0 24px 80px rgba(13,59,46,0.15), 0 0 0 1px rgba(13,59,46,0.08);
+      overflow: hidden;
+    }
+
+    .screen-topbar {
+      background: var(--green-deep);
+      padding: 14px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .screen-dots { display: flex; gap: 6px; }
+    .screen-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+    }
+    .sd1 { background: #E85353; }
+    .sd2 { background: #F0B429; }
+    .sd3 { background: #3ECF8E; }
+    .screen-title {
+      font-size: 0.75rem; font-weight: 500;
+      color: rgba(255,255,255,0.7);
+    }
+    .screen-user {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .screen-avatar {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: var(--terra);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; font-weight: 700; color: white;
+    }
+    .screen-username { font-size: 0.75rem; color: rgba(255,255,255,0.8); }
+
+    .screen-body { padding: 20px; }
+
+    .screen-greeting {
+      font-size: 0.7rem; color: var(--text-muted); margin-bottom: 4px;
+    }
+    .screen-name {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.1rem; font-weight: 600;
+      color: var(--green-deep); margin-bottom: 16px;
+    }
+
+    .screen-stats {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 10px; margin-bottom: 20px;
+    }
+    .stat-chip {
+      background: var(--cream-warm);
+      border-radius: 10px; padding: 10px;
+      text-align: center;
+    }
+    .stat-chip-num {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.3rem; font-weight: 700;
+      color: var(--green-deep);
+    }
+    .stat-chip-label {
+      font-size: 0.65rem; color: var(--text-muted); margin-top: 2px;
+    }
+
+    .screen-section-label {
+      font-size: 0.65rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-muted); margin-bottom: 10px;
+    }
+
+    .patient-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      margin-bottom: 6px;
+      transition: background 0.15s;
+    }
+    .patient-row:hover { background: var(--cream-warm); }
+    .patient-dot {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.65rem; font-weight: 700; color: white;
+      flex-shrink: 0;
+    }
+    .pd1 { background: #2E8060; }
+    .pd2 { background: #C8722A; }
+    .pd3 { background: #D4A847; }
+    .patient-info { flex: 1; }
+    .patient-name { font-size: 0.8rem; font-weight: 600; color: var(--text-dark); }
+    .patient-detail { font-size: 0.68rem; color: var(--text-muted); }
+    .patient-status {
+      font-size: 0.65rem; font-weight: 600;
+      padding: 3px 8px; border-radius: 100px;
+    }
+    .status-scheduled { background: rgba(46,128,96,0.1); color: #2E8060; }
+    .status-waiting   { background: rgba(200,114,42,0.1); color: #C8722A; }
+    .status-complete  { background: rgba(107,107,94,0.1); color: #6B6B5E; }
+
+    .screen-chart {
+      margin-top: 16px;
+      background: var(--cream-warm);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .chart-label {
+      font-size: 0.65rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-muted); margin-bottom: 10px;
+    }
+    .chart-bars {
+      display: flex; align-items: flex-end; gap: 4px; height: 50px;
+    }
+    .chart-bar {
+      flex: 1; border-radius: 3px 3px 0 0;
+      background: linear-gradient(to top, var(--green-mid), var(--green-light));
+      transition: opacity 0.2s;
+    }
+    .chart-bar.accent {
+      background: linear-gradient(to top, var(--terra), var(--terra-light));
+    }
+    .chart-bar:hover { opacity: 0.8; }
+
+    /* Floating cards */
+    .float-card {
+      position: absolute;
+      background: var(--white);
+      border-radius: 14px;
+      padding: 12px 16px;
+      box-shadow: 0 8px 32px rgba(13,59,46,0.12);
+      display: flex; align-items: center; gap: 10px;
+    }
+    .fc-top {
+      top: -20px; right: -30px;
+      animation: floatY 3s ease-in-out infinite;
+    }
+    .fc-bottom {
+      bottom: 30px; left: -40px;
+      animation: floatY 3s 1.5s ease-in-out infinite;
+    }
+    @keyframes floatY {
+      0%, 100% { transform: translateY(0); }
+      50%       { transform: translateY(-8px); }
+    }
+    .fc-icon {
+      width: 36px; height: 36px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem; flex-shrink: 0;
+    }
+    .fc-icon-green { background: rgba(46,128,96,0.1); }
+    .fc-icon-terra { background: rgba(200,114,42,0.1); }
+    .fc-info-label { font-size: 0.65rem; color: var(--text-muted); }
+    .fc-info-val { font-size: 0.85rem; font-weight: 600; color: var(--text-dark); }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(24px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes fadeLeft {
+      from { opacity: 0; transform: translateX(32px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+
+    /* ── LOGOS STRIP ── */
+    .logos-strip {
+      padding: 2.5rem 5vw;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: var(--white);
+    }
+    .logos-inner {
+      display: flex; align-items: center; gap: 3rem;
+      flex-wrap: wrap; justify-content: center;
+    }
+    .logos-label {
+      font-size: 0.75rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--text-muted); white-space: nowrap;
+    }
+    .logo-pill {
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.9rem; font-weight: 600;
+      color: rgba(13,59,46,0.35);
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+    }
+
+    /* ── SECTION SHARED ── */
+    section { padding: 6rem 5vw; }
+
+    .section-eyebrow {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 0.75rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--terra);
+      margin-bottom: 1rem;
+    }
+    .section-eyebrow::before {
+      content: '';
+      display: block;
+      width: 24px; height: 2px;
+      background: var(--terra);
+      border-radius: 2px;
+    }
+
+    .section-headline {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: clamp(2rem, 3.5vw, 3rem);
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--green-deep);
+      margin-bottom: 1rem;
+    }
+    .section-sub {
+      font-size: 1rem;
+      color: var(--text-muted);
+      line-height: 1.7;
+      max-width: 520px;
+    }
+
+    /* ── FEATURES ── */
+    .features { background: var(--white); }
+    .features-header { text-align: center; margin-bottom: 4rem; }
+    .features-header .section-sub { margin: 0 auto; }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5px;
+      background: var(--border);
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    .feature-card {
+      background: var(--white);
+      padding: 2.5rem;
+      position: relative;
+      overflow: hidden;
+      transition: background 0.3s;
+    }
+    .feature-card:hover { background: var(--cream); }
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: transparent;
+      transition: background 0.3s;
+    }
+    .feature-card:hover::before {
+      background: linear-gradient(90deg, var(--green-mid), var(--terra));
+    }
+
+    .feature-icon {
+      width: 52px; height: 52px;
+      border-radius: 14px;
+      background: var(--cream-warm);
+      display: flex; align-items: center; justify-content: center;
+      padding: 6px;
+      margin-bottom: 1.25rem;
+      transition: background 0.3s;
+    }
+    .feature-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .feature-card:hover .feature-icon {
+      background: rgba(13,59,46,0.08);
+    }
+
+    .feature-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.25rem; font-weight: 600;
+      color: var(--green-deep);
+      margin-bottom: 0.6rem;
+    }
+    .feature-desc {
+      font-size: 0.88rem;
+      line-height: 1.65;
+      color: var(--text-muted);
+    }
+
+    /* ── WHY AFRICA ── */
+    .why-africa {
+      background: var(--green-deep);
+      position: relative; overflow: hidden;
+    }
+    .why-africa::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        radial-gradient(circle at 20% 50%, rgba(212,168,71,0.08) 0%, transparent 50%),
+        radial-gradient(circle at 80% 20%, rgba(200,114,42,0.06) 0%, transparent 40%);
+    }
+
+    /* Adinkra-like decorative pattern */
+    .why-africa::after {
+      content: '';
+      position: absolute;
+      right: -100px; top: -100px;
+      width: 500px; height: 500px;
+      border: 60px solid rgba(255,255,255,0.02);
+      border-radius: 50%;
+    }
+
+    .why-inner {
+      position: relative; z-index: 1;
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 5rem; align-items: center;
+    }
+
+    .why-content .section-eyebrow { color: var(--gold); }
+    .why-content .section-eyebrow::before { background: var(--gold); }
+    .why-content .section-headline { color: var(--white); }
+    .why-content .section-sub { color: rgba(255,255,255,0.65); }
+
+    .why-points { margin-top: 2.5rem; display: flex; flex-direction: column; gap: 1.25rem; }
+
+    .why-point {
+      display: flex; gap: 1rem; align-items: flex-start;
+    }
+    .why-point-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.12);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1rem; flex-shrink: 0;
+    }
+    .why-point-text h4 {
+      font-size: 0.95rem; font-weight: 600;
+      color: var(--white); margin-bottom: 0.25rem;
+    }
+    .why-point-text p {
+      font-size: 0.85rem; line-height: 1.6;
+      color: rgba(255,255,255,0.55);
+    }
+
+    .why-stats {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 1.5px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    .why-stat-box {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+      padding: 2rem;
+      text-align: center;
+      position: relative;
+    }
+    .why-stat-box:first-child {
+      background: rgba(212,168,71,0.12);
+      border-color: rgba(212,168,71,0.2);
+    }
+    .stat-num {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 3rem; font-weight: 700;
+      color: var(--white); line-height: 1;
+      margin-bottom: 0.5rem;
+    }
+    .stat-num span { color: var(--gold); font-size: 2rem; }
+    .stat-label {
+      font-size: 0.8rem;
+      color: rgba(255,255,255,0.5);
+      line-height: 1.5;
+    }
+
+    /* ── HOW IT WORKS ── */
+    .how { background: var(--cream); }
+    .how-header { text-align: center; margin-bottom: 4rem; }
+    .how-header .section-sub { margin: 0 auto; }
+
+    .how-steps {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+      position: relative;
+    }
+    .how-steps::before {
+      content: '';
+      position: absolute;
+      top: 36px; left: 12.5%; right: 12.5%;
+      height: 1px;
+      background: linear-gradient(90deg, var(--green-light), var(--terra));
+      z-index: 0;
+    }
+
+    .how-step {
+      text-align: center; padding: 0 1.5rem;
+      position: relative; z-index: 1;
+    }
+    .step-num {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      background: var(--white);
+      border: 2px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 1.5rem;
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.4rem; font-weight: 700;
+      color: var(--green-deep);
+      position: relative;
+      transition: all 0.3s;
+    }
+    .how-step:hover .step-num {
+      background: var(--green-deep);
+      color: var(--white);
+      border-color: var(--green-deep);
+      transform: scale(1.05);
+    }
+    .step-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.1rem; font-weight: 600;
+      color: var(--green-deep); margin-bottom: 0.5rem;
+    }
+    .step-desc {
+      font-size: 0.83rem; line-height: 1.65;
+      color: var(--text-muted);
+    }
+
+    /* ── TESTIMONIALS ── */
+    .testimonials { background: var(--cream-warm); }
+    .testimonials-header { text-align: center; margin-bottom: 4rem; }
+
+    .testimonials-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+    }
+    .testimonial-card {
+      background: var(--white);
+      border-radius: 18px;
+      padding: 2rem;
+      border: 1px solid var(--border);
+      transition: box-shadow 0.3s, transform 0.3s;
+    }
+    .testimonial-card:hover {
+      box-shadow: 0 12px 40px rgba(13,59,46,0.1);
+      transform: translateY(-4px);
+    }
+
+    .quote-mark {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 4rem; font-weight: 700;
+      line-height: 0.8;
+      color: var(--green-light);
+      margin-bottom: 1rem;
+      opacity: 0.3;
+    }
+    .testimonial-text {
+      font-size: 0.9rem; line-height: 1.7;
+      color: var(--text-dark); margin-bottom: 1.5rem;
+      font-style: italic;
+    }
+    .testimonial-author {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .author-dot {
+      width: 40px; height: 40px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 700; color: white;
+    }
+    .ad1 { background: #2E8060; }
+    .ad2 { background: #C8722A; }
+    .ad3 { background: #1B5E43; }
+    .author-name { font-size: 0.88rem; font-weight: 600; color: var(--text-dark); }
+    .author-role { font-size: 0.75rem; color: var(--text-muted); }
+
+    /* Stars */
+    .stars { color: var(--gold); font-size: 0.75rem; margin-bottom: 0.75rem; }
+
+    /* ── CTA BANNER ── */
+    .cta-banner {
+      padding: 6rem 5vw;
+      background: var(--green-deep);
+      text-align: center;
+      position: relative; overflow: hidden;
+    }
+    .cta-banner::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at 30% 50%, rgba(212,168,71,0.1) 0%, transparent 50%),
+        radial-gradient(circle at 70% 50%, rgba(200,114,42,0.08) 0%, transparent 50%);
+    }
+    .cta-inner { position: relative; z-index: 1; }
+    .cta-eyebrow {
+      font-size: 0.75rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.12em;
+      color: var(--gold); margin-bottom: 1.5rem;
+    }
+    .cta-headline {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: clamp(2rem, 4vw, 3.5rem);
+      font-weight: 700; color: var(--white);
+      line-height: 1.1; margin-bottom: 1rem;
+    }
+    .cta-headline em { font-style: italic; color: var(--gold); }
+    .cta-sub {
+      font-size: 1rem; color: rgba(255,255,255,0.6);
+      max-width: 480px; margin: 0 auto 2.5rem;
+    }
+    .cta-actions { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn-cta-white {
+      padding: 0.9rem 2.25rem;
+      background: var(--white);
+      color: var(--green-deep);
+      border: none; border-radius: 8px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.95rem; font-weight: 700;
+      cursor: pointer; text-decoration: none;
+      transition: all 0.25s;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.2);
+    }
+    .btn-cta-white:hover { transform: translateY(-2px); box-shadow: 0 8px 36px rgba(0,0,0,0.25); }
+    .btn-cta-outline {
+      padding: 0.9rem 2.25rem;
+      background: transparent;
+      color: var(--white);
+      border: 1.5px solid rgba(255,255,255,0.3);
+      border-radius: 8px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.95rem; font-weight: 600;
+      cursor: pointer; text-decoration: none;
+      transition: all 0.25s;
+    }
+    .btn-cta-outline:hover { border-color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.05); }
+
+    /* ── FOOTER ── */
+    footer {
+      background: #0A2A1F;
+      padding: 4rem 5vw 2rem;
+      color: rgba(255,255,255,0.5);
+    }
+    .footer-top {
+      display: grid; grid-template-columns: 2fr 1fr 1fr 1fr;
+      gap: 3rem; margin-bottom: 3rem;
+    }
+    .footer-brand-name {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.3rem; font-weight: 600;
+      color: var(--white); margin-bottom: 0.75rem;
+    }
+    .footer-brand-name span { color: var(--terra); }
+    .footer-brand-desc {
+      font-size: 0.83rem; line-height: 1.65;
+      color: rgba(255,255,255,0.4); max-width: 260px;
+    }
+    .footer-col-title {
+      font-size: 0.75rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.1em;
+      color: rgba(255,255,255,0.7);
+      margin-bottom: 1rem;
+    }
+    .footer-links { list-style: none; display: flex; flex-direction: column; gap: 0.6rem; }
+    .footer-links a {
+      text-decoration: none;
+      font-size: 0.85rem;
+      color: rgba(255,255,255,0.4);
+      transition: color 0.2s;
+    }
+    .footer-links a:hover { color: rgba(255,255,255,0.8); }
+
+    .footer-bottom {
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding-top: 2rem;
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 1rem;
+    }
+    .footer-bottom-copy { font-size: 0.8rem; }
+    .footer-bottom-links {
+      display: flex; gap: 1.5rem;
+    }
+    .footer-bottom-links a {
+      text-decoration: none;
+      font-size: 0.8rem;
+      color: rgba(255,255,255,0.35);
+      transition: color 0.2s;
+    }
+    .footer-bottom-links a:hover { color: rgba(255,255,255,0.7); }
+
+    /* ── SCROLL REVEAL ── */
+    .reveal {
+      opacity: 0; transform: translateY(30px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .reveal.visible {
+      opacity: 1; transform: none;
+    }
+
+    /* ── RESPONSIVE ── */
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; padding-top: 100px; }
+      .hero-visual {
+        display: flex;
+        justify-content: center;
+        margin-top: 0.5rem;
+        padding-bottom: 2rem;
+      }
+      .hero-laptop-wrap {
+        max-width: min(100%, min(92vw, 720px));
+        box-shadow:
+          0 24px 48px rgba(13,59,46,0.07),
+          0 10px 20px rgba(13,59,46,0.05);
+      }
+      .features-grid { grid-template-columns: 1fr 1fr; }
+      .why-inner { grid-template-columns: 1fr; }
+      .how-steps { grid-template-columns: 1fr 1fr; }
+      .how-steps::before { display: none; }
+      .testimonials-grid { grid-template-columns: 1fr; }
+      .footer-top { grid-template-columns: 1fr 1fr; }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── NAVIGATION ── -->
+<nav>
+  <a href="/" target="_top" class="nav-logo">
+    <img src="/imani-logo.png" alt="" class="nav-logo-img" width="44" height="44" decoding="async" />
+    <span class="nav-logo-text">Imani<span class="ehr-gold">EHR</span></span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#why">Why Africa</a></li>
+    <li><a href="#how">How It Works</a></li>
+    <li><a href="#why">Pricing</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ul>
+  <div class="nav-cta">
+    <a href="/portal" target="_top" class="btn-ghost">Patient portal</a>
+    <a href="/login" target="_top" class="btn-ghost">Sign In</a>
+    <a href="#contact" class="btn-primary">Request Demo</a>
+  </div>
+</nav>
+
+<!-- ── HERO ── -->
+<section class="hero">
+  <div class="hero-content">
+    <h1 class="hero-headline">
+      Healthcare records,<br>
+      <em>precisely</em> <span class="underline-gold">where they matter</span>
+    </h1>
+
+    <p class="hero-sub">
+      Imani EHR is the first electronic health records platform designed from the ground up for African clinics, hospitals, and community health systems — handling multi-language support, NHIS integrations, and low-connectivity environments.
+    </p>
+
+    <div class="hero-actions">
+      <a href="/login" target="_top" class="btn-hero-primary">Start Free Trial</a>
+      <a href="#contact" class="btn-hero-ghost">
+        Watch a demo
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </a>
+    </div>
+
+    <div class="hero-trust">
+      <div class="trust-avatars">
+        <div class="trust-avatar ta1">KA</div>
+        <div class="trust-avatar ta2">NM</div>
+        <div class="trust-avatar ta3">AO</div>
+        <div class="trust-avatar ta4">FD</div>
+      </div>
+      <div class="trust-text">
+        <strong>500+ health facilities</strong>
+        across 12 African countries trust Imani
+      </div>
+    </div>
+  </div>
+
+  <!-- Hero Visual — product mockup -->
+  <div class="hero-visual">
+    <div class="hero-laptop-wrap">
+      <img
+        src="/trans-laptop.png?v=a19dcb90073f"
+        alt=""
+        class="hero-laptop-img"
+        width="1536"
+        height="1024"
+        sizes="(max-width: 900px) min(92vw, 720px), min(1040px, 52vw)"
+        decoding="sync"
+        fetchpriority="high"
+      />
+    </div>
+  </div>
+</section>
+
+<!-- ── LOGOS STRIP ── -->
+<div class="logos-strip">
+  <div class="logos-inner">
+    <div class="logos-label">Trusted by institutions across</div>
+    <div class="logo-pill">🇳🇬 Nigeria</div>
+    <div class="logo-pill">🇬🇭 Ghana</div>
+    <div class="logo-pill">🇰🇪 Kenya</div>
+    <div class="logo-pill">🇸🇳 Senegal</div>
+    <div class="logo-pill">🇿🇦 South Africa</div>
+    <div class="logo-pill">🇺🇬 Uganda</div>
+    <div class="logo-pill">🇪🇹 Ethiopia</div>
+    <div class="logo-pill">🇷🇼 Rwanda</div>
+  </div>
+</div>
+
+<!-- ── FEATURES ── -->
+<section class="features" id="features">
+  <div class="features-header reveal">
+    <div class="section-eyebrow">Platform Features</div>
+    <h2 class="section-headline">Everything your facility needs,<br><em>nothing it doesn't</em></h2>
+    <p class="section-sub">Purpose-built for African healthcare realities — from community clinics to multi-site hospital networks.</p>
+  </div>
+
+  <div class="features-grid reveal">
+    <div class="feature-card">
+      <div class="feature-icon" aria-hidden="true"><img src="/features-icons/smart-patient-records.png" alt="" decoding="async" /></div>
+      <h3 class="feature-title">Smart Patient Records</h3>
+      <p class="feature-desc">Comprehensive electronic health records with support for local disease coding, indigenous treatment notes, and multi-provider access across your facility network.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" aria-hidden="true"><img src="/features-icons/offline-first.png" alt="" decoding="async" /></div>
+      <h3 class="feature-title">Offline-First Architecture</h3>
+      <p class="feature-desc">Designed for intermittent connectivity. All clinical workflows function without internet and sync automatically when connection is restored — zero data loss.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" aria-hidden="true"><img src="/features-icons/multi-language.png" alt="" decoding="async" /></div>
+      <h3 class="feature-title">Multi-Language Support</h3>
+      <p class="feature-desc">Interface and clinical templates available in English, French, Swahili, Hausa, Yoruba, Amharic, and more — meeting your clinical team where they are.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" aria-hidden="true"><img src="/features-icons/nhis.png" alt="" decoding="async" /></div>
+      <h3 class="feature-title">NHIS & Insurance Integration</h3>
+      <p class="feature-desc">Pre-built connectors for NHIA (Ghana), NHIS (Nigeria), NHIF (Kenya), and other national health insurance schemes — streamlining claims and approvals.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" aria-hidden="true"><img src="/features-icons/pharmacy.png" alt="" decoding="async" /></div>
+      <h3 class="feature-title">Pharmacy & Formulary</h3>
+      <p class="feature-desc">Integrated medication management with WHO Essential Medicines list, local drug availability checks, dosing alerts, and prescription tracking.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" aria-hidden="true"><img src="/features-icons/public-health.png" alt="" decoding="async" /></div>
+      <h3 class="feature-title">Public Health Analytics</h3>
+      <p class="feature-desc">Disease surveillance dashboards, outbreak detection, maternal health tracking, and automated DHIS2 reporting for ministry compliance.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" aria-hidden="true"><img src="/features-icons/lab.png" alt="" decoding="async" /></div>
+      <h3 class="feature-title">Lab & Diagnostics</h3>
+      <p class="feature-desc">Order management, result tracking, and reference range support calibrated for African lab standards — including rapid diagnostic test workflows.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" aria-hidden="true"><img src="/features-icons/mobile.png" alt="" decoding="async" /></div>
+      <h3 class="feature-title">Mobile-First Design</h3>
+      <p class="feature-desc">Full clinical functionality on low-end Android devices and feature phones via USSD — built for the hardware realities of African health workers.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" aria-hidden="true"><img src="/features-icons/security.png" alt="" decoding="async" /></div>
+      <h3 class="feature-title">Security & Compliance</h3>
+      <p class="feature-desc">HIPAA, NDPR (Nigeria), POPIA (South Africa), and DPA (Ghana) compliant with role-based access, audit trails, and local data residency options.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── WHY AFRICA ── -->
+<section class="why-africa" id="why">
+  <div class="why-inner">
+    <div class="why-content reveal">
+      <div class="section-eyebrow">Why Imani</div>
+      <h2 class="section-headline">Designed for the<br>African context</h2>
+      <p class="section-sub">Global EHR vendors build for Western infrastructure and assume stable internet, formal health insurance, and flat-fee billing. Africa needs something different.</p>
+
+      <div class="why-points">
+        <div class="why-point">
+          <div class="why-point-icon">🏥</div>
+          <div class="why-point-text">
+            <h4>Community & Primary Care Ready</h4>
+            <p>Optimized for CHW workflows, community health posts, and PHC centers — not just tertiary hospitals.</p>
+          </div>
+        </div>
+        <div class="why-point">
+          <div class="why-point-icon">💰</div>
+          <div class="why-point-text">
+            <h4>Affordable, Flexible Pricing</h4>
+            <p>Per-facility pricing in local currencies with NGO and government contract options. No dollar-pegged invoices.</p>
+          </div>
+        </div>
+        <div class="why-point">
+          <div class="why-point-icon">🤝</div>
+          <div class="why-point-text">
+            <h4>Local Implementation Partners</h4>
+            <p>On-the-ground support teams in Lagos, Nairobi, Accra, Kigali, and Addis Ababa — not a help desk 9 time zones away.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="why-stats reveal">
+      <div class="why-stat-box">
+        <div class="stat-num">1.4<span>B</span></div>
+        <div class="stat-label">People served by African healthcare systems</div>
+      </div>
+      <div class="why-stat-box">
+        <div class="stat-num">54</div>
+        <div class="stat-label">Countries with unique health regulatory environments</div>
+      </div>
+      <div class="why-stat-box">
+        <div class="stat-num">73<span>%</span></div>
+        <div class="stat-label">Health facilities still using paper records</div>
+      </div>
+      <div class="why-stat-box">
+        <div class="stat-num">3<span>x</span></div>
+        <div class="stat-label">Faster patient throughput after Imani adoption</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── HOW IT WORKS ── -->
+<section class="how" id="how">
+  <div class="how-header reveal">
+    <div class="section-eyebrow">Getting Started</div>
+    <h2 class="section-headline">Up and running in days,<br>not months</h2>
+    <p class="section-sub">A streamlined onboarding process designed for facilities of all sizes, with full data migration from paper or legacy systems.</p>
+  </div>
+
+  <div class="how-steps reveal">
+    <div class="how-step">
+      <div class="step-num">01</div>
+      <h3 class="step-title">Book a Demo</h3>
+      <p class="step-desc">Schedule a personalized walkthrough with our local team — in your language, at your timezone.</p>
+    </div>
+    <div class="how-step">
+      <div class="step-num">02</div>
+      <h3 class="step-title">Configure Your Facility</h3>
+      <p class="step-desc">We set up departments, user roles, insurance schemes, and local clinical templates specific to your facility.</p>
+    </div>
+    <div class="how-step">
+      <div class="step-num">03</div>
+      <h3 class="step-title">Migrate Records</h3>
+      <p class="step-desc">Our team digitizes and imports existing patient records — paper, spreadsheet, or legacy system.</p>
+    </div>
+    <div class="how-step">
+      <div class="step-num">04</div>
+      <h3 class="step-title">Train & Go Live</h3>
+      <p class="step-desc">On-site or virtual training for your clinical and admin team, with ongoing support from day one.</p>
+    </div>
+  </div>
+</section>
+
+
+<!-- ── TESTIMONIALS ── -->
+<section class="testimonials" id="testimonials">
+  <div class="testimonials-header reveal">
+    <div class="section-eyebrow">From the Field</div>
+    <h2 class="section-headline">Trusted by clinicians<br>across the continent</h2>
+  </div>
+
+  <div class="testimonials-grid reveal">
+    <div class="testimonial-card">
+      <div class="stars">★★★★★</div>
+      <div class="quote-mark">"</div>
+      <p class="testimonial-text">Imani works even when our power generator fails. We never lose a patient record. The offline sync is not just a feature — it is a necessity in our setting, and this is the platform that truly delivers it.</p>
+      <div class="testimonial-author">
+        <div class="author-dot ad1">NK</div>
+        <div>
+          <div class="author-name">Dr. Ngozi Kalu</div>
+          <div class="author-role">Medical Director, Community Health Centre — Enugu, Nigeria</div>
+        </div>
+      </div>
+    </div>
+    <div class="testimonial-card">
+      <div class="stars">★★★★★</div>
+      <div class="quote-mark">"</div>
+      <p class="testimonial-text">The NHIA integration alone saved our billing team 15 hours a week. Claims that used to take three weeks are now processed in two days. Our rejection rate dropped from 22% to under 3%.</p>
+      <div class="testimonial-author">
+        <div class="author-dot ad2">KA</div>
+        <div>
+          <div class="author-name">Kwame Asante</div>
+          <div class="author-role">CFO, Medigrade Clinic Group — Kumasi, Ghana</div>
+        </div>
+      </div>
+    </div>
+    <div class="testimonial-card">
+      <div class="stars">★★★★★</div>
+      <div class="quote-mark">"</div>
+      <p class="testimonial-text">Our nurses work in Swahili. Having the full EHR available in their language — not just the UI, but the clinical templates — changed adoption overnight. We went from 40% usage to 95% in two weeks.</p>
+      <div class="testimonial-author">
+        <div class="author-dot ad3">AM</div>
+        <div>
+          <div class="author-name">Dr. Aisha Mwangi</div>
+          <div class="author-role">Chief Nursing Officer, Afya Hospital — Nairobi, Kenya</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── CTA BANNER ── -->
+<section class="cta-banner">
+  <div class="cta-inner">
+    <div class="cta-eyebrow">Get Started Today</div>
+    <h2 class="cta-headline">Ready to <em>modernize</em><br>your health records?</h2>
+    <p class="cta-sub">Join 500+ African health facilities already running on Imani. Start with a free 30-day pilot — no credit card, no commitment.</p>
+    <div class="cta-actions">
+      <a href="/login" target="_top" class="btn-cta-white">Start Free Trial</a>
+      <a href="#contact" class="btn-cta-outline">Talk to Our Team</a>
+    </div>
+  </div>
+</section>
+
+<!-- ── FOOTER ── -->
+<footer id="contact">
+  <div class="footer-top">
+    <div>
+      <div class="footer-brand-name">Imani<span>EHR</span></div>
+      <p class="footer-brand-desc">The electronic health records platform built for Africa — designed with clinicians, for clinicians, across the continent.</p>
+    </div>
+    <div>
+      <div class="footer-col-title">Product</div>
+      <ul class="footer-links">
+        <li><a href="#">Features</a></li>
+        <li><a href="#">Pricing</a></li>
+        <li><a href="#">Integrations</a></li>
+        <li><a href="#">Security</a></li>
+        <li><a href="#">Changelog</a></li>
+      </ul>
+    </div>
+    <div>
+      <div class="footer-col-title">Company</div>
+      <ul class="footer-links">
+        <li><a href="#">About</a></li>
+        <li><a href="#">Blog</a></li>
+        <li><a href="#">Careers</a></li>
+        <li><a href="#">Partners</a></li>
+        <li><a href="#">Press</a></li>
+      </ul>
+    </div>
+    <div>
+      <div class="footer-col-title">Support</div>
+      <ul class="footer-links">
+        <li><a href="#">Documentation</a></li>
+        <li><a href="#">Help Centre</a></li>
+        <li><a href="#">Training</a></li>
+        <li><a href="#">Community</a></li>
+        <li><a href="#">Contact Us</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <div class="footer-bottom-copy">© 2025 Imani EHR. All rights reserved.</div>
+    <div class="footer-bottom-links">
+      <a href="#">Privacy Policy</a>
+      <a href="#">Terms of Service</a>
+      <a href="#">Cookie Settings</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Scroll reveal
+  const revealEls = document.querySelectorAll('.reveal');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry, i) => {
+      if (entry.isIntersecting) {
+        setTimeout(() => entry.target.classList.add('visible'), i * 80);
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1 });
+  revealEls.forEach(el => observer.observe(el));
+
+  // Nav shadow on scroll
+  const nav = document.querySelector('nav');
+  window.addEventListener('scroll', () => {
+    nav.style.boxShadow = window.scrollY > 20
+      ? '0 2px 20px rgba(13,59,46,0.1)'
+      : 'none';
+  });
+</script>
+</body>
+</html>

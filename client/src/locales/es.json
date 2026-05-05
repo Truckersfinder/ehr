@@ -433,7 +433,12 @@
       "registerNew": "Registrar nuevo paciente"
     },
     "schedule": {
-      "title": "Agenda"
+      "title": "Agenda",
+      "clinicianCardTitle": "Su perfil",
+      "clinicianCardSubtitle": "Usuario con sesión iniciada en esta organización.",
+      "clinicianName": "Nombre",
+      "clinicianOrganization": "Organización",
+      "clinicianPosition": "Cargo"
     },
     "appointments": {
       "title": "Citas"

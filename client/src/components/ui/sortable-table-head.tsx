@@ -23,7 +23,7 @@ export function SortableTableHead({
   return (
     <th
       className={cn(
-        "h-12 px-4 align-middle [&:has([role=checkbox])]:pr-0",
+        "h-12 pl-4 pr-6 align-middle [&:has([role=checkbox])]:pr-0",
         align === "right" ? "text-right" : "text-left",
         TABLE_HEADER_CELL_CLASS,
         className,
@@ -75,7 +75,7 @@ export function SortableGridHeaderButton({
       role="columnheader"
       onClick={onSort}
       className={cn(
-        "flex w-full min-h-10 items-center gap-1.5 border-r border-border px-2 py-2 text-left transition-colors last:border-r-0",
+        "flex w-full min-h-10 items-center gap-1.5 border-r border-border py-2 pl-2 pr-3 text-left transition-colors last:border-r-0 last:pr-6",
         TABLE_HEADER_CELL_CLASS,
         "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
         className,

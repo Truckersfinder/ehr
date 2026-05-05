@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PATIENT_PORTAL_TOKEN_STORAGE_KEY } from "@/lib/patient-portal-token";
 import { publicOrganizationNameFallback, usePatientPortalBranding } from "@/lib/patient-portal-branding";
+import { ImaniMark } from "@/components/imani-mark";
 
 export default function PatientPortalLoginPage() {
   const { t } = useTranslation();
@@ -64,6 +65,9 @@ export default function PatientPortalLoginPage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-muted/30">
       <div className="w-full max-w-md space-y-6">
+        <div className="flex justify-center">
+          <ImaniMark className="h-16 w-16" alt="" />
+        </div>
         <div className="text-center space-y-1">
           <h1 className="text-xl font-semibold tracking-tight">{t("portal.login.heading")}</h1>
           <p className="text-sm text-muted-foreground">{organizationName}</p>

@@ -1,0 +1,16 @@
+[Unit]
+Description=Imani EHR (Node)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/ehr
+EnvironmentFile=-/root/ehr/.env
+Environment=NODE_ENV=production HOST=0.0.0.0
+ExecStart=/usr/bin/node dist/index.cjs
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

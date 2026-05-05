@@ -433,7 +433,12 @@
       "registerNew": "Register New Patient"
     },
     "schedule": {
-      "title": "Schedule"
+      "title": "Schedule",
+      "clinicianCardTitle": "Your profile",
+      "clinicianCardSubtitle": "Signed-in user for this organization.",
+      "clinicianName": "Name",
+      "clinicianOrganization": "Organization",
+      "clinicianPosition": "Position"
     },
     "appointments": {
       "title": "Appointments"

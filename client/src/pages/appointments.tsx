@@ -250,7 +250,7 @@ function AppointmentsManagementPage() {
   const sortedDates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto" data-testid="appointments-page">
+    <div className="p-6 max-w-[1400px] xl:max-w-[1600px] mx-auto" data-testid="appointments-page">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t("pages.appointments.title")}</h1>
@@ -360,80 +360,81 @@ function AppointmentsManagementPage() {
         </Dialog>
       </div>
 
-      {isLoading ? (
-        <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
-      ) : sortedDates.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <Calendar className="w-12 h-12 text-muted-foreground/30 mb-4" />
-            <p className="text-lg font-medium text-muted-foreground">No appointments</p>
-          </CardContent>
-        </Card>
-      ) : (
-        sortedDates.map((dateKey) => {
-          const dayAppts = grouped[dateKey].sort(
-            (a, b) => new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime()
-          );
-          const isToday = dateKey === formatInOrgTimeZone(Date.now(), "yyyy-MM-dd", orgTz);
-          return (
-            <div key={dateKey} className="space-y-3">
-              <h3 className="text-sm font-medium flex items-center gap-2">
-                {formatInOrgTimeZone(new Date(dateKey), "EEEE, MMMM d, yyyy", orgTz)}
-                {isToday && <Badge variant="secondary" className="text-[10px]">Today</Badge>}
-              </h3>
-              {dayAppts.map((apt) => {
-                const pt = patientMap.get(apt.patientId);
-                const doc = userMap.get(apt.clinicianId);
-                return (
-                  <Card key={apt.id} data-testid={`card-appointment-${apt.id}`}>
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between gap-3 flex-wrap">
-                        <div className="flex items-center gap-4 min-w-0">
-                          <div className="text-center min-w-[55px]">
-                            <p className="text-sm font-bold">{formatInOrgTimeZone(apt.scheduledDate, "HH:mm", orgTz)}</p>
-                            <p className="text-[10px] text-muted-foreground">{apt.duration}min</p>
+      <div className="mt-6 space-y-6 min-w-0">
+          {isLoading ? (
+            <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+          ) : sortedDates.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-16">
+                <Calendar className="w-12 h-12 text-muted-foreground/30 mb-4" />
+                <p className="text-lg font-medium text-muted-foreground">No appointments</p>
+              </CardContent>
+            </Card>
+          ) : (
+            sortedDates.map((dateKey) => {
+              const dayAppts = grouped[dateKey].sort(
+                (a, b) => new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime()
+              );
+              const isToday = dateKey === formatInOrgTimeZone(Date.now(), "yyyy-MM-dd", orgTz);
+              return (
+                <div key={dateKey} className="space-y-3">
+                  <h3 className="text-sm font-medium flex items-center gap-2">
+                    {formatInOrgTimeZone(new Date(dateKey), "EEEE, MMMM d, yyyy", orgTz)}
+                    {isToday && <Badge variant="secondary" className="text-[10px]">Today</Badge>}
+                  </h3>
+                  {dayAppts.map((apt) => {
+                    const pt = patientMap.get(apt.patientId);
+                    const doc = userMap.get(apt.clinicianId);
+                    return (
+                      <Card key={apt.id} data-testid={`card-appointment-${apt.id}`}>
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <div className="flex items-center gap-4 min-w-0">
+                              <div className="text-center min-w-[55px]">
+                                <p className="text-sm font-bold">{formatInOrgTimeZone(apt.scheduledDate, "HH:mm", orgTz)}</p>
+                                <p className="text-[10px] text-muted-foreground">{apt.duration}min</p>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-medium text-sm truncate">
+                                  {pt ? `${pt.firstName} ${pt.lastName}` : "Unknown"}
+                                </p>
+                                <p className="text-xs text-muted-foreground truncate">
+                                  {doc ? `Dr. ${doc.fullName}` : ""} - {apt.reason || "General visit"}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Badge variant="secondary" className={`text-[10px] ${appointmentStatusBadgeClass(apt.status)}`}>
+                                {formatAppointmentStatusLabel(apt.status)}
+                              </Badge>
+                              {apt.status === "scheduled" && (
+                                <>
+                                  <Button size="sm" variant="secondary" onClick={() => statusMutation.mutate({ id: apt.id, status: "checked_in" })}>Check In</Button>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => {
+                                      setCancelDialog({ id: apt.id });
+                                      setCancelReason("");
+                                    }}
+                                  >
+                                    Cancel
+                                  </Button>
+                                </>
+                              )}
+                              {apt.status === "checked_in" && (
+                                <Button size="sm" onClick={() => statusMutation.mutate({ id: apt.id, status: "completed" })}>Complete</Button>
+                              )}
+                            </div>
                           </div>
-                          <div className="min-w-0">
-                            <p className="font-medium text-sm truncate">
-                              {pt ? `${pt.firstName} ${pt.lastName}` : "Unknown"}
-                            </p>
-                            <p className="text-xs text-muted-foreground truncate">
-                              {doc ? `Dr. ${doc.fullName}` : ""} - {apt.reason || "General visit"}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <Badge variant="secondary" className={`text-[10px] ${appointmentStatusBadgeClass(apt.status)}`}>
-                            {formatAppointmentStatusLabel(apt.status)}
-                          </Badge>
-                          {apt.status === "scheduled" && (
-                            <>
-                              <Button size="sm" variant="secondary" onClick={() => statusMutation.mutate({ id: apt.id, status: "checked_in" })}>Check In</Button>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => {
-                                  setCancelDialog({ id: apt.id });
-                                  setCancelReason("");
-                                }}
-                              >
-                                Cancel
-                              </Button>
-                            </>
-                          )}
-                          {apt.status === "checked_in" && (
-                            <Button size="sm" onClick={() => statusMutation.mutate({ id: apt.id, status: "completed" })}>Complete</Button>
-                          )}
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          );
-        })
-      )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              );
+            })
+          )}
 
       <Card data-testid="appointments-admitted-patients">
         <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
@@ -573,6 +574,7 @@ function AppointmentsManagementPage() {
           )}
         </CardContent>
       </Card>
+      </div>
 
       <Dialog
         open={!!cancelDialog}

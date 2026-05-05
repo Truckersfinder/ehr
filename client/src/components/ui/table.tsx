@@ -6,18 +6,22 @@ import { cn } from "@/lib/utils"
 export const TABLE_HEADER_CELL_CLASS =
   "text-xs font-semibold uppercase tracking-wider text-muted-foreground";
 
-const Table = React.forwardRef<
-  HTMLTableElement,
-  React.HTMLAttributes<HTMLTableElement>
->(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
-    <table
-      ref={ref}
-      className={cn("w-full caption-bottom text-sm", className)}
-      {...props}
-    />
-  </div>
-))
+export type TableProps = React.HTMLAttributes<HTMLTableElement> & {
+  /** Classes for the scroll wrapper around `<table>` (default allows horizontal scroll when needed). */
+  wrapperClassName?: string;
+};
+
+const Table = React.forwardRef<HTMLTableElement, TableProps>(
+  ({ className, wrapperClassName, ...props }, ref) => (
+    <div className={cn("relative min-w-0 w-full overflow-x-auto", wrapperClassName)}>
+      <table
+        ref={ref}
+        className={cn("w-full caption-bottom text-sm", className)}
+        {...props}
+      />
+    </div>
+  ),
+)
 Table.displayName = "Table"
 
 const TableHeader = React.forwardRef<
@@ -77,7 +81,7 @@ const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      "h-12 px-4 text-left align-middle [&:has([role=checkbox])]:pr-0",
+      "h-12 pl-4 pr-6 text-left align-middle [&:has([role=checkbox])]:pr-0",
       TABLE_HEADER_CELL_CLASS,
       className
     )}
@@ -92,7 +96,10 @@ const TableCell = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <td
     ref={ref}
-    className={cn("p-4 align-middle [&:has([role=checkbox])]:pr-0", className)}
+    className={cn(
+      "py-4 pl-4 pr-6 align-middle [&:has([role=checkbox])]:pr-0",
+      className,
+    )}
     {...props}
   />
 ))

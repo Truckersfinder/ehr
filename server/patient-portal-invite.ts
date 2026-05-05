@@ -117,7 +117,7 @@ export async function sendPatientPortalLoginReminderEmail(
   if (!apiKey) return { ok: false, message: "RESEND_API_KEY is not configured" };
 
   const facility = patient.facilityId ? await storage.getFacility(patient.facilityId) : undefined;
-  const facilityName = facility?.name ?? "Hospital";
+  const facilityName = facility?.name ?? "Imani";
   const fromAddress = process.env.RESEND_FROM_EMAIL?.trim() || "onboarding@resend.dev";
   const base = getPatientPortalBaseUrl();
   const loginUrl = `${base}/portal`;
@@ -201,7 +201,7 @@ export async function issuePortalInviteAndSendEmail(
   await storage.updatePatient(patientId, { portalInviteToken: token });
 
   const facility = patient.facilityId ? await storage.getFacility(patient.facilityId) : undefined;
-  const facilityName = facility?.name ?? "Hospital";
+  const facilityName = facility?.name ?? "Imani";
   const fromAddress = process.env.RESEND_FROM_EMAIL?.trim() || "onboarding@resend.dev";
   const base = getPatientPortalBaseUrl();
   const portalUrl = `${base}/portal/invite/${encodeURIComponent(token)}`;

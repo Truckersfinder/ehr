@@ -1,5 +1,7 @@
 import { storage } from "./storage";
 import { hashPassword } from "./auth";
+import { endOfDay, startOfDay } from "date-fns";
+import type { Appointment } from "@shared/schema";
 
 /** Idempotent: creates demo Security user when DB already has facilities (e.g. after first seed). */
 export async function ensureSecurityUser() {
@@ -19,13 +21,77 @@ export async function ensureSecurityUser() {
   });
 }
 
+/**
+ * Marks rows created only for schedule UI demos (idempotent per calendar day in server TZ).
+ */
+export const DEMO_DOCTOR_SCHEDULE_NOTE = "__demo_doctor_schedule__";
+
+/**
+ * Add same-day appointments for Dr. Wanjiku so Schedule is populated after restart.
+ * Skipped if demos for today already exist.
+ */
+export async function ensureDoctorScheduleDemoAppointments(): Promise<void> {
+  try {
+    const clinician = await storage.getUserByUsername("drwanjiku");
+    const facilityId = clinician?.facilityId;
+    if (!clinician || !facilityId) return;
+
+    const patients = (await storage.getPatients()).filter(
+      (p) => p.facilityId === facilityId && p.isActive !== false,
+    );
+    if (patients.length === 0) return;
+
+    const dayStart = startOfDay(new Date());
+    const dayEnd = endOfDay(new Date());
+    const todays = await storage.getAppointments(undefined, dayStart.toISOString(), dayEnd.toISOString());
+    if (todays.some((a) => a.notes === DEMO_DOCTOR_SCHEDULE_NOTE)) return;
+
+    type Slot = {
+      hour: number;
+      minute: number;
+      duration: number;
+      status: Appointment["status"];
+      reason: string;
+    };
+    const slots: Slot[] = [
+      { hour: 8, minute: 15, duration: 20, status: "confirmed", reason: "Medication review" },
+      { hour: 11, minute: 0, duration: 30, status: "scheduled", reason: "Chronic disease follow-up" },
+      { hour: 12, minute: 30, duration: 30, status: "checked_in", reason: "Pre-operative assessment" },
+      { hour: 13, minute: 45, duration: 45, status: "scheduled", reason: "Diabetes counselling" },
+      { hour: 15, minute: 45, duration: 30, status: "scheduled", reason: "Post-discharge wound check" },
+      { hour: 16, minute: 30, duration: 20, status: "no_show", reason: "Routine vaccination (no-show example)" },
+    ];
+
+    for (let idx = 0; idx < slots.length; idx++) {
+      const slot = slots[idx];
+      const scheduledDate = startOfDay(new Date());
+      scheduledDate.setHours(slot.hour, slot.minute, 0, 0);
+      const patient = patients[idx % patients.length];
+      await storage.createAppointment({
+        patientId: patient.id,
+        clinicianId: clinician.id,
+        facilityId,
+        scheduledDate,
+        duration: slot.duration,
+        status: slot.status,
+        reason: slot.reason,
+        notes: DEMO_DOCTOR_SCHEDULE_NOTE,
+      });
+    }
+
+    console.log("[seed] Added demo appointments for today's doctor schedule");
+  } catch (err) {
+    console.warn("[seed] ensureDoctorScheduleDemoAppointments:", err);
+  }
+}
+
 export async function seedDatabase() {
   const existingAdmin = await storage.getUserByUsername("admin");
   if (existingAdmin) return;
 
   const facility = await storage.createFacility({
-    name: "OneHealth Central Hospital",
-    code: "OHCH-001",
+    name: "Imani",
+    code: "IMH-001",
     address: "123 Healthcare Ave, Nairobi",
     phone: "+254700123456",
     email: "admin@onehealth.ke",
@@ -34,8 +100,8 @@ export async function seedDatabase() {
   });
 
   await storage.createFacility({
-    name: "OneHealth Community Clinic",
-    code: "OHCC-002",
+    name: "Imani Community Clinic",
+    code: "IMC-002",
     address: "45 Mombasa Road, Nairobi",
     phone: "+254700654321",
     email: "clinic@onehealth.ke",

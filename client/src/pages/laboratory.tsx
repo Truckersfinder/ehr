@@ -200,7 +200,8 @@ export default function LaboratoryPage() {
     which: "internal" | "external",
     key: LabSortKey,
     label: string,
-    className = "",
+    sortButtonClassName = "",
+    { noTruncateLabel = false }: { noTruncateLabel?: boolean } = {},
   ) => {
     const activeKey = which === "internal" ? internalSortKey : externalSortKey;
     const activeDir = which === "internal" ? internalSortDir : externalSortDir;
@@ -210,13 +211,13 @@ export default function LaboratoryPage() {
         type="button"
         onClick={() => toggleSort(key, which)}
         className={cn(
-          "-mx-2 inline-flex min-h-10 w-full max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors",
+          "-mx-2 inline-flex min-h-10 w-full min-w-0 max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors",
           "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-          className,
+          sortButtonClassName,
         )}
         aria-sort={active ? (activeDir === "asc" ? "ascending" : "descending") : "none"}
       >
-        <span className="truncate">{label}</span>
+        <span className={noTruncateLabel ? "whitespace-nowrap" : "truncate"}>{label}</span>
         {active ? (
           activeDir === "asc" ? (
             <ArrowUp className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
@@ -231,7 +232,7 @@ export default function LaboratoryPage() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto" data-testid="laboratory-page">
+    <div className="min-w-0 w-full max-w-none space-y-6 overflow-x-hidden p-6" data-testid="laboratory-page">
       {patientIdFromUrl && (
         <div
           className="rounded-md border border-primary/25 bg-primary/5 px-3 py-2 text-sm flex flex-wrap items-center justify-between gap-2"
@@ -276,18 +277,25 @@ export default function LaboratoryPage() {
             <Card><CardContent className="py-8 text-center text-muted-foreground">No pending internal lab orders</CardContent></Card>
           ) : (
             <Card>
-              <CardContent className="p-0 overflow-x-auto">
-                <Table>
+              <CardContent className="overflow-x-hidden p-0">
+                <Table
+                  wrapperClassName="overflow-x-hidden"
+                  className="w-full table-fixed text-xs sm:text-sm"
+                >
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="min-w-[10rem]">{sortHead("internal", "testName", "Test")}</TableHead>
-                      <TableHead className="min-w-[12rem]">{sortHead("internal", "patient", "Patient")}</TableHead>
-                      <TableHead className="w-[7rem]">{sortHead("internal", "mrn", "MRN")}</TableHead>
-                      <TableHead className="w-[7rem]">{sortHead("internal", "testCode", "Code")}</TableHead>
-                      <TableHead className="w-[7rem]">{sortHead("internal", "priority", "Priority")}</TableHead>
-                      <TableHead className="w-[7rem]">{sortHead("internal", "status", "Status")}</TableHead>
-                      <TableHead className="w-[10rem]">{sortHead("internal", "createdAt", "Ordered")}</TableHead>
-                      <TableHead className="w-[13rem] text-right">Action</TableHead>
+                      <TableHead className="min-w-0 w-[17%]">{sortHead("internal", "testName", "Test")}</TableHead>
+                      <TableHead className="min-w-0 w-[17%]">{sortHead("internal", "patient", "Patient")}</TableHead>
+                      <TableHead className="min-w-0 w-[9%]" title="Medical record number">
+                        {sortHead("internal", "mrn", "MRN")}
+                      </TableHead>
+                      <TableHead className="min-w-0 w-[7%]">{sortHead("internal", "testCode", "Code")}</TableHead>
+                      <TableHead className="min-w-0 w-[9%]">{sortHead("internal", "priority", "Priority")}</TableHead>
+                      <TableHead className="min-w-0 w-[9%]">{sortHead("internal", "status", "Status")}</TableHead>
+                      <TableHead className="min-w-0 w-[21%]" title="Date ordered">
+                        {sortHead("internal", "createdAt", "Ordered", "", { noTruncateLabel: true })}
+                      </TableHead>
+                      <TableHead className="min-w-0 w-[11%] text-right whitespace-nowrap">Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -297,55 +305,79 @@ export default function LaboratoryPage() {
                       const orderedAt = labOrderCreatedAtIso(order.createdAt);
                       return (
                         <TableRow key={order.id} data-testid={`row-internal-lab-${order.id}`}>
-                          <TableCell className="font-medium">{order.testName}</TableCell>
-                          <TableCell className="min-w-0">
-                            <span className="truncate block" title={patientName}>{patientName}</span>
+                          <TableCell className="min-w-0 py-3 font-medium align-top">
+                            <span className="line-clamp-2 break-words" title={order.testName}>
+                              {order.testName}
+                            </span>
                           </TableCell>
-                          <TableCell className="text-xs font-mono text-muted-foreground">{pt?.mrn ?? "—"}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{order.testCode || "—"}</TableCell>
-                          <TableCell>
+                          <TableCell className="min-w-0 py-3 align-top">
+                            <span className="line-clamp-2 break-words" title={patientName}>
+                              {patientName}
+                            </span>
+                          </TableCell>
+                          <TableCell className="min-w-0 py-3 align-top text-xs font-mono text-muted-foreground">
+                            <span className="block truncate" title={pt?.mrn ?? ""}>
+                              {pt?.mrn ?? "—"}
+                            </span>
+                          </TableCell>
+                          <TableCell className="min-w-0 py-3 align-top text-xs text-muted-foreground">
+                            <span className="block truncate" title={order.testCode ?? ""}>
+                              {order.testCode || "—"}
+                            </span>
+                          </TableCell>
+                          <TableCell className="min-w-0 overflow-hidden py-3 align-top">
                             {priorityLabel(order.priority) === "STAT" && <Badge variant="destructive" className="text-[10px]">STAT</Badge>}
                             {priorityLabel(order.priority) === "Urgent" && <Badge variant="destructive" className="text-[10px]">Urgent</Badge>}
                             {priorityLabel(order.priority) === "Routine" && <Badge variant="secondary" className="text-[10px]">Routine</Badge>}
                           </TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className={`text-[10px] ${labOrderStatusBadgeClass(order.status)}`}>
+                          <TableCell className="min-w-0 overflow-hidden py-3 align-top">
+                            <Badge variant="secondary" className={`max-w-full truncate text-[10px] ${labOrderStatusBadgeClass(order.status)}`}>
                               {order.status}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-xs font-mono text-muted-foreground whitespace-nowrap">
-                            {orderedAt ? format(new Date(orderedAt), "yyyy-MM-dd HH:mm") : "—"}
+                          <TableCell className="min-w-0 py-3 align-top text-xs font-mono tabular-nums text-muted-foreground">
+                            <span className="block truncate" title={orderedAt ? format(new Date(orderedAt), "yyyy-MM-dd HH:mm") : ""}>
+                              {orderedAt ? format(new Date(orderedAt), "yyyy-MM-dd HH:mm") : "—"}
+                            </span>
                           </TableCell>
-                          <TableCell className="text-right whitespace-nowrap">
+                          <TableCell className="min-w-0 py-3 text-right align-top">
+                            <div className="flex flex-wrap justify-end gap-1">
                             {order.status === "ordered" && (
                               <Button
                                 size="sm"
                                 variant="secondary"
+                                className="h-8 shrink-0 px-2 text-xs"
+                                title="Mark collected"
                                 onClick={() => updateMutation.mutate({ id: order.id, data: { status: "collected" } })}
                               >
-                                Mark Collected
+                                Collect
                               </Button>
                             )}
                             {order.status === "collected" && (
                               <Button
                                 size="sm"
                                 variant="secondary"
+                                className="h-8 shrink-0 px-2 text-xs"
+                                title="Start processing"
                                 onClick={() => updateMutation.mutate({ id: order.id, data: { status: "processing" } })}
                               >
-                                Start Processing
+                                Process
                               </Button>
                             )}
                             {order.status === "processing" && (
                               <Button
                                 size="sm"
+                                className="h-8 shrink-0 px-2 text-xs"
+                                title="Enter results"
                                 onClick={() => {
                                   setResultOpen(order.id);
                                   setResultData({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" });
                                 }}
                               >
-                                Enter Results
+                                Results
                               </Button>
                             )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
@@ -364,18 +396,25 @@ export default function LaboratoryPage() {
             <Card><CardContent className="py-8 text-center text-muted-foreground">No pending external lab orders</CardContent></Card>
           ) : (
             <Card>
-              <CardContent className="p-0 overflow-x-auto">
-                <Table>
+              <CardContent className="overflow-x-hidden p-0">
+                <Table
+                  wrapperClassName="overflow-x-hidden"
+                  className="w-full table-fixed text-xs sm:text-sm"
+                >
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="min-w-[10rem]">{sortHead("external", "testName", "Test")}</TableHead>
-                      <TableHead className="min-w-[12rem]">{sortHead("external", "patient", "Patient")}</TableHead>
-                      <TableHead className="w-[7rem]">{sortHead("external", "mrn", "MRN")}</TableHead>
-                      <TableHead className="w-[7rem]">{sortHead("external", "testCode", "Code")}</TableHead>
-                      <TableHead className="w-[7rem]">{sortHead("external", "priority", "Priority")}</TableHead>
-                      <TableHead className="w-[7rem]">{sortHead("external", "status", "Status")}</TableHead>
-                      <TableHead className="w-[10rem]">{sortHead("external", "createdAt", "Ordered")}</TableHead>
-                      <TableHead className="w-[13rem] text-right">Action</TableHead>
+                      <TableHead className="min-w-0 w-[17%]">{sortHead("external", "testName", "Test")}</TableHead>
+                      <TableHead className="min-w-0 w-[17%]">{sortHead("external", "patient", "Patient")}</TableHead>
+                      <TableHead className="min-w-0 w-[9%]" title="Medical record number">
+                        {sortHead("external", "mrn", "MRN")}
+                      </TableHead>
+                      <TableHead className="min-w-0 w-[7%]">{sortHead("external", "testCode", "Code")}</TableHead>
+                      <TableHead className="min-w-0 w-[9%]">{sortHead("external", "priority", "Priority")}</TableHead>
+                      <TableHead className="min-w-0 w-[9%]">{sortHead("external", "status", "Status")}</TableHead>
+                      <TableHead className="min-w-0 w-[21%]" title="Date ordered">
+                        {sortHead("external", "createdAt", "Ordered", "", { noTruncateLabel: true })}
+                      </TableHead>
+                      <TableHead className="min-w-0 w-[11%] text-right whitespace-nowrap">Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -385,35 +424,54 @@ export default function LaboratoryPage() {
                       const orderedAt = labOrderCreatedAtIso(order.createdAt);
                       return (
                         <TableRow key={order.id} data-testid={`row-external-lab-${order.id}`}>
-                          <TableCell className="font-medium">{order.testName}</TableCell>
-                          <TableCell className="min-w-0">
-                            <span className="truncate block" title={patientName}>{patientName}</span>
+                          <TableCell className="min-w-0 py-3 font-medium align-top">
+                            <span className="line-clamp-2 break-words" title={order.testName}>
+                              {order.testName}
+                            </span>
                           </TableCell>
-                          <TableCell className="text-xs font-mono text-muted-foreground">{pt?.mrn ?? "—"}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{order.testCode || "—"}</TableCell>
-                          <TableCell>
+                          <TableCell className="min-w-0 py-3 align-top">
+                            <span className="line-clamp-2 break-words" title={patientName}>
+                              {patientName}
+                            </span>
+                          </TableCell>
+                          <TableCell className="min-w-0 py-3 align-top text-xs font-mono text-muted-foreground">
+                            <span className="block truncate" title={pt?.mrn ?? ""}>
+                              {pt?.mrn ?? "—"}
+                            </span>
+                          </TableCell>
+                          <TableCell className="min-w-0 py-3 align-top text-xs text-muted-foreground">
+                            <span className="block truncate" title={order.testCode ?? ""}>
+                              {order.testCode || "—"}
+                            </span>
+                          </TableCell>
+                          <TableCell className="min-w-0 overflow-hidden py-3 align-top">
                             {priorityLabel(order.priority) === "STAT" && <Badge variant="destructive" className="text-[10px]">STAT</Badge>}
                             {priorityLabel(order.priority) === "Urgent" && <Badge variant="destructive" className="text-[10px]">Urgent</Badge>}
                             {priorityLabel(order.priority) === "Routine" && <Badge variant="secondary" className="text-[10px]">Routine</Badge>}
                           </TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className={`text-[10px] ${labOrderStatusBadgeClass(order.status)}`}>
+                          <TableCell className="min-w-0 overflow-hidden py-3 align-top">
+                            <Badge variant="secondary" className={`max-w-full truncate text-[10px] ${labOrderStatusBadgeClass(order.status)}`}>
                               {order.status}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-xs font-mono text-muted-foreground whitespace-nowrap">
-                            {orderedAt ? format(new Date(orderedAt), "yyyy-MM-dd HH:mm") : "—"}
+                          <TableCell className="min-w-0 py-3 align-top text-xs font-mono tabular-nums text-muted-foreground">
+                            <span className="block truncate" title={orderedAt ? format(new Date(orderedAt), "yyyy-MM-dd HH:mm") : ""}>
+                              {orderedAt ? format(new Date(orderedAt), "yyyy-MM-dd HH:mm") : "—"}
+                            </span>
                           </TableCell>
-                          <TableCell className="text-right whitespace-nowrap">
+                          <TableCell className="min-w-0 py-3 text-right align-top">
                             <Button
                               size="sm"
                               variant="outline"
+                              className="h-8 max-w-full truncate px-2 text-xs"
+                              title="Upload external lab result"
                               onClick={() => {
                                 setUploadResultOpen(order.id);
                                 setResultData({ result: "", resultValue: "", referenceRange: "", isCritical: false, documentUrl: "" });
                               }}
                             >
-                              <Upload className="w-3.5 h-3.5 mr-1.5" /> Upload result
+                              <Upload className="mr-1 h-3.5 w-3.5 shrink-0" aria-hidden />
+                              <span className="truncate">Upload</span>
                             </Button>
                           </TableCell>
                         </TableRow>

@@ -1,4 +1,4 @@
-# OneHealthEHR - Electronic Health Records System
+# Imani — Electronic Health Records System
 
 ## Overview
 A comprehensive, production-grade Electronic Health Record (EHR) system built for healthcare facilities. Features role-based access control, patient management, clinical encounters with SOAP notes, appointment scheduling, laboratory orders, pharmacy/prescriptions, billing, and audit logging.

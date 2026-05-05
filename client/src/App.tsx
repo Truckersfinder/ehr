@@ -14,14 +14,15 @@ import { ToolbarActionLinks } from "@/components/toolbar-action-links";
 import { cn } from "@/lib/utils";
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { useOrganizationSettings } from "@/lib/organization-settings";
-import { MutedIconBox } from "@/components/muted-icon-box";
+import { ImaniMark } from "@/components/imani-mark";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
-import { CalendarDays, FlaskConical, Upload, User, UserPlus, LogOut, Heart, PhoneCall, Shield, Bed, LayoutDashboard } from "lucide-react";
+import { CalendarDays, FlaskConical, Upload, UserPlus, LogOut, PhoneCall, Shield, Bed, LayoutDashboard } from "lucide-react";
 
 import LoginPage from "@/pages/login";
+import PinpointEhrHomePage from "@/pages/pinpoint-ehr-home";
 import DashboardPage from "@/pages/dashboard";
 import SchedulePage from "@/pages/schedule";
 import PatientsPage from "@/pages/patients";
@@ -186,6 +187,25 @@ function AuthenticatedApp() {
 
   const { organizationName, logoUrl } = useOrganizationSettings();
 
+  const headerRoleLabel =
+    user?.role != null ? t(`roles.${user.role}`, { defaultValue: user.role }) : "";
+
+  const headerProfileName = user?.fullName?.trim() || user?.username || "";
+
+  const headerProfileOrg = (user?.organization?.name ?? organizationName ?? "").trim();
+
+  const headerProfileInitials = useMemo(() => {
+    const n = headerProfileName || user?.username || "";
+    const parts = n.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2)
+      return `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`.toUpperCase();
+    return (parts[0]?.[0] ?? "?").toUpperCase();
+  }, [headerProfileName, user?.username]);
+
+  const headerProfileTooltip = [headerProfileName, headerProfileOrg, headerRoleLabel]
+    .filter(Boolean)
+    .join(" · ");
+
   useEffect(() => {
     document.title = t("app.documentTitleEhr", { name: organizationName });
   }, [organizationName, t]);
@@ -199,7 +219,7 @@ function AuthenticatedApp() {
   return (
     <>
       <div className="flex h-screen w-full flex-col">
-        <header className="flex w-full flex-wrap items-center gap-2 sm:gap-3 p-2 border-b bg-background sticky top-0 z-50 shrink-0">
+        <header className="app-shell-header flex w-full flex-wrap items-center gap-2 sm:gap-3 p-2 border-b sticky top-0 z-50 shrink-0">
           <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0 flex-1">
               <div
                 className="inline-flex items-center gap-2 px-2 py-1.5 shrink-0 select-none"
@@ -212,9 +232,9 @@ function AuthenticatedApp() {
                     className="h-7 w-auto max-w-[140px] object-contain dark:brightness-95"
                   />
                 ) : (
-                  <MutedIconBox icon={Heart} size="sm" />
+                  <ImaniMark className="h-7 w-7" alt="" />
                 )}
-                <span className="font-bold text-xs sm:text-sm tracking-tight leading-tight">
+                <span className="font-serif font-semibold text-xs sm:text-sm tracking-tight leading-tight">
                   {organizationName}
                 </span>
               </div>
@@ -385,18 +405,34 @@ function AuthenticatedApp() {
                 </>
               )}
           </div>
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0 min-w-0 ml-auto sm:ml-0">
             {user && (
-              <span
-                className="inline-flex items-center gap-1.5 min-w-0 max-w-[min(12rem,40vw)] sm:max-w-xs"
-                data-testid="header-user-name"
-                title={headerUserLabel}
+              <div
+                className="flex items-center gap-2 min-w-0 max-w-[min(15rem,52vw)] sm:max-w-md"
+                data-testid="header-profile"
+                title={headerProfileTooltip}
               >
-                <User className="w-4 h-4 shrink-0 text-muted-foreground" aria-hidden />
-                <span className="truncate text-sm font-medium text-foreground" title={headerUserLabel}>
-                  {headerUserLabel}
-                </span>
-              </span>
+                <div
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-bold text-muted-foreground"
+                  aria-hidden
+                >
+                  {headerProfileInitials}
+                </div>
+                <div className="flex min-w-0 flex-col items-end text-right leading-snug">
+                  <span
+                    className="truncate text-sm font-semibold text-foreground"
+                    data-testid="header-profile-name"
+                  >
+                    {headerProfileName || headerUserLabel}
+                  </span>
+                  {headerProfileOrg ? (
+                    <span className="truncate text-xs text-muted-foreground max-w-full">{headerProfileOrg}</span>
+                  ) : null}
+                  {headerRoleLabel ? (
+                    <span className="truncate text-[11px] text-muted-foreground max-w-full">{headerRoleLabel}</span>
+                  ) : null}
+                </div>
+              </div>
             )}
             <PatientSearch />
             <Button
@@ -454,6 +490,8 @@ function PublicRouteChrome({ children }: { children: React.ReactNode }) {
 function AppContent() {
   const { t } = useTranslation();
   const [matchPublicClinicalForm, publicClinicalParams] = useRoute("/p/clinical-form/:token");
+  const [matchLogin] = useRoute("/login");
+  const [matchHome] = useRoute("/");
   const [matchPortalLogin] = useRoute("/portal");
   const [matchPortalInvite] = useRoute("/portal/invite/:token");
   const [matchPortalRecord] = useRoute("/portal/record");
@@ -501,7 +539,18 @@ function AppContent() {
   }
 
   if (!user) {
-    return <LoginPage />;
+    if (matchLogin) {
+      return <LoginPage />;
+    }
+    if (matchHome) {
+      return <PinpointEhrHomePage />;
+    }
+    return <Redirect to="/login" />;
+  }
+
+  /** Logged-in staff: /login is invalid in this branch — send them to app home. */
+  if (matchLogin) {
+    return <Redirect to="/" />;
   }
 
   return <AuthenticatedApp />;

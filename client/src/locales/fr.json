@@ -433,7 +433,12 @@
       "registerNew": "Enregistrer un nouveau patient"
     },
     "schedule": {
-      "title": "Planning"
+      "title": "Planning",
+      "clinicianCardTitle": "Votre profil",
+      "clinicianCardSubtitle": "Utilisateur connecté pour cette organisation.",
+      "clinicianName": "Nom",
+      "clinicianOrganization": "Organisation",
+      "clinicianPosition": "Poste"
     },
     "appointments": {
       "title": "Rendez-vous"

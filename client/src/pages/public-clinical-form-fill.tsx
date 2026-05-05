@@ -15,9 +15,8 @@ import {
   excludeLegacyPatientSignOffFieldsFromQrConsent,
   fieldsForPublicConsentQrValidation,
 } from "@shared/consent-patient-signature";
-import { MutedIconBox } from "@/components/muted-icon-box";
+import { ImaniMark } from "@/components/imani-mark";
 import { publicOrganizationNameFallback, usePatientPortalBranding } from "@/lib/patient-portal-branding";
-import { Heart } from "lucide-react";
 
 type SessionPayload = {
   sessionId: string;
@@ -118,7 +117,7 @@ export default function PublicClinicalFormFillPage({ token }: { token: string })
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-muted/30">
         <div className="flex items-center gap-2 mb-6">
-          <MutedIconBox icon={Heart} size="sm" />
+          <ImaniMark className="h-9 w-9" alt="" />
           <span className="font-semibold text-sm">{publicOrgName}</span>
         </div>
         <Card className="w-full max-w-md">
@@ -146,7 +145,7 @@ export default function PublicClinicalFormFillPage({ token }: { token: string })
     <div className="min-h-screen flex flex-col items-stretch p-4 md:p-8 bg-muted/30">
       <div className="mx-auto w-full max-w-lg flex flex-col gap-6">
         <div className="flex items-center gap-2">
-          <MutedIconBox icon={Heart} size="sm" />
+          <ImaniMark className="h-9 w-9" alt="" />
           <span className="font-semibold text-sm">{publicOrgName}</span>
         </div>
         <Card>

@@ -32,9 +32,9 @@ export default {
     spacing: scaleSpacing(defaultTheme.spacing as Record<string, string>),
     extend: {
       borderRadius: {
-        lg: ".5625rem", /* 9px */
-        md: ".375rem", /* 6px */
-        sm: ".1875rem", /* 3px */
+        lg: "1rem",
+        md: "0.625rem",
+        sm: "0.375rem",
       },
       colors: {
         // Flat / base colors (regular buttons)

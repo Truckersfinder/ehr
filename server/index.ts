@@ -9,6 +9,12 @@ import { validateProdSecurityConfig } from "./config";
 
 const app = express();
 
+/** When behind Nginx / a load balancer, set TRUST_PROXY=1 and forward X-Forwarded-* headers (see scripts/nginx-imaniehr.conf). */
+const trustEnv = process.env.TRUST_PROXY?.trim();
+if (trustEnv === "1" || /^true$/i.test(trustEnv ?? "")) {
+  app.set("trust proxy", 1);
+}
+
 validateProdSecurityConfig();
 
 /** Allow browser requests from Vite dev (e.g. :5173) to hit API on :3000 (dev fetch shim). */
@@ -102,13 +108,15 @@ app.use((req, res, next) => {
   /** Local default; production hosts usually set `PORT` in the environment. */
   const DEFAULT_PORT = 3000;
   const port = parseInt(process.env.PORT ?? String(DEFAULT_PORT), 10);
+  /** `127.0.0.1` = same machine only. Use `0.0.0.0` to accept LAN / public IP (firewall + security group must allow it). */
+  const host = process.env.HOST?.trim() || "127.0.0.1";
   httpServer.listen(
     {
       port,
-      host: "127.0.0.1",
+      host,
     },
     () => {
-      log(`serving on port ${port}`);
+      log(`listening on http://${host}:${port}`);
     },
   );
 })();

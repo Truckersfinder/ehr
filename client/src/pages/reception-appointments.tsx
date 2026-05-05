@@ -397,7 +397,7 @@ export default function ReceptionAppointmentsPage() {
     viewingDate.getTime() === new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
 
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-[1600px] mx-auto" data-testid="reception-appointments-page">
+    <div className="p-4 md:p-6 flex flex-col gap-4 max-w-[1600px] mx-auto" data-testid="reception-appointments-page">
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t("pages.appointments.title")}</h1>
@@ -596,6 +596,7 @@ export default function ReceptionAppointmentsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <div className="space-y-4 min-w-0">
       <Card className="border-2 shadow-sm" data-testid="reception-same-day-visits">
         <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
           <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
@@ -731,19 +732,19 @@ export default function ReceptionAppointmentsPage() {
                       }`}
                       data-testid={`reception-appt-row-${apt.id}`}
                     >
-                      <span className="px-2 py-2 border-r border-border/80 whitespace-nowrap font-medium">
+                      <span className="border-r border-border/80 py-2 pl-2 pr-3 whitespace-nowrap font-medium">
                         {format(new Date(apt.scheduledDate), "HH:mm")}
                       </span>
-                      <span className="px-2 py-2 border-r border-border/80 truncate">{apt.patientName}</span>
-                      <span className="px-2 py-2 border-r border-border/80 text-muted-foreground truncate">{apt.mrn}</span>
-                      <span className="px-2 py-2 border-r border-border/80 truncate">{apt.clinicianName}</span>
-                      <span className="px-2 py-2 border-r border-border/80 text-center">{apt.duration ?? 30}</span>
-                      <span className="px-2 py-2 border-r border-border/80">
+                      <span className="border-r border-border/80 py-2 pl-2 pr-3 truncate">{apt.patientName}</span>
+                      <span className="border-r border-border/80 py-2 pl-2 pr-3 text-muted-foreground truncate">{apt.mrn}</span>
+                      <span className="border-r border-border/80 py-2 pl-2 pr-3 truncate">{apt.clinicianName}</span>
+                      <span className="border-r border-border/80 py-2 pl-2 pr-3 text-center">{apt.duration ?? 30}</span>
+                      <span className="border-r border-border/80 py-2 pl-2 pr-3">
                         <Badge variant="secondary" className={`text-[10px] capitalize ${appointmentStatusBadgeClass(apt.status)}`}>
                           {formatAppointmentStatusLabel(apt.status)}
                         </Badge>
                       </span>
-                      <span className="px-2 py-2 truncate" title={apt.reason ?? ""}>
+                      <span className="py-2 pl-2 pr-6 truncate" title={apt.reason ?? ""}>
                         {apt.reason || "—"}
                       </span>
                     </button>
@@ -840,16 +841,16 @@ export default function ReceptionAppointmentsPage() {
                     onClick={() => navigate(`/patients/${a.patientId}?tab=overview&chartEntry=browse`)}
                     className="grid grid-cols-[minmax(0,1.2fr)_6.5rem_minmax(0,1fr)_5.75rem_minmax(0,1.2fr)_minmax(5rem,7rem)_minmax(9.5rem,11rem)] w-full min-w-0 text-left text-xs border-b border-border last:border-b-0 hover:bg-muted/30 bg-background items-center"
                   >
-                    <span className="px-2 py-2 border-r border-border/80 min-w-0 truncate">
+                    <span className="border-r border-border/80 py-2 pl-2 pr-3 min-w-0 truncate">
                       {p ? `${p.firstName} ${p.lastName}` : "—"}
                     </span>
-                    <span className="px-2 py-2 border-r border-border/80 text-muted-foreground min-w-0 truncate">
+                    <span className="border-r border-border/80 py-2 pl-2 pr-3 text-muted-foreground min-w-0 truncate">
                       {p?.mrn ?? "—"}
                     </span>
-                    <span className="px-2 py-2 border-r border-border/80 min-w-0 truncate">
+                    <span className="border-r border-border/80 py-2 pl-2 pr-3 min-w-0 truncate">
                       {clinician?.fullName ?? "—"}
                     </span>
-                    <span className="px-2 py-2 border-r border-border/80 whitespace-nowrap">
+                    <span className="border-r border-border/80 py-2 pl-2 pr-3 whitespace-nowrap">
                       <Badge
                         variant="outline"
                         className={`text-[10px] font-medium border ${ADMITTED_PATIENT_STATUS_BADGE_CLASS}`}
@@ -857,11 +858,11 @@ export default function ReceptionAppointmentsPage() {
                         {ADMITTED_PATIENT_STATUS_LABEL}
                       </Badge>
                     </span>
-                    <span className="px-2 py-2 border-r border-border/80 min-w-0 truncate" title={a.reason ?? ""}>
+                    <span className="border-r border-border/80 py-2 pl-2 pr-3 min-w-0 truncate" title={a.reason ?? ""}>
                       {a.reason || "—"}
                     </span>
-                    <span className="px-2 py-2 border-r border-border/80 min-w-0 truncate">{a.bedName}</span>
-                    <span className="px-2 py-2 min-w-0 truncate whitespace-nowrap">
+                    <span className="border-r border-border/80 py-2 pl-2 pr-3 min-w-0 truncate">{a.bedName}</span>
+                    <span className="min-w-0 truncate whitespace-nowrap py-2 pl-2 pr-6">
                       {a.admittedAt ? format(new Date(a.admittedAt), "MMMM d, yyyy") : "—"}
                     </span>
                   </button>
@@ -871,6 +872,7 @@ export default function ReceptionAppointmentsPage() {
           )}
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

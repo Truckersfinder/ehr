@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PATIENT_PORTAL_TOKEN_STORAGE_KEY } from "@/lib/patient-portal-token";
+import { ImaniMark } from "@/components/imani-mark";
 
 export default function PatientPortalInvitePage() {
   const { t } = useTranslation();
@@ -110,6 +111,9 @@ export default function PatientPortalInvitePage() {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-muted/30">
       <div className="w-full max-w-md space-y-6">
+        <div className="flex justify-center">
+          <ImaniMark className="h-16 w-16" alt="" />
+        </div>
         <div className="text-center space-y-1">
           <h1 className="text-xl font-semibold tracking-tight">
             {meta?.firstName ? t("portal.invite.welcomeWithName", { name: meta.firstName }) : t("portal.invite.welcome")}

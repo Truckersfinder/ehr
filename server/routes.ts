@@ -88,7 +88,7 @@ import { issuePortalInviteAndSendEmail } from "./patient-portal-invite";
 
 /** Create patient: never take legacy free-text `allergies` from the request (autofill / stray JSON). Use structured patient_allergies + clinical workflow instead. */
 const insertPatientCreateSchema = insertPatientSchema.omit({ allergies: true, profilePhotoUrl: true });
-import { seedDatabase, ensureSecurityUser } from "./seed";
+import { seedDatabase, ensureSecurityUser, ensureDoctorScheduleDemoAppointments } from "./seed";
 import { getCountriesList } from "./countries";
 import { getStatesForCountry } from "./states";
 import { getEmergencyContactRelationships } from "./emergency-contact-relationships";
@@ -219,6 +219,7 @@ export async function registerRoutes(
 ): Promise<Server> {
   await seedDatabase();
   await ensureSecurityUser();
+  await ensureDoctorScheduleDemoAppointments();
   await storage.ensureCommonVisitReasonsSeeded();
   await storage.ensureBillingChargeCatalogSeeded();
   await storage.ensureLabOrderBillingChargesSyncedFromCommonList();

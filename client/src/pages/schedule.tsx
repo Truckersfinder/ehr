@@ -2,23 +2,29 @@ import { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { apiGetJson } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import {
   ADMITTED_PATIENT_STATUS_BADGE_CLASS,
   ADMITTED_PATIENT_STATUS_LABEL,
-  appointmentStatusBadgeClass,
-  formatAppointmentStatusLabel,
 } from "@/lib/appointment-status";
-import { format, startOfDay, endOfDay, addDays, subDays } from "date-fns";
-import { Link } from "wouter";
+import { differenceInYears, format, startOfDay, endOfDay, addDays, subDays } from "date-fns";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Table,
   TableBody,
@@ -29,12 +35,32 @@ import {
 } from "@/components/ui/table";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, ChevronLeft, ChevronRight, Pill } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  MoreHorizontal,
+  Pill,
+  Plus,
+  Search,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Bed,
+} from "lucide-react";
 import type { Appointment, Patient, User as UserType } from "@shared/schema";
 import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
-import { EmptyState } from "@/components/empty-state";
 import { excludeAppointmentsWithActiveAdmission } from "@/lib/exclude-admitted-appointments";
 import { formatInOrgTimeZone, normalizeOrgTimeZone } from "@/lib/org-timezone";
+import { cn } from "@/lib/utils";
+import { ScheduleAppointmentStatusBadge } from "@/components/schedule-page/schedule-appointment-status-badge";
+import {
+  ScheduleViewToggle,
+  type ScheduleViewMode,
+} from "@/components/schedule-page/schedule-view-toggle";
+import { ScheduleCalendarPlaceholder } from "@/components/schedule-page/schedule-calendar-placeholder";
+import { ScheduleBoardView } from "@/components/schedule-page/schedule-board-view";
 
 type ActiveAdmissionRow = {
   id: string;
@@ -58,6 +84,42 @@ type RecentDischargedAdmissionRow = {
 type ScheduleSortKey = "time" | "patient" | "mrn" | "clinician" | "duration" | "status" | "reason";
 type AdmittedSortKey = "patient" | "mrn" | "clinician" | "status" | "reason" | "bed" | "admittedAt";
 
+const APPOINTMENT_FILTER_STATUSES = [
+  "scheduled",
+  "confirmed",
+  "checked_in",
+  "in_progress",
+  "completed",
+  "no_show",
+  "cancelled",
+] as const;
+
+function patientInitials(p: Patient | undefined): string {
+  if (!p) return "?";
+  const a = p.firstName?.trim()?.[0] ?? "";
+  const b = p.lastName?.trim()?.[0] ?? "";
+  return (a + b).toUpperCase() || "?";
+}
+
+function clinicianInitials(name: string | undefined): string {
+  if (!name?.trim()) return "?";
+  const parts = name.trim().split(/\s+/);
+  const a = parts[0]?.[0] ?? "";
+  const b = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
+  return (a + b).toUpperCase() || "?";
+}
+
+function formatGenderLabel(g: string): string {
+  return g ? g.charAt(0).toUpperCase() + g.slice(1).toLowerCase() : "";
+}
+
+function patientDemographicLine(patient: Patient | undefined): string {
+  if (!patient) return "";
+  const years = differenceInYears(new Date(), new Date(patient.dateOfBirth));
+  const g = formatGenderLabel(patient.gender ?? "");
+  return `${g} • ${years} years`;
+}
+
 export default function SchedulePage() {
   const { t } = useTranslation();
   const { user, token } = useAuth();
@@ -73,6 +135,10 @@ export default function SchedulePage() {
 
   const [viewingDate, setViewingDate] = useState(() => new Date(today.getFullYear(), today.getMonth(), today.getDate()));
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [scheduleViewMode, setScheduleViewMode] = useState<ScheduleViewMode>("list");
+  const [appointmentSearch, setAppointmentSearch] = useState("");
+  const [statusFilterOpen, setStatusFilterOpen] = useState(false);
+  const [allowedStatuses, setAllowedStatuses] = useState(() => new Set<string>(APPOINTMENT_FILTER_STATUSES));
 
   const viewingDayStart = startOfDay(viewingDate).toISOString();
   const viewingDayEnd = endOfDay(viewingDate).toISOString();
@@ -113,7 +179,6 @@ export default function SchedulePage() {
 
   const appointmentsForSchedule = useMemo(() => {
     const withoutActive = excludeAppointmentsWithActiveAdmission(appointments, admissions);
-    // If an admission was just discharged, keep it out of "Same Day Visits" so it appears only under Recently discharged.
     const recentAdmissionApptIds = new Set(
       recentDischarged.map((a) => a.appointmentId).filter((id): id is string => !!id),
     );
@@ -163,9 +228,30 @@ export default function SchedulePage() {
     return list;
   }, [appointmentsForSchedule, patientMap, userMap, scheduleSortKey, scheduleSortDir]);
 
+  const filteredAppointments = useMemo(() => {
+    const q = appointmentSearch.trim().toLowerCase();
+    return displayAppointments.filter((apt) => {
+      if (!allowedStatuses.has(apt.status)) return false;
+      if (!q) return true;
+      const pt = patientMap.get(apt.patientId);
+      const clin = userMap.get(apt.clinicianId);
+      const name = pt ? `${pt.firstName} ${pt.lastName}` : "";
+      return (
+        name.toLowerCase().includes(q) ||
+        (pt?.mrn ?? "").toLowerCase().includes(q) ||
+        (apt.reason ?? "").toLowerCase().includes(q) ||
+        (clin?.fullName ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [displayAppointments, allowedStatuses, appointmentSearch, patientMap, userMap]);
+
   const { data: effectiveScheduleColsRes } = useQuery({
     queryKey: ["/api/ui-table-columns/effective", "schedule_appointments"],
-    queryFn: () => apiGetJson<{ columns: { id: string; label: string }[] }>(`/api/ui-table-columns/effective?tableKey=schedule_appointments`, token),
+    queryFn: () =>
+      apiGetJson<{ columns: { id: string; label: string }[] }>(
+        `/api/ui-table-columns/effective?tableKey=schedule_appointments`,
+        token,
+      ),
     enabled: !!token,
     staleTime: 60 * 60 * 1000,
   });
@@ -189,6 +275,8 @@ export default function SchedulePage() {
     () => new Set(["time", "patient", "mrn", "clinician", "duration", "status", "reason"]),
     [],
   );
+
+  const colIds = useMemo(() => new Set(scheduleColumns.map((c) => c.id)), [scheduleColumns]);
 
   const appointmentIdsForMeds = useMemo(() => displayAppointments.map((a) => a.id), [displayAppointments]);
   const admissionIdsForMeds = useMemo(() => admissions.map((a) => a.id), [admissions]);
@@ -285,6 +373,32 @@ export default function SchedulePage() {
   const isToday =
     viewingDate.getTime() === new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
 
+  const toggleStatusFilter = (status: string) => {
+    setAllowedStatuses((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  };
+
+  const selectAllStatuses = () => setAllowedStatuses(new Set(APPOINTMENT_FILTER_STATUSES));
+  const clearAllStatuses = () => setAllowedStatuses(new Set<string>());
+
+  function sortChipIcon(kind: ScheduleSortKey) {
+    if (scheduleSortKey !== kind) return <ArrowUpDown className="h-3 w-3 opacity-40" />;
+    return scheduleSortDir === "asc" ? (
+      <ArrowUp className="h-3 w-3 text-[#F97316]" />
+    ) : (
+      <ArrowDown className="h-3 w-3 text-[#F97316]" />
+    );
+  }
+
+  const jumpToday = () => {
+    const n = new Date();
+    setViewingDate(new Date(n.getFullYear(), n.getMonth(), n.getDate()));
+  };
+
   if (user?.role === "reception") {
     return (
       <div className="p-6 text-muted-foreground text-sm" data-testid="schedule-redirect-reception">
@@ -293,361 +407,544 @@ export default function SchedulePage() {
     );
   }
 
+  const appointmentHref = (apt: Appointment) =>
+    `/patients/${apt.patientId}?fromSchedule=1&appointmentId=${encodeURIComponent(apt.id)}`;
+
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto" data-testid="schedule-page">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t("pages.schedule.title")}</h1>
+    <div className="min-h-full bg-[#F7F6F3] pb-12" data-testid="schedule-page">
+      <div className="max-w-[1400px] xl:max-w-[1600px] mx-auto px-4 sm:px-6 pt-6">
+        <div className="flex flex-wrap items-center justify-between gap-4 pb-6">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">{t("pages.schedule.title")}</h1>
+          <ScheduleViewToggle value={scheduleViewMode} onChange={setScheduleViewMode} />
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={() => setViewingDate((d) => subDays(d, 1))}
-            aria-label="Previous day"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </Button>
-          <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                className="font-medium min-w-[220px] text-center text-sm h-auto p-0 text-primary hover:text-primary hover:underline"
-                aria-label="Open date picker"
-              >
-                {format(viewingDate, "EEEE, MMM d, yyyy")}
-                {isToday && <span className="text-muted-foreground font-normal ml-1">(today)</span>}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="center">
-              <Calendar
-                mode="single"
-                selected={viewingDate}
-                onSelect={(date) => {
-                  if (!date) return;
-                  setViewingDate(new Date(date.getFullYear(), date.getMonth(), date.getDate()));
-                  setDatePickerOpen(false);
-                }}
-                initialFocus
+
+        {/* Top controls bar */}
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 rounded-lg border-[#F97316]/40 text-[#0E3B2E] hover:bg-orange-50"
+              onClick={jumpToday}
+              data-testid="schedule-btn-today"
+            >
+              Today
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 rounded-lg shrink-0"
+              onClick={() => setViewingDate((d) => subDays(d, 1))}
+              aria-label="Previous day"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 min-w-[220px] rounded-lg font-medium text-sm"
+                  aria-label="Open date picker"
+                >
+                  {format(viewingDate, "EEEE, MMM d, yyyy")}
+                  {isToday && (
+                    <span className="text-muted-foreground font-normal ml-1">(today)</span>
+                  )}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                  mode="single"
+                  selected={viewingDate}
+                  onSelect={(date) => {
+                    if (!date) return;
+                    setViewingDate(new Date(date.getFullYear(), date.getMonth(), date.getDate()));
+                    setDatePickerOpen(false);
+                  }}
+                  initialFocus
+                />
+              </PopoverContent>
+            </Popover>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 rounded-lg shrink-0"
+              onClick={() => setViewingDate((d) => addDays(d, 1))}
+              aria-label="Next day"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end flex-1 min-w-[min(100%,280px)]">
+            <div className="relative flex-1 min-w-[160px] max-w-xs">
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              <Input
+                placeholder="Search patient…"
+                value={appointmentSearch}
+                onChange={(e) => setAppointmentSearch(e.target.value)}
+                className="h-9 pl-9 rounded-lg border-border bg-white"
+                aria-label="Search appointments"
+                data-testid="schedule-appt-search"
               />
-            </PopoverContent>
-          </Popover>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            onClick={() => setViewingDate((d) => addDays(d, 1))}
-            aria-label="Next day"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </Button>
+            </div>
+            <Popover open={statusFilterOpen} onOpenChange={setStatusFilterOpen}>
+              <PopoverTrigger asChild>
+                <Button type="button" variant="outline" size="sm" className="h-9 rounded-lg gap-1.5 shrink-0">
+                  <span>Filter</span>
+                  <ChevronDown className="h-4 w-4 opacity-70" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-56 p-3" align="end">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Status</p>
+                <div className="space-y-2 max-h-[220px] overflow-y-auto">
+                  {APPOINTMENT_FILTER_STATUSES.map((s) => (
+                    <label key={s} className="flex items-center gap-2 text-sm cursor-pointer">
+                      <Checkbox
+                        checked={allowedStatuses.has(s)}
+                        onCheckedChange={() => toggleStatusFilter(s)}
+                      />
+                      <span className="capitalize">{s.replace(/_/g, " ")}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="flex gap-2 mt-3 pt-2 border-t border-border">
+                  <Button type="button" variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={selectAllStatuses}>
+                    All
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={clearAllStatuses}>
+                    Clear
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+            <Button
+              type="button"
+              className="h-9 shrink-0 rounded-lg bg-[#0E3B2E] text-white hover:bg-[#0a3026]"
+              onClick={() => navigate("/appointments")}
+              data-testid="schedule-new-appointment"
+            >
+              <Plus className="w-4 h-4 mr-1.5" />
+              New Appointment
+            </Button>
+          </div>
+        </div>
+
+        <div className="space-y-6 min-w-0">
+            <Card
+              className="rounded-xl border border-border bg-white shadow-sm overflow-hidden"
+              data-testid="schedule-same-day-visits"
+            >
+              <CardHeader className="space-y-0 border-b bg-white px-4 py-4 sm:px-5">
+                <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Same Day Visits</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Scheduled visits for the day you are viewing (excludes overnight admissions below).
+                    </p>
+                  </div>
+                  <Badge variant="secondary" className="text-[10px] shrink-0 rounded-full px-3 py-1 w-fit">
+                    {filteredAppointments.length} appointment{filteredAppointments.length !== 1 ? "s" : ""}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 sm:p-5 space-y-3 bg-[#F7F6F3]/30">
+                {isLoading ? (
+                  <div className="space-y-3">
+                    <Skeleton className="h-24 w-full rounded-xl" />
+                    {[1, 2, 3, 4].map((i) => (
+                      <Skeleton key={i} className="h-28 w-full rounded-xl" />
+                    ))}
+                  </div>
+                ) : scheduleViewMode === "calendar" ? (
+                  <ScheduleCalendarPlaceholder />
+                ) : scheduleViewMode === "board" ? (
+                  <ScheduleBoardView
+                    appointments={filteredAppointments}
+                    patientMap={patientMap}
+                    orgTz={orgTz}
+                  />
+                ) : (
+                  <>
+                    {scheduleColumns.filter((c) => scheduleSortableIds.has(c.id as ScheduleSortKey)).length ? (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pb-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mr-1">
+                          Sort by
+                        </span>
+                        {scheduleColumns
+                          .filter((c) => scheduleSortableIds.has(c.id as ScheduleSortKey))
+                          .map((c) => {
+                            const k = c.id as ScheduleSortKey;
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                className={cn(
+                                  "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors border",
+                                  scheduleSortKey === k
+                                    ? "border-[#0E3B2E]/30 bg-white text-[#0E3B2E]"
+                                    : "border-transparent bg-white/70 text-muted-foreground hover:bg-white",
+                                )}
+                                onClick={() => toggleScheduleSort(k)}
+                              >
+                                {c.label}
+                                {sortChipIcon(k)}
+                              </button>
+                            );
+                          })}
+                      </div>
+                    ) : null}
+
+                    {displayAppointments.length > 0 && filteredAppointments.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-white py-16 text-center px-4">
+                        <Clock className="w-10 h-10 text-muted-foreground/35 mb-2" />
+                        <p className="text-sm font-medium text-muted-foreground">No appointments match your filters.</p>
+                        <Button type="button" variant="outline" size="sm" className="mt-3" onClick={selectAllStatuses}>
+                          Reset filters
+                        </Button>
+                      </div>
+                    ) : filteredAppointments.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-white py-16 text-center px-4">
+                        <Clock className="w-10 h-10 text-muted-foreground/35 mb-2" />
+                        <p className="text-sm font-medium text-muted-foreground">No appointments on this day</p>
+                      </div>
+                    ) : (
+                      <ul className="space-y-3 list-none">
+                        {filteredAppointments.map((apt) => {
+                          const patient = patientMap.get(apt.patientId);
+                          const clinician = userMap.get(apt.clinicianId);
+                          const medCount = medsAdminCounts?.byAppointmentId?.[apt.id] ?? 0;
+                          const href = appointmentHref(apt);
+
+                          return (
+                            <li key={apt.id} data-testid={`schedule-row-${apt.id}`}>
+                              <article className="group flex gap-4 rounded-xl border border-border bg-white p-4 shadow-sm transition-colors hover:bg-gray-50">
+                                {/* Time */}
+                                {colIds.has("time") && (
+                                  <div className="w-14 shrink-0 text-center pt-0.5">
+                                    <p className="text-sm font-bold tabular-nums text-foreground">
+                                      {formatInOrgTimeZone(apt.scheduledDate, "HH:mm", orgTz)}
+                                    </p>
+                                    {colIds.has("duration") && (
+                                      <p className="text-[10px] text-muted-foreground mt-0.5">{apt.duration ?? 30}m</p>
+                                    )}
+                                  </div>
+                                )}
+
+                                <div className="flex flex-1 min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                  {/* Patient */}
+                                  {(colIds.has("patient") || colIds.has("mrn")) && (
+                                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                                      <div
+                                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-bold text-muted-foreground"
+                                        aria-hidden
+                                      >
+                                        {patientInitials(patient)}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <Link href={href}>
+                                          <a className="text-sm font-bold text-[#0E3B2E] hover:underline truncate block">
+                                            {patient ? `${patient.firstName} ${patient.lastName}` : "—"}
+                                          </a>
+                                        </Link>
+                                        <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                                          {patientDemographicLine(patient)}
+                                          {colIds.has("mrn") && patient?.mrn ? (
+                                            <span className="text-muted-foreground/80">{` • MRN ${patient.mrn}`}</span>
+                                          ) : null}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  <div className="flex flex-[2] flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end xl:flex-nowrap min-w-0">
+                                    {(colIds.has("reason") || colIds.has("clinician") || colIds.has("provider")) && (
+                                      <div className="flex min-w-[8rem] flex-1 flex-col gap-3 sm:flex-row sm:gap-8 min-w-0">
+                                        {colIds.has("reason") && (
+                                          <div className="min-w-0 flex-1">
+                                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                              Reason
+                                            </p>
+                                            <p className="text-sm truncate" title={apt.reason ?? ""}>
+                                              {apt.reason ?? "—"}
+                                            </p>
+                                          </div>
+                                        )}
+                                        {(colIds.has("clinician") || colIds.has("provider")) && (
+                                          <div className="flex min-w-0 items-center gap-2 flex-1 max-w-[12rem]">
+                                            <div
+                                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground"
+                                              aria-hidden
+                                            >
+                                              {clinicianInitials(clinician?.fullName)}
+                                            </div>
+                                            <div className="min-w-0">
+                                              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                                Provider
+                                              </p>
+                                              <p className="text-sm font-medium truncate">
+                                                {clinician?.fullName ? `${clinician.fullName}` : "—"}
+                                              </p>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+
+                                    <div className="flex shrink-0 flex-wrap items-center gap-3">
+                                      {colIds.has("status") && (
+                                        <ScheduleAppointmentStatusBadge status={apt.status} />
+                                      )}
+                                      {colIds.has("meds_admin") && (
+                                        <div className="text-xs text-muted-foreground min-w-[4rem]" title="Meds administered">
+                                          {medCount > 0 ? (
+                                            <span className="inline-flex items-center gap-1 font-medium text-foreground">
+                                              <Pill className="h-3.5 w-3.5 text-[#0E3B2E]" />
+                                              {medCount}
+                                            </span>
+                                          ) : (
+                                            "—"
+                                          )}
+                                        </div>
+                                      )}
+                                      <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                          <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon"
+                                            className="h-8 w-8 shrink-0 text-muted-foreground"
+                                            aria-label="Actions"
+                                          >
+                                            <MoreHorizontal className="h-4 w-4" />
+                                          </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                          <DropdownMenuItem
+                                            onSelect={(e) => {
+                                              e.preventDefault();
+                                              navigate(href);
+                                            }}
+                                          >
+                                            Open patient chart
+                                          </DropdownMenuItem>
+                                          <DropdownMenuSeparator />
+                                          <DropdownMenuItem
+                                            onSelect={(e) => {
+                                              e.preventDefault();
+                                              navigate("/appointments");
+                                            }}
+                                          >
+                                            Schedule appointment
+                                          </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                      </DropdownMenu>
+                                    </div>
+                                  </div>
+                                </div>
+                              </article>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card
+              className="rounded-xl border border-border bg-white shadow-sm overflow-hidden"
+              data-testid="schedule-admitted-patients"
+            >
+              <CardHeader className="space-y-0 border-b border-border bg-white px-4 py-4 sm:px-5">
+                <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0 text-left">
+                    <p className="text-sm font-semibold text-foreground">Admitted Patients</p>
+                    <p className="text-xs text-muted-foreground">Overnight visits remain here until discharged.</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9 text-xs rounded-lg"
+                      onClick={() => navigate("/admissions/recently-discharged")}
+                      data-testid="button-recently-discharged"
+                    >
+                      Recently discharged
+                    </Button>
+                    <Badge variant="secondary" className="text-[10px] shrink-0 rounded-full px-3 py-1">
+                      {admissions.length} Admissions
+                    </Badge>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-9 text-xs rounded-lg bg-[#0E3B2E] text-white hover:bg-[#0a3026]"
+                      onClick={() => navigate("/appointments")}
+                      data-testid="schedule-admit-patient"
+                    >
+                      <Bed className="h-4 w-4 mr-1.5 shrink-0" />
+                      Admit Patient
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 sm:p-5 bg-[#F7F6F3]/20">
+                {admissionsLoading ? (
+                  <div className="space-y-2">
+                    <Skeleton className="h-12 w-full rounded-xl" />
+                    <Skeleton className="h-12 w-full rounded-xl" />
+                  </div>
+                ) : admissions.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border bg-white px-8 py-16 text-center shadow-sm">
+                    <Bed className="w-11 h-11 mx-auto text-muted-foreground/35 mb-3" />
+                    <p className="text-sm font-medium text-muted-foreground">No admitted patients</p>
+                    <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
+                      Admitted patients will appear here. Overnight walk-ins are managed from appointments.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-border bg-white shadow-sm">
+                    <Table className="min-w-[1180px] w-full text-sm table-fixed">
+                      <TableHeader>
+                        <TableRow>
+                          {admittedColumns.map((c) =>
+                            admittedSortableIds.has(c.id) ? (
+                              <SortableTableHead
+                                key={c.id}
+                                className={
+                                  c.id === "patient"
+                                    ? "whitespace-nowrap w-[18%]"
+                                    : c.id === "mrn"
+                                      ? "whitespace-nowrap w-[9%]"
+                                      : c.id === "clinician"
+                                        ? "whitespace-nowrap w-[18%]"
+                                        : c.id === "status"
+                                          ? "whitespace-nowrap w-[8%]"
+                                          : c.id === "reason"
+                                            ? "whitespace-nowrap w-[22%]"
+                                            : c.id === "bed"
+                                              ? "whitespace-nowrap w-[12%]"
+                                              : c.id === "admittedAt"
+                                                ? "whitespace-nowrap w-[11%]"
+                                                : c.id === "meds_admin"
+                                                  ? "whitespace-nowrap w-[7rem]"
+                                                  : "whitespace-nowrap"
+                                }
+                                active={admittedSortKey === (c.id as AdmittedSortKey)}
+                                sortDir={admittedSortDir}
+                                onSort={() => toggleAdmittedSort(c.id as AdmittedSortKey)}
+                              >
+                                {c.label}
+                              </SortableTableHead>
+                            ) : (
+                              <TableHead
+                                key={c.id}
+                                className={c.id === "meds_admin" ? "whitespace-nowrap w-[7rem]" : "whitespace-nowrap"}
+                              >
+                                {c.label}
+                              </TableHead>
+                            ),
+                          )}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {displayAdmissions.map((a) => {
+                          const patient = patientMap.get(a.patientId);
+                          const clinician = userMap.get(a.clinicianId);
+                          return (
+                            <TableRow key={a.id}>
+                              {admittedColumns.map((c) => {
+                                switch (c.id) {
+                                  case "patient":
+                                    return (
+                                      <TableCell key={c.id} className="max-w-0 whitespace-nowrap truncate">
+                                        <Link
+                                          href={`/patients/${a.patientId}?fromAdmission=1&admissionId=${encodeURIComponent(a.id)}&tab=medication`}
+                                        >
+                                          <a className="text-primary hover:underline font-medium">
+                                            {patient ? `${patient.firstName} ${patient.lastName}` : "—"}
+                                          </a>
+                                        </Link>
+                                      </TableCell>
+                                    );
+                                  case "mrn":
+                                    return (
+                                      <TableCell key={c.id} className="text-muted-foreground font-mono text-xs whitespace-nowrap">
+                                        {patient?.mrn ?? "—"}
+                                      </TableCell>
+                                    );
+                                  case "clinician":
+                                  case "provider":
+                                    return (
+                                      <TableCell key={c.id} className="max-w-0 truncate whitespace-nowrap">
+                                        {clinician?.fullName ?? "—"}
+                                      </TableCell>
+                                    );
+                                  case "status":
+                                    return (
+                                      <TableCell key={c.id} className="whitespace-nowrap">
+                                        <Badge
+                                          variant="outline"
+                                          className={`text-[10px] font-medium border ${ADMITTED_PATIENT_STATUS_BADGE_CLASS}`}
+                                        >
+                                          {ADMITTED_PATIENT_STATUS_LABEL}
+                                        </Badge>
+                                      </TableCell>
+                                    );
+                                  case "reason":
+                                    return (
+                                      <TableCell key={c.id} className="max-w-0 truncate" title={a.reason ?? ""}>
+                                        {a.reason ?? "—"}
+                                      </TableCell>
+                                    );
+                                  case "bed":
+                                    return (
+                                      <TableCell key={c.id} className="max-w-0 truncate whitespace-nowrap">
+                                        {a.bedName}
+                                      </TableCell>
+                                    );
+                                  case "admittedAt":
+                                    return (
+                                      <TableCell key={c.id} className="text-muted-foreground whitespace-nowrap">
+                                        {formatInOrgTimeZone(a.admittedAt, "MMMM d, yyyy", orgTz)}
+                                      </TableCell>
+                                    );
+                                  case "meds_admin": {
+                                    const count = medsAdminCounts?.byAdmissionId?.[a.id] ?? 0;
+                                    return (
+                                      <TableCell key={c.id}>
+                                        {count > 0 ? (
+                                          <span className="inline-flex items-center gap-1.5 text-xs font-medium">
+                                            <Pill className="w-4 h-4 text-primary" />
+                                            {count}
+                                          </span>
+                                        ) : (
+                                          <span className="text-muted-foreground">—</span>
+                                        )}
+                                      </TableCell>
+                                    );
+                                  }
+                                  default:
+                                    return <TableCell key={c.id}>—</TableCell>;
+                                }
+                              })}
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
         </div>
       </div>
-
-      <Card className="border-2 shadow-sm" data-testid="schedule-same-day-visits">
-        <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
-          <div className="flex w-full min-w-0 items-center justify-between gap-3 flex-wrap">
-            <div>
-              <p className="text-sm font-semibold">Same Day Visits</p>
-              <p className="text-xs text-muted-foreground">
-                Scheduled visits for the day you are viewing (excludes overnight admissions below).
-              </p>
-            </div>
-            <Badge variant="secondary" className="text-[10px] shrink-0">
-              {displayAppointments.length} appointment{displayAppointments.length !== 1 ? "s" : ""}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <div className="p-6 space-y-3">
-              <Skeleton className="h-10 w-full" />
-              {[1, 2, 3, 4, 5].map((i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  {scheduleColumns.map((c) =>
-                    scheduleSortableIds.has(c.id) ? (
-                      <SortableTableHead
-                        key={c.id}
-                        className={c.id === "time" ? "w-[6rem]" : c.id === "mrn" ? "w-[7rem]" : c.id === "duration" ? "w-[5rem]" : c.id === "status" ? "w-[6rem]" : c.id === "meds_admin" ? "w-[7rem]" : undefined}
-                        active={scheduleSortKey === (c.id as any)}
-                        sortDir={scheduleSortDir}
-                        onSort={() => toggleScheduleSort(c.id as any)}
-                      >
-                        {c.label}
-                      </SortableTableHead>
-                    ) : (
-                      <TableHead
-                        key={c.id}
-                        className={c.id === "meds_admin" ? "w-[7rem]" : undefined}
-                      >
-                        {c.label}
-                      </TableHead>
-                    ),
-                  )}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {displayAppointments.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={scheduleColumns.length} className="h-24 text-center text-muted-foreground">
-                      <Clock className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                      <p>No appointments on this day</p>
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  displayAppointments.map((apt) => {
-                    const patient = patientMap.get(apt.patientId);
-                    const clinician = userMap.get(apt.clinicianId);
-                    return (
-                      <TableRow key={apt.id} data-testid={`schedule-row-${apt.id}`}>
-                        {scheduleColumns.map((c) => {
-                          switch (c.id) {
-                            case "time":
-                              return (
-                                <TableCell key={c.id} className="font-medium whitespace-nowrap">
-                                  {formatInOrgTimeZone(apt.scheduledDate, "HH:mm", orgTz)}
-                                </TableCell>
-                              );
-                            case "patient":
-                              return (
-                                <TableCell key={c.id}>
-                                  <Link href={`/patients/${apt.patientId}?fromSchedule=1&appointmentId=${encodeURIComponent(apt.id)}`}>
-                                    <a className="text-primary hover:underline font-medium">
-                                      {patient ? `${patient.firstName} ${patient.lastName}` : "—"}
-                                    </a>
-                                  </Link>
-                                </TableCell>
-                              );
-                            case "mrn":
-                              return (
-                                <TableCell key={c.id} className="text-muted-foreground font-mono text-xs">
-                                  {patient?.mrn ?? "—"}
-                                </TableCell>
-                              );
-                            case "clinician":
-                            case "provider":
-                              return <TableCell key={c.id}>{clinician?.fullName ?? "—"}</TableCell>;
-                            case "duration":
-                              return <TableCell key={c.id}>{apt.duration ?? 30} min</TableCell>;
-                            case "status":
-                              return (
-                                <TableCell key={c.id}>
-                                  <Badge
-                                    variant="secondary"
-                                    className={`text-[10px] capitalize ${appointmentStatusBadgeClass(apt.status)}`}
-                                  >
-                                    {formatAppointmentStatusLabel(apt.status)}
-                                  </Badge>
-                                </TableCell>
-                              );
-                            case "reason":
-                              return (
-                                <TableCell key={c.id} className="max-w-[10rem] truncate" title={apt.reason ?? ""}>
-                                  {apt.reason ?? "—"}
-                                </TableCell>
-                              );
-                            case "meds_admin": {
-                              const count = medsAdminCounts?.byAppointmentId?.[apt.id] ?? 0;
-                              return (
-                                <TableCell key={c.id}>
-                                  {count > 0 ? (
-                                    <span className="inline-flex items-center gap-1.5 text-xs font-medium">
-                                      <Pill className="w-4 h-4 text-primary" />
-                                      {count}
-                                    </span>
-                                  ) : (
-                                    <span className="text-muted-foreground">—</span>
-                                  )}
-                                </TableCell>
-                              );
-                            }
-                            default:
-                              return <TableCell key={c.id}>—</TableCell>;
-                          }
-                        })}
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card data-testid="schedule-admitted-patients">
-        <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
-          <div className="flex w-full min-w-0 items-center justify-between gap-3 flex-wrap">
-            <div className="min-w-0 text-left">
-              <p className="text-sm font-semibold">Admitted Patients</p>
-              <p className="text-xs text-muted-foreground">Overnight visits remain here until discharged.</p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => navigate("/admissions/recently-discharged")}
-                data-testid="button-recently-discharged"
-              >
-                Recently discharged
-              </Button>
-              <Badge variant="secondary" className="text-[10px] shrink-0">
-                {admissions.length} Admissions
-              </Badge>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {admissionsLoading ? (
-            <div className="p-6">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full mt-2" />
-            </div>
-          ) : admissions.length === 0 ? (
-            <div className="p-4">
-              <EmptyState title="No admitted patients" description="Overnight walk-ins appear here until discharged." />
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table className="min-w-[1180px] w-full text-sm table-fixed">
-                <TableHeader>
-                  <TableRow>
-                    {admittedColumns.map((c) =>
-                      admittedSortableIds.has(c.id) ? (
-                        <SortableTableHead
-                          key={c.id}
-                          className={
-                            c.id === "patient"
-                              ? "whitespace-nowrap w-[18%]"
-                              : c.id === "mrn"
-                                ? "whitespace-nowrap w-[9%]"
-                                : c.id === "clinician"
-                                  ? "whitespace-nowrap w-[18%]"
-                                  : c.id === "status"
-                                    ? "whitespace-nowrap w-[8%]"
-                                    : c.id === "reason"
-                                      ? "whitespace-nowrap w-[22%]"
-                                      : c.id === "bed"
-                                        ? "whitespace-nowrap w-[12%]"
-                                        : c.id === "admittedAt"
-                                          ? "whitespace-nowrap w-[11%]"
-                                          : c.id === "meds_admin"
-                                            ? "whitespace-nowrap w-[7rem]"
-                                            : "whitespace-nowrap"
-                          }
-                          active={admittedSortKey === (c.id as any)}
-                          sortDir={admittedSortDir}
-                          onSort={() => toggleAdmittedSort(c.id as any)}
-                        >
-                          {c.label}
-                        </SortableTableHead>
-                      ) : (
-                        <TableHead
-                          key={c.id}
-                          className={c.id === "meds_admin" ? "whitespace-nowrap w-[7rem]" : "whitespace-nowrap"}
-                        >
-                          {c.label}
-                        </TableHead>
-                      ),
-                    )}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {displayAdmissions.map((a) => {
-                    const patient = patientMap.get(a.patientId);
-                    const clinician = userMap.get(a.clinicianId);
-                    return (
-                      <TableRow key={a.id}>
-                        {admittedColumns.map((c) => {
-                          switch (c.id) {
-                            case "patient":
-                              return (
-                                <TableCell key={c.id} className="max-w-0 whitespace-nowrap truncate">
-                                  <Link
-                                    href={`/patients/${a.patientId}?fromAdmission=1&admissionId=${encodeURIComponent(a.id)}&tab=medication`}
-                                  >
-                                    <a className="text-primary hover:underline font-medium">
-                                      {patient ? `${patient.firstName} ${patient.lastName}` : "—"}
-                                    </a>
-                                  </Link>
-                                </TableCell>
-                              );
-                            case "mrn":
-                              return (
-                                <TableCell key={c.id} className="text-muted-foreground font-mono text-xs whitespace-nowrap">
-                                  {patient?.mrn ?? "—"}
-                                </TableCell>
-                              );
-                            case "clinician":
-                            case "provider":
-                              return (
-                                <TableCell key={c.id} className="max-w-0 truncate whitespace-nowrap">
-                                  {clinician?.fullName ?? "—"}
-                                </TableCell>
-                              );
-                            case "status":
-                              return (
-                                <TableCell key={c.id} className="whitespace-nowrap">
-                                  <Badge
-                                    variant="outline"
-                                    className={`text-[10px] font-medium border ${ADMITTED_PATIENT_STATUS_BADGE_CLASS}`}
-                                  >
-                                    {ADMITTED_PATIENT_STATUS_LABEL}
-                                  </Badge>
-                                </TableCell>
-                              );
-                            case "reason":
-                              return (
-                                <TableCell key={c.id} className="max-w-0 truncate" title={a.reason ?? ""}>
-                                  {a.reason ?? "—"}
-                                </TableCell>
-                              );
-                            case "bed":
-                              return <TableCell key={c.id} className="max-w-0 truncate whitespace-nowrap">{a.bedName}</TableCell>;
-                            case "admittedAt":
-                              return (
-                                <TableCell key={c.id} className="text-muted-foreground whitespace-nowrap">
-                                  {formatInOrgTimeZone(a.admittedAt, "MMMM d, yyyy", orgTz)}
-                                </TableCell>
-                              );
-                            case "meds_admin": {
-                              const count = medsAdminCounts?.byAdmissionId?.[a.id] ?? 0;
-                              return (
-                                <TableCell key={c.id}>
-                                  {count > 0 ? (
-                                    <span className="inline-flex items-center gap-1.5 text-xs font-medium">
-                                      <Pill className="w-4 h-4 text-primary" />
-                                      {count}
-                                    </span>
-                                  ) : (
-                                    <span className="text-muted-foreground">—</span>
-                                  )}
-                                </TableCell>
-                              );
-                            }
-                            default:
-                              return <TableCell key={c.id}>—</TableCell>;
-                          }
-                        })}
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }
