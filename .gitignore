@@ -8,3 +8,4 @@ vite.config.ts.*
 .env
 .tmp/
 .cursor/
+.env.example
