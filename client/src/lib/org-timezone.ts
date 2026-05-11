@@ -1,3 +1,4 @@
+import type { Locale } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { format as formatLocal } from "date-fns";
 
@@ -14,15 +15,20 @@ export function toDateOrNull(v: DateLike): Date | null {
   return Number.isFinite(d.getTime()) ? d : null;
 }
 
-export function formatInOrgTimeZone(v: DateLike, fmt: string, timeZone: string): string {
+export function formatInOrgTimeZone(
+  v: DateLike,
+  fmt: string,
+  timeZone: string,
+  options?: { locale?: Locale },
+): string {
   const d = toDateOrNull(v);
   if (!d) return "—";
   const tz = normalizeOrgTimeZone(timeZone);
   try {
-    return formatInTimeZone(d, tz, fmt);
+    return formatInTimeZone(d, tz, fmt, options);
   } catch {
     // Fallback if tz is invalid or unsupported.
-    return formatLocal(d, fmt);
+    return formatLocal(d, fmt, options);
   }
 }
 

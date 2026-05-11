@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { formatAppointmentStatusLabel } from "@/lib/appointment-status";
 
@@ -13,8 +14,9 @@ const SCHEDULE_BADGE_BY_STATUS: Record<string, string> = {
 };
 
 export function ScheduleAppointmentStatusBadge({ status }: { status: string }) {
-  const label = formatAppointmentStatusLabel(status);
+  const { t } = useTranslation();
+  const label = t(`appointmentStatus.${status}`, { defaultValue: formatAppointmentStatusLabel(status) });
   const cls =
     SCHEDULE_BADGE_BY_STATUS[status] ?? "bg-gray-100 text-gray-600 dark:bg-neutral-800 dark:text-neutral-300";
-  return <span className={cn("inline-flex rounded-full px-3 py-1 text-xs font-medium capitalize", cls)}>{label}</span>;
+  return <span className={cn("inline-flex rounded-full px-3 py-1 text-xs font-medium", cls)}>{label}</span>;
 }

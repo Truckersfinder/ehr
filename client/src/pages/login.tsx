@@ -75,7 +75,7 @@ export default function LoginPage() {
             className="text-foreground hover:bg-accent"
             asChild
           >
-            <Link href="/">← Home</Link>
+            <Link href="/">{t("auth.backToHome")}</Link>
           </Button>
         </div>
         <div className="absolute top-3 right-3 z-10 flex items-center gap-1 sm:gap-2">
@@ -140,7 +140,7 @@ export default function LoginPage() {
                       "text-muted-foreground outline-none hover:bg-accent/90 hover:text-foreground",
                       "focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                     )}
-                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-label={showPassword ? t("auth.ariaHidePassword") : t("auth.ariaShowPassword")}
                     data-testid="button-toggle-password-visibility"
                     onClick={() => setShowPassword((v) => !v)}
                   >
@@ -156,29 +156,28 @@ export default function LoginPage() {
             {import.meta.env.DEV ? (
               <div className="mt-6 border-t pt-6" data-testid="login-dev-hints">
                 <p className="mb-2 text-xs text-muted-foreground">
-                  Open the app at <span className="font-mono text-foreground">http://127.0.0.1:3000</span> after running{" "}
-                  <span className="font-mono text-foreground">npm run dev</span> so sign-in can reach the API.
+                  {t("auth.devHintRun", { url: "http://127.0.0.1:3000", cmd: "npm run dev" })}
                 </p>
-                <p className="mb-3 text-xs text-muted-foreground">Demo accounts:</p>
+                <p className="mb-3 text-xs text-muted-foreground">{t("auth.devDemoAccounts")}</p>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="rounded-md bg-accent/50 p-2">
-                    <p className="font-medium">Admin</p>
+                    <p className="font-medium">{t("auth.demoAdmin")}</p>
                     <p className="text-muted-foreground">admin / admin123</p>
                   </div>
                   <div className="rounded-md bg-accent/50 p-2">
-                    <p className="font-medium">Clinician</p>
+                    <p className="font-medium">{t("auth.demoClinician")}</p>
                     <p className="text-muted-foreground">drwanjiku / doctor123</p>
                   </div>
                   <div className="rounded-md bg-accent/50 p-2">
-                    <p className="font-medium">Nurse</p>
+                    <p className="font-medium">{t("auth.demoNurse")}</p>
                     <p className="text-muted-foreground">nomondi / nurse123</p>
                   </div>
                   <div className="rounded-md bg-accent/50 p-2">
-                    <p className="font-medium">Receptionist</p>
+                    <p className="font-medium">{t("auth.demoReceptionist")}</p>
                     <p className="text-muted-foreground">reception / reception123</p>
                   </div>
                   <div className="col-span-2 rounded-md bg-accent/50 p-2">
-                    <p className="font-medium">Security</p>
+                    <p className="font-medium">{t("auth.demoSecurity")}</p>
                     <p className="text-muted-foreground">Security123 / Security123</p>
                   </div>
                 </div>
@@ -188,11 +187,11 @@ export default function LoginPage() {
             <div className="mt-6 grid grid-cols-1 gap-2 text-xs text-muted-foreground">
               <div className="flex items-center gap-2">
                 <Shield className="h-4 w-4" />
-                <span>Role-based access with audit-friendly workflows</span>
+                <span>{t("auth.trustLineAudit")}</span>
               </div>
               <div className="flex items-center gap-2">
                 <Lock className="h-4 w-4" />
-                <span>Secure sessions and protected patient data</span>
+                <span>{t("auth.trustLineSecure")}</span>
               </div>
             </div>
           </CardContent>

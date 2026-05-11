@@ -1,5 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import { EHR_TOKEN_STORAGE_KEY } from "@/lib/auth-storage";
+import { clearAllOfflineIndexedDb } from "@/lib/offline/offline-idb";
+import { clearOfflineUserBinding } from "@/lib/offline/offline-fetch-overlay";
+import { postMessageClearApiCacheToServiceWorker } from "@/lib/offline/sw-messaging";
 
 interface AuthUser {
   id: string;
@@ -50,6 +53,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setToken(null);
     localStorage.removeItem(EHR_TOKEN_STORAGE_KEY);
+    // Offline-specific: wipe encrypted local PHI and SW API cache; never retain tokens in the SW layer.
+    clearOfflineUserBinding();
+    void clearAllOfflineIndexedDb();
+    void postMessageClearApiCacheToServiceWorker();
   }, []);
 
   useEffect(() => {

@@ -6,7 +6,6 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import {
   ADMITTED_PATIENT_STATUS_BADGE_CLASS,
-  ADMITTED_PATIENT_STATUS_LABEL,
   appointmentStatusBadgeClass,
   formatAppointmentStatusLabel,
 } from "@/lib/appointment-status";
@@ -33,9 +32,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Calendar, Clock, User } from "lucide-react";
 import { format } from "date-fns";
+import { enUS } from "date-fns/locale/en-US";
+import { fr as frDateLocale } from "date-fns/locale/fr";
+import { es as esDateLocale } from "date-fns/locale/es";
 import { Link, useLocation } from "wouter";
 import type { Appointment, Patient, User as UserType, CommonVisitReason } from "@shared/schema";
-import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
 import { EmptyState } from "@/components/empty-state";
 import { excludeAppointmentsWithActiveAdmission } from "@/lib/exclude-admitted-appointments";
 import { useOrgTimeZone } from "@/hooks/use-org-timezone";
@@ -57,7 +58,7 @@ type ActiveAdmissionRow = {
 type AdmittedSortKey = "patient" | "mrn" | "clinician" | "status" | "reason" | "bed" | "admittedAt";
 
 function AppointmentsManagementPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { toast } = useToast();
   const { token } = useAuth();
   const orgTz = useOrgTimeZone();
@@ -70,6 +71,13 @@ function AppointmentsManagementPage() {
     clinicianId: "", scheduledDate: "", scheduledTime: "09:00",
     duration: 30, reason: "",
   });
+
+  const dateLocale = useMemo(() => {
+    const base = (i18n.language || "en").split("-")[0];
+    if (base === "fr") return frDateLocale;
+    if (base === "es") return esDateLocale;
+    return enUS;
+  }, [i18n.language]);
 
   const { data: appointments = [], isLoading } = useQuery<Appointment[]>({
     queryKey: ["/api/appointments"],
@@ -195,13 +203,13 @@ function AppointmentsManagementPage() {
         const detail =
           err.issues?.map((i) => `${i.path || "?"}: ${i.message}`).join(" · ") ||
           (err.errors ? JSON.stringify(err.errors) : "");
-        throw new Error([err.message || "Failed to schedule", detail].filter(Boolean).join(" — "));
+        throw new Error([err.message || t("pages.appointments.failedToSchedule"), detail].filter(Boolean).join(" — "));
       }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
-      toast({ title: "Appointment scheduled" });
+      toast({ title: t("pages.appointments.toastScheduled") });
       setOpen(false);
       setSelectedPatient(null);
       setFormData({
@@ -209,7 +217,8 @@ function AppointmentsManagementPage() {
         duration: 30, reason: "",
       });
     },
-    onError: (error: Error) => toast({ title: "Error", description: error.message, variant: "destructive" }),
+    onError: (error: Error) =>
+      toast({ title: t("common.error"), description: error.message, variant: "destructive" }),
   });
 
   const statusMutation = useMutation({
@@ -236,7 +245,7 @@ function AppointmentsManagementPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
-      toast({ title: "Appointment updated" });
+      toast({ title: t("pages.appointments.toastUpdated") });
     },
   });
 
@@ -254,7 +263,7 @@ function AppointmentsManagementPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t("pages.appointments.title")}</h1>
-          <p className="text-muted-foreground text-sm mt-1">{appointmentsForList.length} total appointments</p>
+          <p className="text-muted-foreground text-sm mt-1">{t("pages.appointments.totalCount", { count: appointmentsForList.length })}</p>
         </div>
         <Dialog
           open={open}
@@ -271,11 +280,11 @@ function AppointmentsManagementPage() {
         >
           <DialogTrigger asChild>
             <Button data-testid="button-new-appointment">
-              <Plus className="w-4 h-4 mr-2" /> Schedule Appointment
+              <Plus className="w-4 h-4 mr-2" /> {t("pages.appointments.scheduleAppointment")}
             </Button>
           </DialogTrigger>
           <DialogContent>
-            <DialogHeader><DialogTitle>Schedule Appointment</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>{t("pages.appointments.dialogTitle")}</DialogTitle></DialogHeader>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -285,7 +294,7 @@ function AppointmentsManagementPage() {
               className="space-y-4"
             >
               <div className="space-y-2">
-                <Label>Patient *</Label>
+                <Label>{t("pages.appointments.labelPatient")}</Label>
                 <PatientSearchCombobox
                   token={token}
                   value={selectedPatient}
@@ -294,9 +303,11 @@ function AppointmentsManagementPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Clinician *</Label>
+                <Label>{t("pages.appointments.labelClinician")}</Label>
                 <Select value={formData.clinicianId} onValueChange={(v) => setFormData({ ...formData, clinicianId: v })}>
-                  <SelectTrigger data-testid="select-appt-clinician"><SelectValue placeholder="Select clinician" /></SelectTrigger>
+                  <SelectTrigger data-testid="select-appt-clinician">
+                    <SelectValue placeholder={t("pages.appointments.placeholderSelectClinician")} />
+                  </SelectTrigger>
                   <SelectContent>
                     {clinicians.map((c) => <SelectItem key={c.id} value={c.id}>{c.fullName}</SelectItem>)}
                   </SelectContent>
@@ -304,34 +315,34 @@ function AppointmentsManagementPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Date *</Label>
+                  <Label>{t("pages.appointments.labelDate")}</Label>
                   <Input data-testid="input-appt-date" type="date" value={formData.scheduledDate} onChange={(e) => setFormData({ ...formData, scheduledDate: e.target.value })} required />
                 </div>
                 <div className="space-y-2">
-                  <Label>Time *</Label>
+                  <Label>{t("pages.appointments.labelTime")}</Label>
                   <Input data-testid="input-appt-time" type="time" value={formData.scheduledTime} onChange={(e) => setFormData({ ...formData, scheduledTime: e.target.value })} required />
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>Duration (minutes)</Label>
+                <Label>{t("pages.appointments.labelDurationMinutes")}</Label>
                 <Select value={String(formData.duration)} onValueChange={(v) => setFormData({ ...formData, duration: parseInt(v) })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="15">15 min</SelectItem>
-                    <SelectItem value="30">30 min</SelectItem>
-                    <SelectItem value="45">45 min</SelectItem>
-                    <SelectItem value="60">60 min</SelectItem>
+                    <SelectItem value="15">{t("pages.appointments.durationOption", { minutes: 15 })}</SelectItem>
+                    <SelectItem value="30">{t("pages.appointments.durationOption", { minutes: 30 })}</SelectItem>
+                    <SelectItem value="45">{t("pages.appointments.durationOption", { minutes: 45 })}</SelectItem>
+                    <SelectItem value="60">{t("pages.appointments.durationOption", { minutes: 60 })}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>{APPOINTMENT_REASON_FOR_VISIT_LABEL}</Label>
+                <Label>{t("pages.schedule.col.reasonForVisit")}</Label>
                 <Select
                   value={visitReasons.some((r) => r.label === formData.reason) ? formData.reason : undefined}
                   onValueChange={(v) => setFormData({ ...formData, reason: v })}
                 >
                   <SelectTrigger data-testid="select-appt-common-reason">
-                    <SelectValue placeholder="Quick pick common reason (optional)" />
+                    <SelectValue placeholder={t("pages.appointments.commonReasonPlaceholder")} />
                   </SelectTrigger>
                   <SelectContent>
                     {visitReasons.map((r) => (
@@ -346,13 +357,15 @@ function AppointmentsManagementPage() {
                   value={formData.reason}
                   onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
                   className="resize-none"
-                  placeholder="Type or edit reason for visit…"
+                  placeholder={t("pages.appointments.reasonTextareaPlaceholder")}
                 />
               </div>
               <div className="flex justify-end gap-2">
-                <Button type="button" variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+                <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
+                  {t("common.cancel")}
+                </Button>
                 <Button type="submit" data-testid="button-create-appointment" disabled={createMutation.isPending || !selectedPatient?.id || !formData.clinicianId}>
-                  {createMutation.isPending ? "Scheduling..." : "Schedule"}
+                  {createMutation.isPending ? t("pages.appointments.schedulingInProgress") : t("pages.appointments.submitSchedule")}
                 </Button>
               </div>
             </form>
@@ -367,7 +380,7 @@ function AppointmentsManagementPage() {
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-16">
                 <Calendar className="w-12 h-12 text-muted-foreground/30 mb-4" />
-                <p className="text-lg font-medium text-muted-foreground">No appointments</p>
+                <p className="text-lg font-medium text-muted-foreground">{t("pages.appointments.emptyNoAppointments")}</p>
               </CardContent>
             </Card>
           ) : (
@@ -379,8 +392,12 @@ function AppointmentsManagementPage() {
               return (
                 <div key={dateKey} className="space-y-3">
                   <h3 className="text-sm font-medium flex items-center gap-2">
-                    {formatInOrgTimeZone(new Date(dateKey), "EEEE, MMMM d, yyyy", orgTz)}
-                    {isToday && <Badge variant="secondary" className="text-[10px]">Today</Badge>}
+                    {formatInOrgTimeZone(new Date(dateKey), "EEEE, d MMMM yyyy", orgTz, { locale: dateLocale })}
+                    {isToday && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        {t("pages.schedule.today")}
+                      </Badge>
+                    )}
                   </h3>
                   {dayAppts.map((apt) => {
                     const pt = patientMap.get(apt.patientId);
@@ -392,24 +409,35 @@ function AppointmentsManagementPage() {
                             <div className="flex items-center gap-4 min-w-0">
                               <div className="text-center min-w-[55px]">
                                 <p className="text-sm font-bold">{formatInOrgTimeZone(apt.scheduledDate, "HH:mm", orgTz)}</p>
-                                <p className="text-[10px] text-muted-foreground">{apt.duration}min</p>
+                                <p className="text-[10px] text-muted-foreground">
+                                  {t("pages.dashboard.durationMinutesShort", { minutes: apt.duration ?? 30 })}
+                                </p>
                               </div>
                               <div className="min-w-0">
                                 <p className="font-medium text-sm truncate">
-                                  {pt ? `${pt.firstName} ${pt.lastName}` : "Unknown"}
+                                  {pt ? `${pt.firstName} ${pt.lastName}` : t("pages.appointments.unknownPatient")}
                                 </p>
                                 <p className="text-xs text-muted-foreground truncate">
-                                  {doc ? `Dr. ${doc.fullName}` : ""} - {apt.reason || "General visit"}
+                                  {doc
+                                    ? `${t("pages.appointments.drWithName", { name: doc.fullName })}${t("pages.appointments.visitMetaSeparator")}`
+                                    : ""}
+                                  {apt.reason?.trim() ? apt.reason : t("pages.dashboard.defaultVisitReason")}
                                 </p>
                               </div>
                             </div>
                             <div className="flex items-center gap-2 flex-wrap">
                               <Badge variant="secondary" className={`text-[10px] ${appointmentStatusBadgeClass(apt.status)}`}>
-                                {formatAppointmentStatusLabel(apt.status)}
+                                {t(`appointmentStatus.${apt.status}`, { defaultValue: formatAppointmentStatusLabel(apt.status) })}
                               </Badge>
                               {apt.status === "scheduled" && (
                                 <>
-                                  <Button size="sm" variant="secondary" onClick={() => statusMutation.mutate({ id: apt.id, status: "checked_in" })}>Check In</Button>
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => statusMutation.mutate({ id: apt.id, status: "checked_in" })}
+                                  >
+                                    {t("pages.appointments.checkIn")}
+                                  </Button>
                                   <Button
                                     size="sm"
                                     variant="secondary"
@@ -418,12 +446,14 @@ function AppointmentsManagementPage() {
                                       setCancelReason("");
                                     }}
                                   >
-                                    Cancel
+                                    {t("pages.appointments.cancelAppointmentShort")}
                                   </Button>
                                 </>
                               )}
                               {apt.status === "checked_in" && (
-                                <Button size="sm" onClick={() => statusMutation.mutate({ id: apt.id, status: "completed" })}>Complete</Button>
+                                <Button size="sm" onClick={() => statusMutation.mutate({ id: apt.id, status: "completed" })}>
+                                  {t("pages.appointments.complete")}
+                                </Button>
                               )}
                             </div>
                           </div>
@@ -440,8 +470,8 @@ function AppointmentsManagementPage() {
         <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
           <div className="flex w-full min-w-0 items-center justify-between gap-3 flex-wrap">
             <div className="min-w-0 text-left">
-              <p className="text-sm font-semibold">Admitted Patients</p>
-              <p className="text-xs text-muted-foreground">Overnight visits remain here until discharged.</p>
+              <p className="text-sm font-semibold">{t("pages.schedule.admittedTitle")}</p>
+              <p className="text-xs text-muted-foreground">{t("pages.schedule.admittedSubtitle")}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <Button
@@ -452,10 +482,10 @@ function AppointmentsManagementPage() {
                 onClick={() => navigate("/admissions/recently-discharged")}
                 data-testid="button-recently-discharged"
               >
-                Recently discharged
+                {t("pages.schedule.recentlyDischarged")}
               </Button>
               <Badge variant="secondary" className="text-[10px] shrink-0">
-                {admissions.length} Admissions
+                {t("pages.schedule.admissionsBadge", { count: admissions.length })}
               </Badge>
             </div>
           </div>
@@ -468,7 +498,7 @@ function AppointmentsManagementPage() {
             </div>
           ) : admissions.length === 0 ? (
             <div className="p-4">
-              <EmptyState title="No admitted patients" description="Overnight walk-ins appear here until discharged." />
+              <EmptyState title={t("pages.schedule.noAdmittedTitle")} description={t("pages.schedule.noAdmittedHint")} />
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -481,7 +511,7 @@ function AppointmentsManagementPage() {
                       sortDir={admittedSortDir}
                       onSort={() => toggleAdmittedSort("patient")}
                     >
-                      Patient
+                      {t("pages.dashboard.admitTablePatient")}
                     </SortableTableHead>
                     <SortableTableHead
                       className="whitespace-nowrap w-[9%]"
@@ -489,7 +519,7 @@ function AppointmentsManagementPage() {
                       sortDir={admittedSortDir}
                       onSort={() => toggleAdmittedSort("mrn")}
                     >
-                      MRN
+                      {t("pages.dashboard.admitTableMrn")}
                     </SortableTableHead>
                     <SortableTableHead
                       className="whitespace-nowrap w-[18%]"
@@ -497,7 +527,7 @@ function AppointmentsManagementPage() {
                       sortDir={admittedSortDir}
                       onSort={() => toggleAdmittedSort("clinician")}
                     >
-                      Clinician
+                      {t("pages.dashboard.admitTableClinician")}
                     </SortableTableHead>
                     <SortableTableHead
                       className="whitespace-nowrap w-[8%]"
@@ -505,7 +535,7 @@ function AppointmentsManagementPage() {
                       sortDir={admittedSortDir}
                       onSort={() => toggleAdmittedSort("status")}
                     >
-                      Status
+                      {t("pages.dashboard.admitTableStatus")}
                     </SortableTableHead>
                     <SortableTableHead
                       className="whitespace-nowrap w-[22%]"
@@ -513,7 +543,7 @@ function AppointmentsManagementPage() {
                       sortDir={admittedSortDir}
                       onSort={() => toggleAdmittedSort("reason")}
                     >
-                      {APPOINTMENT_REASON_FOR_VISIT_LABEL}
+                      {t("pages.schedule.col.reasonForVisit")}
                     </SortableTableHead>
                     <SortableTableHead
                       className="whitespace-nowrap w-[12%]"
@@ -521,7 +551,7 @@ function AppointmentsManagementPage() {
                       sortDir={admittedSortDir}
                       onSort={() => toggleAdmittedSort("bed")}
                     >
-                      Bed / Room
+                      {t("pages.dashboard.admitTableBed")}
                     </SortableTableHead>
                     <SortableTableHead
                       className="whitespace-nowrap w-[11%]"
@@ -529,7 +559,7 @@ function AppointmentsManagementPage() {
                       sortDir={admittedSortDir}
                       onSort={() => toggleAdmittedSort("admittedAt")}
                     >
-                      Admission Date
+                      {t("pages.dashboard.admitTableAdmitted")}
                     </SortableTableHead>
                   </TableRow>
                 </TableHeader>
@@ -555,7 +585,7 @@ function AppointmentsManagementPage() {
                             variant="outline"
                             className={`text-[10px] font-medium border ${ADMITTED_PATIENT_STATUS_BADGE_CLASS}`}
                           >
-                            {ADMITTED_PATIENT_STATUS_LABEL}
+                            {t("appointmentStatus.admitted")}
                           </Badge>
                         </TableCell>
                         <TableCell className="truncate max-w-0" title={a.reason ?? ""}>
@@ -563,7 +593,7 @@ function AppointmentsManagementPage() {
                         </TableCell>
                         <TableCell className="truncate max-w-0 whitespace-nowrap">{a.bedName}</TableCell>
                         <TableCell className="text-muted-foreground whitespace-nowrap">
-                          {formatInOrgTimeZone(a.admittedAt, "MMMM d, yyyy", orgTz)}
+                          {formatInOrgTimeZone(a.admittedAt, "d MMM yyyy", orgTz, { locale: dateLocale })}
                         </TableCell>
                       </TableRow>
                     );
@@ -587,25 +617,23 @@ function AppointmentsManagementPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Cancel appointment</DialogTitle>
-            <DialogDescription>
-              Enter why this appointment is being cancelled. This is saved with the appointment record.
-            </DialogDescription>
+            <DialogTitle>{t("pages.appointments.cancelDialogTitle")}</DialogTitle>
+            <DialogDescription>{t("pages.appointments.cancelDialogDescription")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="mgmt-cancellation-reason">Cancellation reason *</Label>
+            <Label htmlFor="mgmt-cancellation-reason">{t("pages.appointments.cancellationReasonLabel")}</Label>
             <Textarea
               id="mgmt-cancellation-reason"
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
-              placeholder="e.g. Patient requested, schedule conflict…"
+              placeholder={t("pages.appointments.cancellationReasonPlaceholder")}
               rows={3}
               className="resize-none"
             />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="secondary" onClick={() => setCancelDialog(null)}>
-              Back
+              {t("pages.appointments.back")}
             </Button>
             <Button
               type="button"
@@ -626,7 +654,7 @@ function AppointmentsManagementPage() {
                 );
               }}
             >
-              {statusMutation.isPending ? "Cancelling…" : "Cancel appointment"}
+              {statusMutation.isPending ? t("pages.appointments.cancelling") : t("pages.appointments.confirmCancelAppointment")}
             </Button>
           </div>
         </DialogContent>

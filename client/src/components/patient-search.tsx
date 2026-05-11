@@ -95,12 +95,10 @@ export function PatientSearch() {
           </div>
         ) : !query.trim() ? (
           <p className="py-4 px-3 text-sm text-muted-foreground text-center">
-            Type a patient name or {patientIdentifierLabel} to search
+            {t("patientSearch.typeToSearch", { identifier: patientIdentifierLabel })}
           </p>
         ) : results.length === 0 ? (
-          <p className="py-4 px-3 text-sm text-muted-foreground text-center">
-            No patients found
-          </p>
+          <p className="py-4 px-3 text-sm text-muted-foreground text-center">{t("patientSearch.noPatientsFound")}</p>
         ) : (
           <ul className="max-h-[280px] overflow-y-auto py-1">
             {results.map((patient) => (

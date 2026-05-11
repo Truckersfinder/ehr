@@ -2,6 +2,9 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, startOfDay, endOfDay, addDays, subDays } from "date-fns";
+import { enUS } from "date-fns/locale/en-US";
+import { fr as frDateLocale } from "date-fns/locale/fr";
+import { es as esDateLocale } from "date-fns/locale/es";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,9 +25,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/lib/auth";
+import { useOrgTimeZone } from "@/hooks/use-org-timezone";
 import {
   ADMITTED_PATIENT_STATUS_BADGE_CLASS,
-  ADMITTED_PATIENT_STATUS_LABEL,
   appointmentStatusBadgeClass,
   formatAppointmentStatusLabel,
 } from "@/lib/appointment-status";
@@ -32,9 +35,9 @@ import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ChevronLeft, ChevronRight, CalendarClock, UserCheck, XCircle } from "lucide-react";
 import type { Appointment, Patient, User as UserType, CommonVisitReason } from "@shared/schema";
-import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
 import { EmptyState } from "@/components/empty-state";
 import { excludeAppointmentsWithActiveAdmission } from "@/lib/exclude-admitted-appointments";
+import { formatInOrgTimeZone } from "@/lib/org-timezone";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableGridHeaderButton } from "@/components/ui/sortable-table-head";
 import { useTranslation } from "react-i18next";
@@ -87,9 +90,10 @@ type ActiveAdmissionRow = {
 };
 
 export default function ReceptionAppointmentsPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [, navigate] = useLocation();
   const { token } = useAuth();
+  const orgTz = useOrgTimeZone();
   const { toast } = useToast();
   const today = new Date();
   const [viewingDate, setViewingDate] = useState(() => new Date(today.getFullYear(), today.getMonth(), today.getDate()));
@@ -111,6 +115,13 @@ export default function ReceptionAppointmentsPage() {
     duration: 30,
     reason: "",
   });
+
+  const dateLocale = useMemo(() => {
+    const base = (i18n.language || "en").split("-")[0];
+    if (base === "fr") return frDateLocale;
+    if (base === "es") return esDateLocale;
+    return enUS;
+  }, [i18n.language]);
 
   const viewingDayStart = startOfDay(viewingDate).toISOString();
   const viewingDayEnd = endOfDay(viewingDate).toISOString();
@@ -309,14 +320,18 @@ export default function ReceptionAppointmentsPage() {
       },
       {
         onSuccess: (updated) => {
-          toast({ title: "Appointment rescheduled" });
+          toast({ title: t("pages.receptionAppointments.toastRescheduled") });
           setRescheduleOpen(false);
           const nd = new Date(updated.scheduledDate);
           setViewingDate(new Date(nd.getFullYear(), nd.getMonth(), nd.getDate()));
           setSelectedId(updated.id);
         },
         onError: (e: Error) =>
-          toast({ title: "Could not reschedule", description: e.message, variant: "destructive" }),
+          toast({
+            title: t("pages.receptionAppointments.toastRescheduleError"),
+            description: e.message,
+            variant: "destructive",
+          }),
       }
     );
   };
@@ -326,8 +341,8 @@ export default function ReceptionAppointmentsPage() {
     const reason = cancelReason.trim();
     if (!reason) {
       toast({
-        title: "Cancellation reason required",
-        description: "Please enter why this appointment is being cancelled.",
+        title: t("pages.receptionAppointments.toastCancelReasonTitle"),
+        description: t("pages.receptionAppointments.toastCancelReasonDesc"),
         variant: "destructive",
       });
       return;
@@ -336,13 +351,17 @@ export default function ReceptionAppointmentsPage() {
       { id: selectedAppt.id, body: { status: "cancelled", cancellationReason: reason } },
       {
         onSuccess: () => {
-          toast({ title: "Appointment cancelled" });
+          toast({ title: t("pages.receptionAppointments.toastCancelled") });
           setCancelOpen(false);
           setCancelReason("");
           setSelectedId(null);
         },
         onError: (e: Error) =>
-          toast({ title: "Could not cancel", description: e.message, variant: "destructive" }),
+          toast({
+            title: t("pages.receptionAppointments.toastCancelError"),
+            description: e.message,
+            variant: "destructive",
+          }),
       }
     );
   };
@@ -416,7 +435,7 @@ export default function ReceptionAppointmentsPage() {
           <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
             <PopoverTrigger asChild>
               <Button type="button" variant="outline" size="sm" className="min-w-[168px] h-8 text-xs">
-                {format(viewingDate, "EEE, MMM d, yyyy")}
+                {format(viewingDate, "EEE, MMM d, yyyy", { locale: dateLocale })}
                 {isToday && <span className="text-muted-foreground ml-1">{t("pages.receptionAppointments.today")}</span>}
               </Button>
             </PopoverTrigger>
@@ -458,13 +477,13 @@ export default function ReceptionAppointmentsPage() {
             }}
           >
             <div className="space-y-2">
-              <Label>Clinician *</Label>
+              <Label>{t("pages.receptionAppointments.labelClinician")}</Label>
               <Select
                 value={rescheduleForm.clinicianId}
                 onValueChange={(v) => setRescheduleForm((f) => ({ ...f, clinicianId: v }))}
               >
                 <SelectTrigger data-testid="reception-reschedule-clinician">
-                  <SelectValue placeholder="Select clinician" />
+                  <SelectValue placeholder={t("pages.receptionAppointments.placeholderSelectClinician")} />
                 </SelectTrigger>
                 <SelectContent>
                   {clinicians.map((c) => (
@@ -477,7 +496,7 @@ export default function ReceptionAppointmentsPage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Date *</Label>
+                <Label>{t("pages.receptionAppointments.labelDate")}</Label>
                 <Input
                   type="date"
                   value={rescheduleForm.scheduledDate}
@@ -487,7 +506,7 @@ export default function ReceptionAppointmentsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Time *</Label>
+                <Label>{t("pages.receptionAppointments.labelTime")}</Label>
                 <Input
                   type="time"
                   value={rescheduleForm.scheduledTime}
@@ -498,7 +517,7 @@ export default function ReceptionAppointmentsPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Duration (minutes)</Label>
+              <Label>{t("pages.receptionAppointments.labelDurationMinutes")}</Label>
               <Select
                 value={String(rescheduleForm.duration)}
                 onValueChange={(v) => setRescheduleForm((f) => ({ ...f, duration: parseInt(v, 10) }))}
@@ -507,21 +526,21 @@ export default function ReceptionAppointmentsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="15">15 min</SelectItem>
-                  <SelectItem value="30">30 min</SelectItem>
-                  <SelectItem value="45">45 min</SelectItem>
-                  <SelectItem value="60">60 min</SelectItem>
+                  <SelectItem value="15">{t("pages.receptionAppointments.durationOption", { minutes: 15 })}</SelectItem>
+                  <SelectItem value="30">{t("pages.receptionAppointments.durationOption", { minutes: 30 })}</SelectItem>
+                  <SelectItem value="45">{t("pages.receptionAppointments.durationOption", { minutes: 45 })}</SelectItem>
+                  <SelectItem value="60">{t("pages.receptionAppointments.durationOption", { minutes: 60 })}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>{APPOINTMENT_REASON_FOR_VISIT_LABEL}</Label>
+              <Label>{t("pages.schedule.col.reasonForVisit")}</Label>
               <Select
                 value={matchingCommonVisitReasonLabel(rescheduleForm.reason, visitReasons)}
                 onValueChange={(v) => setRescheduleForm((f) => ({ ...f, reason: v }))}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Quick pick (optional)" />
+                  <SelectValue placeholder={t("pages.receptionAppointments.commonReasonQuickPlaceholder")} />
                 </SelectTrigger>
                 <SelectContent>
                   {visitReasons.map((r) => (
@@ -535,20 +554,22 @@ export default function ReceptionAppointmentsPage() {
                 value={rescheduleForm.reason}
                 onChange={(e) => setRescheduleForm((f) => ({ ...f, reason: e.target.value }))}
                 className="resize-none"
-                placeholder="Reason for visit…"
+                placeholder={t("pages.receptionAppointments.reasonTextareaPlaceholder")}
                 rows={2}
               />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button type="button" variant="secondary" onClick={() => setRescheduleOpen(false)}>
-                Close
+                {t("pages.receptionAppointments.close")}
               </Button>
               <Button
                 type="submit"
                 disabled={patchAppointmentMutation.isPending || !rescheduleForm.clinicianId}
                 data-testid="reception-reschedule-submit"
               >
-                {patchAppointmentMutation.isPending ? "Saving…" : "Save new time"}
+                {patchAppointmentMutation.isPending
+                  ? t("pages.receptionAppointments.saving")
+                  : t("pages.receptionAppointments.saveNewTime")}
               </Button>
             </div>
           </form>
@@ -564,25 +585,27 @@ export default function ReceptionAppointmentsPage() {
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Cancel this appointment?</AlertDialogTitle>
+            <AlertDialogTitle>{t("pages.receptionAppointments.cancelAppointmentTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This will mark the appointment as cancelled. The patient can be scheduled again later if needed.
+              {t("pages.receptionAppointments.cancelAppointmentDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="grid gap-2 py-1">
-            <Label htmlFor="reception-cancellation-reason">Cancellation reason *</Label>
+            <Label htmlFor="reception-cancellation-reason">
+              {t("pages.receptionAppointments.cancellationReasonLabel")}
+            </Label>
             <Textarea
               id="reception-cancellation-reason"
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
-              placeholder="e.g. Patient requested, no-show risk, schedule conflict…"
+              placeholder={t("pages.receptionAppointments.cancellationReasonPlaceholder")}
               rows={3}
               className="resize-none"
               data-testid="reception-cancellation-reason"
             />
           </div>
           <AlertDialogFooter>
-            <AlertDialogCancel>Keep appointment</AlertDialogCancel>
+            <AlertDialogCancel>{t("pages.receptionAppointments.keepAppointment")}</AlertDialogCancel>
             <Button
               type="button"
               variant="destructive"
@@ -590,7 +613,9 @@ export default function ReceptionAppointmentsPage() {
               disabled={patchAppointmentMutation.isPending || !cancelReason.trim()}
               data-testid="reception-cancel-confirm"
             >
-              {patchAppointmentMutation.isPending ? "Cancelling…" : "Cancel appointment"}
+              {patchAppointmentMutation.isPending
+                ? t("pages.receptionAppointments.cancelling")
+                : t("pages.receptionAppointments.confirmCancelAppointment")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -601,17 +626,15 @@ export default function ReceptionAppointmentsPage() {
         <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
           <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
             <div className="min-w-0">
-              <p className="text-sm font-semibold">Same Day Visits</p>
-              <p className="text-xs text-muted-foreground">
-                Outpatient appointments for the day you are viewing. Select a row to reschedule, cancel, or check in.
-              </p>
+              <p className="text-sm font-semibold">{t("pages.receptionAppointments.sameDayTitle")}</p>
+              <p className="text-xs text-muted-foreground">{t("pages.receptionAppointments.sameDaySubtitle")}</p>
             </div>
             <div
               className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:w-auto"
               data-testid="reception-appt-actions"
             >
               <Badge variant="secondary" className="text-[10px]">
-                {sortedRows.length} appointment{sortedRows.length !== 1 ? "s" : ""}
+                {t("pages.receptionAppointments.appointmentCount", { count: sortedRows.length })}
               </Badge>
               <Button
                 type="button"
@@ -623,7 +646,7 @@ export default function ReceptionAppointmentsPage() {
                 data-testid="reception-reschedule"
               >
                 <CalendarClock />
-                Reschedule
+                {t("pages.receptionAppointments.reschedule")}
               </Button>
               <Button
                 type="button"
@@ -635,7 +658,7 @@ export default function ReceptionAppointmentsPage() {
                 data-testid="reception-cancel-appointment"
               >
                 <XCircle />
-                Cancel
+                {t("pages.receptionAppointments.cancel")}
               </Button>
               <Button
                 type="button"
@@ -646,14 +669,14 @@ export default function ReceptionAppointmentsPage() {
                 data-testid="reception-check-in-open"
               >
                 <UserCheck />
-                Check in
+                {t("pages.receptionAppointments.checkIn")}
               </Button>
             </div>
           </div>
         </CardHeader>
         <CardContent className="overflow-x-auto rounded-b-xl p-0">
           {isLoading ? (
-            <p className="p-8 text-center text-muted-foreground">Loading…</p>
+            <p className="p-8 text-center text-muted-foreground">{t("pages.receptionAppointments.loading")}</p>
           ) : (
             <div className="min-w-[780px]">
               <div
@@ -665,28 +688,28 @@ export default function ReceptionAppointmentsPage() {
                   sortDir={sortDir}
                   onSort={() => toggleSort("time")}
                 >
-                  Time
+                  {t("pages.receptionAppointments.colTime")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={sortKey === "patient"}
                   sortDir={sortDir}
                   onSort={() => toggleSort("patient")}
                 >
-                  Patient
+                  {t("pages.receptionAppointments.colPatient")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={sortKey === "mrn"}
                   sortDir={sortDir}
                   onSort={() => toggleSort("mrn")}
                 >
-                  MRN
+                  {t("pages.receptionAppointments.colMrn")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={sortKey === "clinician"}
                   sortDir={sortDir}
                   onSort={() => toggleSort("clinician")}
                 >
-                  Clinician
+                  {t("pages.receptionAppointments.colClinician")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={sortKey === "duration"}
@@ -694,25 +717,27 @@ export default function ReceptionAppointmentsPage() {
                   onSort={() => toggleSort("duration")}
                   className="justify-center"
                 >
-                  Dur.
+                  {t("pages.receptionAppointments.colDurationShort")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={sortKey === "status"}
                   sortDir={sortDir}
                   onSort={() => toggleSort("status")}
                 >
-                  Status
+                  {t("pages.receptionAppointments.colStatus")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={sortKey === "reason"}
                   sortDir={sortDir}
                   onSort={() => toggleSort("reason")}
                 >
-                  {APPOINTMENT_REASON_FOR_VISIT_LABEL}
+                  {t("pages.schedule.col.reasonForVisit")}
                 </SortableGridHeaderButton>
               </div>
               {sortedRows.length === 0 ? (
-                <div className="p-12 text-center text-muted-foreground text-sm">No appointments on this day.</div>
+                <div className="p-12 text-center text-muted-foreground text-sm">
+                  {t("pages.receptionAppointments.noAppointmentsThisDay")}
+                </div>
               ) : (
                 sortedRows.map((apt) => {
                   const selected = apt.id === selectedId;
@@ -726,14 +751,14 @@ export default function ReceptionAppointmentsPage() {
                         e.stopPropagation();
                         navigate(`/patients/${apt.patientId}?tab=overview&chartEntry=browse`);
                       }}
-                      title="Double-click to open patient chart"
+                      title={t("pages.receptionAppointments.doubleClickOpenChart")}
                       className={`grid grid-cols-[5.5rem_1fr_6.5rem_1fr_4rem_6.5rem_1fr] w-full text-left text-xs font-mono border-b border-border last:border-b-0 hover:bg-muted/30 ${
                         selected ? "bg-primary/10 ring-1 ring-inset ring-primary/30" : "bg-background"
                       }`}
                       data-testid={`reception-appt-row-${apt.id}`}
                     >
                       <span className="border-r border-border/80 py-2 pl-2 pr-3 whitespace-nowrap font-medium">
-                        {format(new Date(apt.scheduledDate), "HH:mm")}
+                        {formatInOrgTimeZone(apt.scheduledDate, "HH:mm", orgTz)}
                       </span>
                       <span className="border-r border-border/80 py-2 pl-2 pr-3 truncate">{apt.patientName}</span>
                       <span className="border-r border-border/80 py-2 pl-2 pr-3 text-muted-foreground truncate">{apt.mrn}</span>
@@ -741,7 +766,9 @@ export default function ReceptionAppointmentsPage() {
                       <span className="border-r border-border/80 py-2 pl-2 pr-3 text-center">{apt.duration ?? 30}</span>
                       <span className="border-r border-border/80 py-2 pl-2 pr-3">
                         <Badge variant="secondary" className={`text-[10px] capitalize ${appointmentStatusBadgeClass(apt.status)}`}>
-                          {formatAppointmentStatusLabel(apt.status)}
+                          {t(`appointmentStatus.${apt.status}`, {
+                            defaultValue: formatAppointmentStatusLabel(apt.status),
+                          })}
                         </Badge>
                       </span>
                       <span className="py-2 pl-2 pr-6 truncate" title={apt.reason ?? ""}>
@@ -760,20 +787,23 @@ export default function ReceptionAppointmentsPage() {
         <CardHeader className="space-y-0 border-b bg-muted/40 px-4 py-3 sm:px-5">
           <div className="flex w-full min-w-0 items-center justify-between gap-3 flex-wrap">
             <div>
-              <p className="text-sm font-semibold">Admitted Patients</p>
-              <p className="text-xs text-muted-foreground">Overnight visits remain here until discharged.</p>
+              <p className="text-sm font-semibold">{t("pages.receptionAppointments.admittedTitle")}</p>
+              <p className="text-xs text-muted-foreground">{t("pages.receptionAppointments.admittedSubtitle")}</p>
             </div>
             <Badge variant="secondary" className="text-[10px]">
-              {admissions.length} Admissions
+              {t("pages.receptionAppointments.admissionsBadge", { count: admissions.length })}
             </Badge>
           </div>
         </CardHeader>
         <CardContent className="overflow-x-auto rounded-b-xl p-0">
           {admissionsLoading ? (
-            <p className="p-8 text-center text-muted-foreground text-sm">Loading…</p>
+            <p className="p-8 text-center text-muted-foreground text-sm">{t("pages.receptionAppointments.loading")}</p>
           ) : admissions.length === 0 ? (
             <div className="p-4">
-              <EmptyState title="No admitted patients" description="Overnight walk-ins appear here until discharged." />
+              <EmptyState
+                title={t("pages.receptionAppointments.emptyAdmittedTitle")}
+                description={t("pages.receptionAppointments.emptyAdmittedDescription")}
+              />
             </div>
           ) : (
             <div className="min-w-[1180px]">
@@ -786,49 +816,49 @@ export default function ReceptionAppointmentsPage() {
                   sortDir={admittedSortDir}
                   onSort={() => toggleAdmittedSort("patient")}
                 >
-                  Patient
+                  {t("pages.receptionAppointments.colPatient")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={admittedSortKey === "mrn"}
                   sortDir={admittedSortDir}
                   onSort={() => toggleAdmittedSort("mrn")}
                 >
-                  MRN
+                  {t("pages.receptionAppointments.colMrn")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={admittedSortKey === "clinician"}
                   sortDir={admittedSortDir}
                   onSort={() => toggleAdmittedSort("clinician")}
                 >
-                  Clinician
+                  {t("pages.receptionAppointments.colClinician")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={admittedSortKey === "status"}
                   sortDir={admittedSortDir}
                   onSort={() => toggleAdmittedSort("status")}
                 >
-                  Status
+                  {t("pages.receptionAppointments.colStatus")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={admittedSortKey === "reason"}
                   sortDir={admittedSortDir}
                   onSort={() => toggleAdmittedSort("reason")}
                 >
-                  {APPOINTMENT_REASON_FOR_VISIT_LABEL}
+                  {t("pages.schedule.col.reasonForVisit")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={admittedSortKey === "bed"}
                   sortDir={admittedSortDir}
                   onSort={() => toggleAdmittedSort("bed")}
                 >
-                  Bed / Room
+                  {t("pages.receptionAppointments.colBedRoom")}
                 </SortableGridHeaderButton>
                 <SortableGridHeaderButton
                   active={admittedSortKey === "admittedAt"}
                   sortDir={admittedSortDir}
                   onSort={() => toggleAdmittedSort("admittedAt")}
                 >
-                  Admission Date
+                  {t("pages.receptionAppointments.colAdmissionDate")}
                 </SortableGridHeaderButton>
               </div>
               {sortedAdmissions.map((a) => {
@@ -855,7 +885,7 @@ export default function ReceptionAppointmentsPage() {
                         variant="outline"
                         className={`text-[10px] font-medium border ${ADMITTED_PATIENT_STATUS_BADGE_CLASS}`}
                       >
-                        {ADMITTED_PATIENT_STATUS_LABEL}
+                        {t("appointmentStatus.admitted")}
                       </Badge>
                     </span>
                     <span className="border-r border-border/80 py-2 pl-2 pr-3 min-w-0 truncate" title={a.reason ?? ""}>
@@ -863,7 +893,9 @@ export default function ReceptionAppointmentsPage() {
                     </span>
                     <span className="border-r border-border/80 py-2 pl-2 pr-3 min-w-0 truncate">{a.bedName}</span>
                     <span className="min-w-0 truncate whitespace-nowrap py-2 pl-2 pr-6">
-                      {a.admittedAt ? format(new Date(a.admittedAt), "MMMM d, yyyy") : "—"}
+                      {a.admittedAt
+                        ? formatInOrgTimeZone(a.admittedAt, "d MMM yyyy", orgTz, { locale: dateLocale })
+                        : "—"}
                     </span>
                   </button>
                 );

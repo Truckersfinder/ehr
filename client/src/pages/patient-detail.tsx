@@ -1826,7 +1826,7 @@ export default function PatientDetailPage() {
                       data-testid="nav-review-demographics"
                     >
                       <User className="w-4 h-4 shrink-0" />{" "}
-                      {reviewNav.find((e) => e.id === "pc_demographics")?.label ?? "Demographics"}
+                      {reviewNav.find((e) => e.id === "pc_demographics")?.label ?? t("pages.patientDetail.navDemographicsFallback")}
                     </a>
                   </Link>
                 ) : null}
@@ -1838,7 +1838,9 @@ export default function PatientDetailPage() {
             {showVisitDocumentation && (
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">
-                  {admissionDocUnlocked ? "Admission documentation" : "Visit documentation"}
+                  {admissionDocUnlocked
+                    ? t("pages.patientDetail.docSectionAdmission")
+                    : t("pages.patientDetail.docSectionVisit")}
                 </p>
                 <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
                   {visitDocNav
@@ -1861,7 +1863,7 @@ export default function PatientDetailPage() {
                 {visitSummaryMeta && visitDocNav.some((e) => e.id === "pc_visit_summary") ? (
                   <div className="mt-4">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">
-                      Visit Summary
+                      {t("pages.patientDetail.visitSummarySection")}
                     </p>
                     <TabsList className="flex flex-col gap-0.5 h-auto p-0 bg-transparent rounded-none">
                       <TabsTrigger
@@ -1870,7 +1872,8 @@ export default function PatientDetailPage() {
                         className={PATIENT_CHART_SIDEBAR_TAB_TRIGGER_CLASS}
                       >
                         <ScrollText className="w-4 h-4 shrink-0" />{" "}
-                        {visitDocNav.find((e) => e.id === "pc_visit_summary")?.label ?? "Visit Summary"}
+                        {visitDocNav.find((e) => e.id === "pc_visit_summary")?.label ??
+                          t("pages.patientDetail.visitSummarySection")}
                       </TabsTrigger>
                     </TabsList>
                   </div>
@@ -3023,20 +3026,20 @@ export default function PatientDetailPage() {
               sidebar={
                 <TabsList className={SIDEBAR_TABS_LIST_CLASS}>
                   <TabsTrigger value="medical" className={SIDEBAR_TABS_TRIGGER_CLASS}>
-                    Medical history
+                    {t("pages.patientDetail.historyMedicalTab")}
                   </TabsTrigger>
                   <TabsTrigger value="family" className={SIDEBAR_TABS_TRIGGER_CLASS}>
-                    Family history
+                    {t("pages.patientDetail.historyFamilyTab")}
                   </TabsTrigger>
                   <TabsTrigger value="social" className={SIDEBAR_TABS_TRIGGER_CLASS}>
-                    Social history
+                    {t("pages.patientDetail.historySocialTab")}
                   </TabsTrigger>
                 </TabsList>
               }
             >
             <TabsContent value="medical" className="mt-0 space-y-3 focus-visible:outline-none">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-muted-foreground">Current and past problems</span>
+                <span className="text-sm text-muted-foreground">{t("pages.patientDetail.currentAndPastProblems")}</span>
                 {canAddNote && (
                   <Button
                     size="sm"
@@ -3046,7 +3049,7 @@ export default function PatientDetailPage() {
                       setAddPastProblemOpen(true);
                     }}
                   >
-                    <Plus className="w-3.5 h-3.5 mr-1.5" /> Add past problem
+                    <Plus className="w-3.5 h-3.5 mr-1.5" /> {t("pages.patientDetail.addPastProblem")}
                   </Button>
                 )}
               </div>
@@ -3740,17 +3743,19 @@ export default function PatientDetailPage() {
         }}
       >
         <DialogContent>
-          <DialogHeader><DialogTitle>Add past problem</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{t("pages.patientDetail.addPastProblem")}</DialogTitle>
+          </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Past problem</Label>
+              <Label>{t("pages.patientDetail.pastProblemFieldLabel")}</Label>
               <AfricanPatientProblemSelect
                 value={newPastProblemText}
                 onChange={setNewPastProblemText}
               />
             </div>
             <div className="space-y-2">
-              <Label>Date problem started</Label>
+              <Label>{t("pages.patientDetail.pastProblemDateStartedLabel")}</Label>
               <Input
                 type="date"
                 value={newPastProblemStartDate}
@@ -3758,20 +3763,22 @@ export default function PatientDetailPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Status</Label>
+              <Label>{t("pages.patientDetail.pastProblemStatusLabel")}</Label>
               <Select value={newPastProblemResolution} onValueChange={(v) => setNewPastProblemResolution(v as "current" | "resolved")}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="current">Still current</SelectItem>
-                  <SelectItem value="resolved">Resolved</SelectItem>
+                  <SelectItem value="current">{t("pages.patientDetail.problemStatusStillCurrent")}</SelectItem>
+                  <SelectItem value="resolved">{t("pages.patientDetail.problemStatusResolvedLabel")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="secondary" onClick={() => setAddPastProblemOpen(false)}>Cancel</Button>
+            <Button variant="secondary" onClick={() => setAddPastProblemOpen(false)}>
+              {t("common.cancel")}
+            </Button>
             <Button
               onClick={() => addProblemMutation.mutate({
                 problem: newPastProblemText,
@@ -3781,7 +3788,7 @@ export default function PatientDetailPage() {
               })}
               disabled={!newPastProblemText.trim() || addProblemMutation.isPending}
             >
-              {addProblemMutation.isPending ? "Adding..." : "Add past problem"}
+              {addProblemMutation.isPending ? t("pages.patientDetail.adding") : t("pages.patientDetail.addPastProblem")}
             </Button>
           </DialogFooter>
         </DialogContent>

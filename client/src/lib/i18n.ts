@@ -27,6 +27,8 @@ void i18n
     supportedLngs: [...SUPPORTED_LANGUAGES],
     nonExplicitSupportedLngs: true,
     interpolation: { escapeValue: false },
+    /** Re-render translated UI on language change without Suspense boundaries everywhere. */
+    react: { useSuspense: false },
     detection: {
       order: ["localStorage", "navigator", "htmlTag"],
       caches: ["localStorage"],

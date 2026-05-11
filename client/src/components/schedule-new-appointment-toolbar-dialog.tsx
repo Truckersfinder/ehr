@@ -1,6 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { format, addDays } from "date-fns";
+import { enUS } from "date-fns/locale/en-US";
+import { fr as frDateLocale } from "date-fns/locale/fr";
+import { es as esDateLocale } from "date-fns/locale/es";
 import { queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -27,7 +30,7 @@ import { CalendarPlus, DoorOpen, CalendarClock } from "lucide-react";
 import { PatientSearchCombobox } from "@/components/patient-search-combobox";
 import { BedSelect } from "@/components/bed-select";
 import type { Patient, User as UserType, CommonVisitReason } from "@shared/schema";
-import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
+import { useTranslation } from "react-i18next";
 
 type Flow = "choose" | "walkin" | "future";
 
@@ -45,6 +48,7 @@ const defaultForm = () => {
 };
 
 export function ScheduleNewAppointmentToolbarDialog() {
+  const { t, i18n } = useTranslation();
   const { user, token } = useAuth();
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -62,6 +66,13 @@ export function ScheduleNewAppointmentToolbarDialog() {
       setSelectedPatient(null);
     }
   }, [open]);
+
+  const dateLocale = useMemo(() => {
+    const base = (i18n.language || "en").split("-")[0];
+    if (base === "fr") return frDateLocale;
+    if (base === "es") return esDateLocale;
+    return enUS;
+  }, [i18n.language]);
 
   const { data: visitReasons = [] } = useQuery<CommonVisitReason[]>({
     queryKey: ["/api/common-visit-reasons"],
@@ -120,13 +131,13 @@ export function ScheduleNewAppointmentToolbarDialog() {
           err.issues?.map((i) => `${i.path || "?"}: ${i.message}`).join(" · ") ||
           (err.errors ? JSON.stringify(err.errors) : "");
         throw new Error(
-          [err.message || "Failed to create appointment", detail].filter(Boolean).join(" — ")
+          [err.message || t("pages.receptionScheduleDialog.errCreateAppointment"), detail].filter(Boolean).join(" — ")
         );
       }
       const appt = await res.json();
 
       if (payload.status === "checked_in" && payload.overnightVisit === "yes") {
-        if (!payload.bedId) throw new Error("Select an available bed");
+        if (!payload.bedId) throw new Error(t("pages.receptionScheduleDialog.errSelectBed"));
         const ar = await fetch("/api/admissions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -138,7 +149,7 @@ export function ScheduleNewAppointmentToolbarDialog() {
         });
         if (!ar.ok) {
           const err = await ar.json().catch(() => ({}));
-          throw new Error(err.message || "Could not admit patient");
+          throw new Error(err.message || t("pages.receptionScheduleDialog.errAdmitPatient"));
         }
       }
 
@@ -155,17 +166,24 @@ export function ScheduleNewAppointmentToolbarDialog() {
       const overnightWalkIn =
         variables.status === "checked_in" && variables.overnightVisit === "yes";
       toast({
-        title: variables.status === "checked_in" ? "Walk-in checked in" : "Appointment scheduled",
+        title:
+          variables.status === "checked_in"
+            ? t("pages.receptionScheduleDialog.toastWalkInCheckedIn")
+            : t("pages.receptionScheduleDialog.toastScheduled"),
         description: overnightWalkIn
-          ? "The patient appears under Admitted Patients until discharged (not in the day appointment list)."
+          ? t("pages.receptionScheduleDialog.toastDescAdmittedUntilDischarged")
           : variables.status === "checked_in"
-            ? "The visit appears on today’s Appointments and Schedule as Checked in."
-            : "The appointment appears on the Appointments list for the selected day.",
+            ? t("pages.receptionScheduleDialog.toastDescCheckedInToday")
+            : t("pages.receptionScheduleDialog.toastDescScheduledDay"),
       });
       setOpen(false);
     },
     onError: (error: Error) =>
-      toast({ title: "Error", description: error.message, variant: "destructive" }),
+      toast({
+        title: t("common.error"),
+        description: error.message,
+        variant: "destructive",
+      }),
   });
 
   const startWalkIn = () => {
@@ -190,7 +208,11 @@ export function ScheduleNewAppointmentToolbarDialog() {
 
   const submit = (status: "checked_in" | "scheduled") => {
     if (!selectedPatient?.id || !form.clinicianId) {
-      toast({ title: "Missing fields", description: "Select a patient and a clinician or nurse.", variant: "destructive" });
+      toast({
+        title: t("pages.receptionScheduleDialog.missingFieldsTitle"),
+        description: t("pages.receptionScheduleDialog.missingFieldsDesc"),
+        variant: "destructive",
+      });
       return;
     }
     // Walk-in: always this calendar day (local), at submit time — not a stale form value.
@@ -198,7 +220,11 @@ export function ScheduleNewAppointmentToolbarDialog() {
     const appointmentDateYmd =
       flow === "walkin" ? format(new Date(), "yyyy-MM-dd") : form.scheduledDate;
     if (flow === "future" && !appointmentDateYmd) {
-      toast({ title: "Select a date", description: "Choose the day for this appointment.", variant: "destructive" });
+      toast({
+        title: t("pages.receptionScheduleDialog.selectDateTitle"),
+        description: t("pages.receptionScheduleDialog.selectDateDesc"),
+        variant: "destructive",
+      });
       return;
     }
     createMutation.mutate({
@@ -226,16 +252,16 @@ export function ScheduleNewAppointmentToolbarDialog() {
           data-testid="toolbar-schedule-new-appointment"
         >
           <CalendarPlus className="w-4 h-4 shrink-0" />
-          <span className="hidden sm:inline">New Appointment</span>
-          <span className="sm:hidden">New Appt</span>
+          <span className="hidden sm:inline">{t("pages.receptionScheduleDialog.triggerLong")}</span>
+          <span className="sm:hidden">{t("pages.receptionScheduleDialog.triggerShort")}</span>
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto" data-testid="dialog-schedule-new-appointment">
         {flow === "choose" && (
           <>
             <DialogHeader>
-              <DialogTitle>Schedule new appointment</DialogTitle>
-              <DialogDescription>Choose how you want to add this visit.</DialogDescription>
+              <DialogTitle>{t("pages.receptionScheduleDialog.chooseTitle")}</DialogTitle>
+              <DialogDescription>{t("pages.receptionScheduleDialog.chooseDescription")}</DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 pt-2">
               <button
@@ -245,7 +271,7 @@ export function ScheduleNewAppointmentToolbarDialog() {
                 data-testid="option-walk-in"
               >
                 <DoorOpen className="w-5 h-5 text-primary shrink-0" />
-                <span className="font-medium">Walk in</span>
+                <span className="font-medium">{t("pages.receptionScheduleDialog.walkInOption")}</span>
               </button>
               <button
                 type="button"
@@ -254,7 +280,7 @@ export function ScheduleNewAppointmentToolbarDialog() {
                 data-testid="option-future-appointment"
               >
                 <CalendarClock className="w-5 h-5 text-primary shrink-0" />
-                <span className="font-medium">Future appointment</span>
+                <span className="font-medium">{t("pages.receptionScheduleDialog.futureOption")}</span>
               </button>
             </div>
           </>
@@ -263,16 +289,20 @@ export function ScheduleNewAppointmentToolbarDialog() {
         {(flow === "walkin" || flow === "future") && (
           <>
             <DialogHeader>
-              <DialogTitle>{flow === "walkin" ? "Walk-in (today)" : "Future appointment"}</DialogTitle>
+              <DialogTitle>
+                {flow === "walkin"
+                  ? t("pages.receptionScheduleDialog.walkInTitle")
+                  : t("pages.receptionScheduleDialog.futureTitle")}
+              </DialogTitle>
               <DialogDescription>
                 {flow === "walkin"
-                  ? "Patient is here now. The visit is booked for today’s date (below) at the time you set, and marked checked in."
-                  : "The appointment uses the date and time you select below and appears on that day in Appointments and Schedule."}
+                  ? t("pages.receptionScheduleDialog.walkInDescription")
+                  : t("pages.receptionScheduleDialog.futureDescription")}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 pt-1">
               <div className="space-y-2">
-                <Label>Patient *</Label>
+                <Label>{t("pages.receptionScheduleDialog.labelPatient")}</Label>
                 <PatientSearchCombobox
                   token={token}
                   value={selectedPatient}
@@ -281,16 +311,18 @@ export function ScheduleNewAppointmentToolbarDialog() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Clinician / nurse *</Label>
+                <Label>{t("pages.receptionScheduleDialog.labelProvider")}</Label>
                 <Select value={form.clinicianId} onValueChange={(v) => setForm((f) => ({ ...f, clinicianId: v }))}>
                   <SelectTrigger data-testid="schedule-appt-select-provider">
-                    <SelectValue placeholder="Select provider" />
+                    <SelectValue placeholder={t("pages.receptionScheduleDialog.placeholderSelectProvider")} />
                   </SelectTrigger>
                   <SelectContent>
                     {providers.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.fullName}
-                        {p.role === "nurse" ? " (Nurse)" : " (Clinician)"}
+                        {p.role === "nurse"
+                          ? t("pages.receptionScheduleDialog.roleNurseSuffix")
+                          : t("pages.receptionScheduleDialog.roleClinicianSuffix")}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -299,7 +331,7 @@ export function ScheduleNewAppointmentToolbarDialog() {
               {flow === "walkin" && (
                 <>
                   <div className="space-y-2">
-                    <Label>Overnight Visit *</Label>
+                    <Label>{t("pages.receptionScheduleDialog.labelOvernight")}</Label>
                     <Select
                       value={form.overnightVisit}
                       onValueChange={(v) =>
@@ -314,14 +346,14 @@ export function ScheduleNewAppointmentToolbarDialog() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="no">No</SelectItem>
-                        <SelectItem value="yes">Yes</SelectItem>
+                        <SelectItem value="no">{t("common.no")}</SelectItem>
+                        <SelectItem value="yes">{t("common.yes")}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   {form.overnightVisit === "yes" && (
                     <div className="space-y-2">
-                      <Label>Assign bed *</Label>
+                      <Label>{t("pages.receptionScheduleDialog.labelAssignBed")}</Label>
                       <BedSelect
                         token={token}
                         facilityId={user?.facilityId ?? undefined}
@@ -335,22 +367,20 @@ export function ScheduleNewAppointmentToolbarDialog() {
               )}
               {flow === "walkin" ? (
                 <div className="space-y-2">
-                  <Label>Date (today)</Label>
+                  <Label>{t("pages.receptionScheduleDialog.labelDateToday")}</Label>
                   <Input
                     type="text"
-                    value={format(new Date(), "EEEE, MMM d, yyyy")}
+                    value={format(new Date(), "EEEE, MMM d, yyyy", { locale: dateLocale })}
                     readOnly
                     disabled
                     className="bg-muted"
                     data-testid="schedule-appt-walkin-date-display"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Walk-ins always use today’s date. Time below is the visit time.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("pages.receptionScheduleDialog.walkInDateHint")}</p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <Label>Date *</Label>
+                  <Label>{t("pages.receptionScheduleDialog.labelDate")}</Label>
                   <Input
                     type="date"
                     value={form.scheduledDate}
@@ -361,7 +391,7 @@ export function ScheduleNewAppointmentToolbarDialog() {
                 </div>
               )}
               <div className="space-y-2">
-                <Label>Time *</Label>
+                <Label>{t("pages.receptionScheduleDialog.labelTime")}</Label>
                 <Input
                   type="time"
                   value={form.scheduledTime}
@@ -371,7 +401,7 @@ export function ScheduleNewAppointmentToolbarDialog() {
               </div>
             {!(flow === "walkin" && form.overnightVisit === "yes") && (
               <div className="space-y-2">
-                <Label>Duration (minutes)</Label>
+                <Label>{t("pages.receptionScheduleDialog.labelDurationMinutes")}</Label>
                 <Select
                   value={String(form.duration)}
                   onValueChange={(v) => setForm((f) => ({ ...f, duration: parseInt(v, 10) }))}
@@ -380,22 +410,22 @@ export function ScheduleNewAppointmentToolbarDialog() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="15">15 min</SelectItem>
-                    <SelectItem value="30">30 min</SelectItem>
-                    <SelectItem value="45">45 min</SelectItem>
-                    <SelectItem value="60">60 min</SelectItem>
+                    <SelectItem value="15">{t("pages.receptionScheduleDialog.durationOption", { minutes: 15 })}</SelectItem>
+                    <SelectItem value="30">{t("pages.receptionScheduleDialog.durationOption", { minutes: 30 })}</SelectItem>
+                    <SelectItem value="45">{t("pages.receptionScheduleDialog.durationOption", { minutes: 45 })}</SelectItem>
+                    <SelectItem value="60">{t("pages.receptionScheduleDialog.durationOption", { minutes: 60 })}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             )}
               <div className="space-y-2">
-                <Label>{APPOINTMENT_REASON_FOR_VISIT_LABEL}</Label>
+                <Label>{t("pages.schedule.col.reasonForVisit")}</Label>
                 <Select
                   value={visitReasons.some((r) => r.label === form.reason) ? form.reason : undefined}
                   onValueChange={(v) => setForm((f) => ({ ...f, reason: v }))}
                 >
                   <SelectTrigger data-testid="schedule-appt-common-reason">
-                    <SelectValue placeholder="Quick pick common reason (optional)" />
+                    <SelectValue placeholder={t("pages.receptionScheduleDialog.commonReasonPlaceholder")} />
                   </SelectTrigger>
                   <SelectContent>
                     {visitReasons.map((r) => (
@@ -409,13 +439,13 @@ export function ScheduleNewAppointmentToolbarDialog() {
                   value={form.reason}
                   onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
                   className="resize-none"
-                  placeholder="Type or edit reason for visit…"
+                  placeholder={t("pages.receptionScheduleDialog.reasonTextareaPlaceholder")}
                   rows={2}
                 />
               </div>
               <div className="flex flex-wrap gap-2 justify-end pt-2">
                 <Button type="button" variant="secondary" onClick={() => setFlow("choose")}>
-                  Back
+                  {t("pages.receptionScheduleDialog.back")}
                 </Button>
                 <Button
                   type="button"
@@ -429,10 +459,10 @@ export function ScheduleNewAppointmentToolbarDialog() {
                   data-testid="schedule-appt-submit"
                 >
                   {createMutation.isPending
-                    ? "Saving…"
+                    ? t("pages.receptionScheduleDialog.saving")
                     : flow === "walkin"
-                      ? "Create walk-in"
-                      : "Schedule appointment"}
+                      ? t("pages.receptionScheduleDialog.submitWalkIn")
+                      : t("pages.receptionScheduleDialog.submitFuture")}
                 </Button>
               </div>
             </div>

@@ -21,6 +21,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useTranslation } from "react-i18next";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Camera, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -57,6 +58,7 @@ const emptyForm = () => ({
 });
 
 export default function RegisterPatientPage() {
+  const { t } = useTranslation();
   const { user, token } = useAuth();
   const { patientIdentifierLabel, defaultCountry } = useOrganizationSettings();
   const { toast } = useToast();
@@ -100,7 +102,11 @@ export default function RegisterPatientPage() {
   const onProfilePhotoPick = (file: File | null | undefined) => {
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) {
-      toast({ title: "File too large", description: "Profile photo must be 5 MB or less.", variant: "destructive" });
+      toast({
+        title: t("pages.registerPatient.errFileLargeTitle"),
+        description: t("pages.registerPatient.errFileLargeDesc"),
+        variant: "destructive",
+      });
       return;
     }
     if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
@@ -128,7 +134,7 @@ export default function RegisterPatientPage() {
 
   async function startCamera(nextDeviceId?: string) {
     if (!canUseCamera) {
-      setCameraError("Camera is not supported in this browser.");
+      setCameraError(t("pages.registerPatient.errCameraUnsupported"));
       return;
     }
     setCameraError(null);
@@ -153,7 +159,7 @@ export default function RegisterPatientPage() {
         if (activeId) setCameraDeviceId(activeId);
       }
     } catch (e: any) {
-      setCameraError(e?.message || "Unable to access camera. Please allow camera permissions.");
+      setCameraError(e?.message || t("pages.registerPatient.errCameraAccess"));
       await stopCamera();
     }
   }
@@ -165,7 +171,11 @@ export default function RegisterPatientPage() {
     const w = video.videoWidth || 1280;
     const h = video.videoHeight || 720;
     if (!w || !h) {
-      toast({ title: "Camera not ready", description: "Please wait and try again.", variant: "destructive" });
+      toast({
+        title: t("pages.registerPatient.errCameraNotReadyTitle"),
+        description: t("pages.registerPatient.errCameraNotReadyDesc"),
+        variant: "destructive",
+      });
       return;
     }
     canvas.width = w;
@@ -178,7 +188,11 @@ export default function RegisterPatientPage() {
       canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9),
     );
     if (!blob) {
-      toast({ title: "Capture failed", description: "Could not create image.", variant: "destructive" });
+      toast({
+        title: t("pages.registerPatient.errCaptureTitle"),
+        description: t("pages.registerPatient.errCaptureDesc"),
+        variant: "destructive",
+      });
       return;
     }
     const capturedFile = new File([blob], `new-patient-profile-${Date.now()}.jpg`, { type: "image/jpeg" });
@@ -200,7 +214,7 @@ export default function RegisterPatientPage() {
     queryKey: ["/api/users"],
     queryFn: async () => {
       const res = await fetch("/api/users", { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error("Failed");
+      if (!res.ok) throw new Error(t("pages.registerPatient.errUsersLoad"));
       return res.json();
     },
     enabled: !!token && !!user,
@@ -249,12 +263,12 @@ export default function RegisterPatientPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || "Failed to register patient");
+        throw new Error(err.message || t("pages.registerPatient.errRegisterPatient"));
       }
       return (await res.json()) as { id: string };
     },
     onError: (error: Error) => {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
+      toast({ title: t("common.error"), description: error.message, variant: "destructive" });
     },
   });
 
@@ -262,11 +276,19 @@ export default function RegisterPatientPage() {
     e.preventDefault();
     try {
       if (!String(formData.country).trim()) {
-        toast({ title: "Country required", description: "Please select a country.", variant: "destructive" });
+        toast({
+          title: t("pages.registerPatient.toastCountryTitle"),
+          description: t("pages.registerPatient.toastCountryDesc"),
+          variant: "destructive",
+        });
         return;
       }
       if (!String(formData.state).trim()) {
-        toast({ title: "State required", description: "Please select a state / province / region.", variant: "destructive" });
+        toast({
+          title: t("pages.registerPatient.toastStateTitle"),
+          description: t("pages.registerPatient.toastStateDesc"),
+          variant: "destructive",
+        });
         return;
       }
       if (
@@ -275,8 +297,8 @@ export default function RegisterPatientPage() {
         !String(formData.email).trim()
       ) {
         toast({
-          title: "Portal email required",
-          description: "Enter an email for portal access, or add one under Contact.",
+          title: t("pages.registerPatient.toastPortalEmailTitle"),
+          description: t("pages.registerPatient.toastPortalEmailDesc"),
           variant: "destructive",
         });
         return;
@@ -295,21 +317,23 @@ export default function RegisterPatientPage() {
           const updated = normalizePatientRow(await readApiJsonOrThrow<Patient>(up));
           queryClient.setQueryData<Patient>(["/api/patients", created.id], updated);
         } catch (e) {
-          photoNote = e instanceof Error ? e.message : "Profile photo could not be uploaded.";
+          photoNote = e instanceof Error ? e.message : t("pages.registerPatient.errPhotoUpload");
         }
       }
       // Refresh list cache only (do not invalidate ["/api/patients", id] — would refetch and race with photo setQueryData).
       void queryClient.invalidateQueries({ queryKey: ["/api/patients", ""], exact: true });
       if (photoNote) {
         toast({
-          title: "Patient registered",
-          description: `Chart created. ${photoNote}`,
+          title: t("pages.registerPatient.toastRegisteredTitle"),
+          description: t("pages.registerPatient.toastRegisteredPhotoWarn", { note: photoNote ?? "" }),
           variant: "destructive",
         });
       } else {
         toast({
-          title: "Patient registered",
-          description: profilePhotoFile ? "The new chart has been created and the photo was saved." : "The new chart has been created.",
+          title: t("pages.registerPatient.toastRegisteredTitle"),
+          description: profilePhotoFile
+            ? t("pages.registerPatient.toastRegisteredWithPhoto")
+            : t("pages.registerPatient.toastRegisteredNoPhoto"),
         });
       }
       clearProfilePhoto();
@@ -320,8 +344,8 @@ export default function RegisterPatientPage() {
         navigate(`/patients/${created.id}?chartEntry=browse`);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to register patient";
-      toast({ title: "Error", description: message, variant: "destructive" });
+      const message = err instanceof Error ? err.message : t("pages.registerPatient.errRegisterPatient");
+      toast({ title: t("common.error"), description: message, variant: "destructive" });
     }
   };
 
@@ -338,7 +362,9 @@ export default function RegisterPatientPage() {
           <Link href={backHref}>
             <a className="inline-flex items-center gap-2" data-testid="register-patient-back">
               <ArrowLeft className="w-4 h-4" />
-              {user.role === "reception" ? "Back to Appointments" : "Back to Patients"}
+              {user.role === "reception"
+                ? t("pages.registerPatient.backToAppointments")
+                : t("pages.registerPatient.backToPatients")}
             </a>
           </Link>
         </Button>
@@ -347,9 +373,9 @@ export default function RegisterPatientPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">
           <SectionTitleWithHint
-            hint={`Enter demographics and billing details. ${patientIdentifierLabel} is assigned automatically when you save.`}
+            hint={t("pages.registerPatient.pageHint", { label: patientIdentifierLabel })}
           >
-            Register New Patient
+            {t("pages.registerPatient.title")}
           </SectionTitleWithHint>
         </h1>
       </div>
@@ -358,13 +384,15 @@ export default function RegisterPatientPage() {
         <Card>
           <CardHeader>
             <CardTitle>
-              <SectionTitleWithHint hint="Legal name and core patient information.">Identity &amp; demographics</SectionTitleWithHint>
+              <SectionTitleWithHint hint={t("pages.registerPatient.identityHint")}>
+                {t("pages.registerPatient.identityTitle")}
+              </SectionTitleWithHint>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>First name *</Label>
+                <Label>{t("pages.registerPatient.labelFirstName")}</Label>
                 <Input
                   required
                   value={formData.firstName}
@@ -373,7 +401,7 @@ export default function RegisterPatientPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Last name *</Label>
+                <Label>{t("pages.registerPatient.labelLastName")}</Label>
                 <Input
                   required
                   value={formData.lastName}
@@ -384,7 +412,7 @@ export default function RegisterPatientPage() {
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Date of birth *</Label>
+                <Label>{t("pages.registerPatient.labelDob")}</Label>
                 <Input
                   required
                   type="date"
@@ -394,35 +422,35 @@ export default function RegisterPatientPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Gender *</Label>
+                <Label>{t("pages.registerPatient.labelGender")}</Label>
                 <Select value={formData.gender} onValueChange={(v: "male" | "female" | "other") => set({ gender: v })}>
                   <SelectTrigger data-testid="reg-select-gender">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="male">Male</SelectItem>
-                    <SelectItem value="female">Female</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
+                    <SelectItem value="male">{t("pages.registerPatient.genderMale")}</SelectItem>
+                    <SelectItem value="female">{t("pages.registerPatient.genderFemale")}</SelectItem>
+                    <SelectItem value="other">{t("pages.registerPatient.genderOther")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>National ID / passport</Label>
+                <Label>{t("pages.registerPatient.labelNationalId")}</Label>
                 <Input value={formData.nationalId} onChange={(e) => set({ nationalId: e.target.value })} />
               </div>
               <div className="space-y-2">
-                <Label>Blood group</Label>
+                <Label>{t("pages.registerPatient.labelBloodGroup")}</Label>
                 <Select
                   value={formData.bloodGroup || "__none"}
                   onValueChange={(v) => set({ bloodGroup: v === "__none" ? "" : v })}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select" />
+                    <SelectValue placeholder={t("pages.registerPatient.selectPlaceholder")} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none">— Not specified —</SelectItem>
+                    <SelectItem value="__none">{t("pages.registerPatient.bloodNotSpecified")}</SelectItem>
                     {["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map((g) => (
                       <SelectItem key={g} value={g}>
                         {g}
@@ -439,8 +467,8 @@ export default function RegisterPatientPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Camera className="h-4 w-4 shrink-0" aria-hidden />
-              <SectionTitleWithHint hint="Optional. JPEG, PNG, GIF, or WebP, up to 5 MB. Shown on the patient storyboard.">
-                Profile photo
+              <SectionTitleWithHint hint={t("pages.registerPatient.profilePhotoHint")}>
+                {t("pages.registerPatient.profilePhotoTitle")}
               </SectionTitleWithHint>
             </CardTitle>
           </CardHeader>
@@ -468,7 +496,7 @@ export default function RegisterPatientPage() {
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button type="button" variant="secondary" size="sm">
-                        Choose photo
+                        {t("pages.registerPatient.choosePhoto")}
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start">
@@ -478,17 +506,17 @@ export default function RegisterPatientPage() {
                           else cameraPhotoInputRef.current?.click();
                         }}
                       >
-                        Take picture
+                        {t("pages.registerPatient.takePicture")}
                       </DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => galleryPhotoInputRef.current?.click()}>
-                        Upload photo
+                        {t("pages.registerPatient.uploadPhoto")}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                   {profilePhotoFile && (
                     <Button type="button" variant="ghost" size="sm" onClick={clearProfilePhoto} className="gap-1">
                       <X className="h-3.5 w-3.5" />
-                      Remove
+                      {t("pages.registerPatient.remove")}
                     </Button>
                   )}
                 </div>
@@ -500,12 +528,12 @@ export default function RegisterPatientPage() {
         <Dialog open={cameraOpen} onOpenChange={setCameraOpen}>
           <DialogContent className="sm:max-w-xl">
             <DialogHeader>
-              <DialogTitle>Take picture</DialogTitle>
+              <DialogTitle>{t("pages.registerPatient.dialogTakePicture")}</DialogTitle>
             </DialogHeader>
             <div className="space-y-3">
               {cameraDevices.length > 1 && (
                 <div className="space-y-2">
-                  <Label>Camera</Label>
+                  <Label>{t("pages.registerPatient.labelCamera")}</Label>
                   <select
                     className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
                     value={cameraDeviceId}
@@ -517,7 +545,7 @@ export default function RegisterPatientPage() {
                   >
                     {cameraDevices.map((d, idx) => (
                       <option key={d.deviceId} value={d.deviceId}>
-                        {d.label || `Camera ${idx + 1}`}
+                        {d.label || t("pages.registerPatient.cameraNamed", { n: idx + 1 })}
                       </option>
                     ))}
                   </select>
@@ -532,7 +560,7 @@ export default function RegisterPatientPage() {
               {cameraError ? <p className="text-sm text-destructive">{cameraError}</p> : null}
               <div className="flex justify-end gap-2 pt-1">
                 <Button type="button" variant="outline" onClick={() => setCameraOpen(false)}>
-                  Cancel
+                  {t("common.cancel")}
                 </Button>
                 <Button
                   type="button"
@@ -540,7 +568,7 @@ export default function RegisterPatientPage() {
                   disabled={!!cameraError || !cameraStream}
                   data-testid="reg-profile-photo-capture"
                 >
-                  Capture
+                  {t("pages.registerPatient.capture")}
                 </Button>
               </div>
             </div>
@@ -549,26 +577,26 @@ export default function RegisterPatientPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Contact &amp; address</CardTitle>
+            <CardTitle>{t("pages.registerPatient.contactTitle")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Phone</Label>
+                <Label>{t("pages.registerPatient.labelPhone")}</Label>
                 <Input value={formData.phone} onChange={(e) => set({ phone: e.target.value })} />
               </div>
               <div className="space-y-2">
-                <Label>Email</Label>
+                <Label>{t("pages.registerPatient.labelEmail")}</Label>
                 <Input type="email" value={formData.email} onChange={(e) => set({ email: e.target.value })} />
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Street address</Label>
+              <Label>{t("pages.registerPatient.labelStreet")}</Label>
               <Input value={formData.address} onChange={(e) => set({ address: e.target.value })} />
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>City/Town</Label>
+                <Label>{t("pages.registerPatient.labelCityTown")}</Label>
                 <Input value={formData.city} onChange={(e) => set({ city: e.target.value })} />
               </div>
               <div
@@ -576,14 +604,14 @@ export default function RegisterPatientPage() {
                 onMouseDownCapture={() => {
                   if (!formData.country) {
                     toast({
-                      title: "Country required",
-                      description: "Please select a country first.",
+                      title: t("pages.registerPatient.toastPickCountryFirstTitle"),
+                      description: t("pages.registerPatient.toastPickCountryFirstDesc"),
                       variant: "destructive",
                     });
                   }
                 }}
               >
-                <Label>State / province / region *</Label>
+                <Label>{t("pages.registerPatient.labelState")}</Label>
                 <StateSelect
                   countryCode={formData.country}
                   value={formData.state}
@@ -593,7 +621,7 @@ export default function RegisterPatientPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Country *</Label>
+              <Label>{t("pages.registerPatient.labelCountry")}</Label>
               <CountrySelect
                 value={formData.country}
                 onValueChange={(code) => set({ country: code, state: "" })}
@@ -605,12 +633,10 @@ export default function RegisterPatientPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Patient portal access</CardTitle>
+            <CardTitle>{t("pages.registerPatient.portalTitle")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Patients can view their record online after they receive an email with a secure link and create a PIN.
-            </p>
+            <p className="text-sm text-muted-foreground">{t("pages.registerPatient.portalIntro")}</p>
             <div className="flex items-start gap-3">
               <Checkbox
                 id="reg-portal-enabled"
@@ -620,18 +646,16 @@ export default function RegisterPatientPage() {
               />
               <div className="space-y-1">
                 <Label htmlFor="reg-portal-enabled" className="font-medium cursor-pointer">
-                  Send patient portal invitation after registration
+                  {t("pages.registerPatient.portalCheckbox")}
                 </Label>
-                <p className="text-xs text-muted-foreground">
-                  Requires an email address (below or in Contact). The hospital name appears as the email sender.
-                </p>
+                <p className="text-xs text-muted-foreground">{t("pages.registerPatient.portalCheckboxHint")}</p>
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Portal email (optional)</Label>
+              <Label>{t("pages.registerPatient.portalEmailLabel")}</Label>
               <Input
                 type="email"
-                placeholder="Defaults to Contact email if empty"
+                placeholder={t("pages.registerPatient.portalEmailPlaceholder")}
                 value={formData.portalAccessEmail}
                 onChange={(e) => set({ portalAccessEmail: e.target.value })}
                 data-testid="reg-portal-email"
@@ -643,20 +667,22 @@ export default function RegisterPatientPage() {
         <Card>
           <CardHeader>
             <CardTitle>
-              <SectionTitleWithHint hint="Next of kin or emergency contact.">Emergency contact</SectionTitleWithHint>
+              <SectionTitleWithHint hint={t("pages.registerPatient.emergencyHint")}>
+                {t("pages.registerPatient.emergencyTitle")}
+              </SectionTitleWithHint>
             </CardTitle>
           </CardHeader>
           <CardContent className="grid sm:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Name</Label>
+              <Label>{t("pages.registerPatient.labelKinName")}</Label>
               <Input value={formData.nextOfKinName} onChange={(e) => set({ nextOfKinName: e.target.value })} />
             </div>
             <div className="space-y-2">
-              <Label>Phone</Label>
+              <Label>{t("pages.registerPatient.labelKinPhone")}</Label>
               <Input value={formData.nextOfKinPhone} onChange={(e) => set({ nextOfKinPhone: e.target.value })} />
             </div>
             <div className="space-y-2">
-              <Label>Relationship</Label>
+              <Label>{t("pages.registerPatient.labelKinRelationship")}</Label>
               <EmergencyContactRelationshipSelect
                 value={formData.nextOfKinRelation}
                 onValueChange={(v) => set({ nextOfKinRelation: v })}
@@ -669,61 +695,63 @@ export default function RegisterPatientPage() {
         <Card>
           <CardHeader>
             <CardTitle>
-              <SectionTitleWithHint hint="Coverage and guarantor for accounts receivable.">Billing &amp; insurance</SectionTitleWithHint>
+              <SectionTitleWithHint hint={t("pages.registerPatient.billingHint")}>
+                {t("pages.registerPatient.billingTitle")}
+              </SectionTitleWithHint>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Insurance / payer name</Label>
+                <Label>{t("pages.registerPatient.labelInsurance")}</Label>
                 <Input
                   value={formData.insuranceCarrier}
                   onChange={(e) => set({ insuranceCarrier: e.target.value })}
-                  placeholder="e.g. NHIF, private insurer, self-pay"
+                  placeholder={t("pages.registerPatient.insurancePlaceholder")}
                 />
               </div>
               <div className="space-y-2">
-                <Label>Policy / member number</Label>
+                <Label>{t("pages.registerPatient.labelPolicy")}</Label>
                 <Input value={formData.insurancePolicyNumber} onChange={(e) => set({ insurancePolicyNumber: e.target.value })} />
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Group / plan number</Label>
+              <Label>{t("pages.registerPatient.labelGroup")}</Label>
               <Input value={formData.insuranceGroupNumber} onChange={(e) => set({ insuranceGroupNumber: e.target.value })} />
             </div>
             <div className="border-t pt-4 grid sm:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label>Guarantor name</Label>
+                <Label>{t("pages.registerPatient.labelGuarantorName")}</Label>
                 <Input value={formData.billingGuarantorName} onChange={(e) => set({ billingGuarantorName: e.target.value })} />
               </div>
               <div className="space-y-2">
-                <Label>Guarantor phone</Label>
+                <Label>{t("pages.registerPatient.labelGuarantorPhone")}</Label>
                 <Input value={formData.billingGuarantorPhone} onChange={(e) => set({ billingGuarantorPhone: e.target.value })} />
               </div>
               <div className="space-y-2">
-                <Label>Guarantor relationship</Label>
+                <Label>{t("pages.registerPatient.labelGuarantorRelationship")}</Label>
                 <Select
                   value={formData.billingGuarantorRelation || "__none"}
                   onValueChange={(v) => set({ billingGuarantorRelation: v === "__none" ? "" : v })}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select relationship" />
+                    <SelectValue placeholder={t("pages.registerPatient.selectRelationship")} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none">— Not specified —</SelectItem>
-                    <SelectItem value="Self">Self</SelectItem>
-                    <SelectItem value="Parent">Parent</SelectItem>
-                    <SelectItem value="Employer">Employer</SelectItem>
+                    <SelectItem value="__none">{t("pages.registerPatient.bloodNotSpecified")}</SelectItem>
+                    <SelectItem value="Self">{t("pages.registerPatient.guarantorSelf")}</SelectItem>
+                    <SelectItem value="Parent">{t("pages.registerPatient.guarantorParent")}</SelectItem>
+                    <SelectItem value="Employer">{t("pages.registerPatient.guarantorEmployer")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Billing notes</Label>
+              <Label>{t("pages.registerPatient.labelBillingNotes")}</Label>
               <Textarea
                 value={formData.billingNotes}
                 onChange={(e) => set({ billingNotes: e.target.value })}
-                placeholder="Copay, prior authorization, employer billing, payment arrangements…"
+                placeholder={t("pages.registerPatient.billingNotesPlaceholder")}
                 rows={3}
                 className="resize-none"
               />
@@ -734,21 +762,23 @@ export default function RegisterPatientPage() {
         <Card>
           <CardHeader>
             <CardTitle>
-              <SectionTitleWithHint hint="Optional primary clinician for this chart.">Care team</SectionTitleWithHint>
+              <SectionTitleWithHint hint={t("pages.registerPatient.careTeamHint")}>
+                {t("pages.registerPatient.careTeamTitle")}
+              </SectionTitleWithHint>
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 max-w-md">
-              <Label>Primary provider</Label>
+              <Label>{t("pages.registerPatient.labelPrimaryProvider")}</Label>
               <Select
                 value={formData.primaryProviderId || "__none"}
                 onValueChange={(v) => set({ primaryProviderId: v === "__none" ? "" : v })}
               >
                 <SelectTrigger data-testid="reg-select-primary-provider">
-                  <SelectValue placeholder="Select clinician (optional)" />
+                  <SelectValue placeholder={t("pages.registerPatient.selectClinician")} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none">— None —</SelectItem>
+                  <SelectItem value="__none">{t("pages.registerPatient.noneShort")}</SelectItem>
                   {clinicians.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {c.fullName}
@@ -763,11 +793,11 @@ export default function RegisterPatientPage() {
         <div className="flex flex-wrap gap-3 justify-end">
           <Button type="button" variant="secondary" asChild>
             <Link href={backHref}>
-              <a>Cancel</a>
+              <a>{t("common.cancel")}</a>
             </Link>
           </Button>
           <Button type="submit" disabled={createMutation.isPending} data-testid="reg-submit-patient">
-            {createMutation.isPending ? "Saving…" : "Register patient"}
+            {createMutation.isPending ? t("pages.registerPatient.saving") : t("pages.registerPatient.registerSubmit")}
           </Button>
         </div>
       </form>

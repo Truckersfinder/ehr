@@ -1,5 +1,6 @@
 import { useRoute, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +16,7 @@ import { queryKeys } from "@/lib/query-keys";
  * Full-page patient demographics editor (Review → Demographics). Not a modal.
  */
 export default function PatientDemographicsEditPage() {
+  const { t } = useTranslation();
   const [, params] = useRoute("/patients/:id/demographics");
   const patientId = params?.id;
   const { token } = useAuth();
@@ -29,7 +31,7 @@ export default function PatientDemographicsEditPage() {
   if (!patientId) {
     return (
       <div className="p-6">
-        <p className="text-muted-foreground">Invalid patient.</p>
+        <p className="text-muted-foreground">{t("pages.demographicsEdit.invalidPatient")}</p>
       </div>
     );
   }
@@ -41,11 +43,13 @@ export default function PatientDemographicsEditPage() {
         <div className="flex flex-1 min-w-0 overflow-hidden">
           <nav
             className="w-52 flex-shrink-0 border border-border rounded-lg bg-muted/30 flex flex-col overflow-y-auto py-4"
-            aria-label="Review"
+            aria-label={t("pages.demographicsEdit.navAriaReview")}
           >
             <div className="px-3 space-y-6">
               <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">Review</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-2 mb-2">
+                  {t("pages.demographicsEdit.navHeadingReview")}
+                </p>
                 <PatientChartReviewNavLinks patientId={patientId} active="demographics" />
               </div>
             </div>
@@ -59,19 +63,17 @@ export default function PatientDemographicsEditPage() {
                     <Link href={`/patients/${patientId}?tab=overview`}>
                       <a className="inline-flex items-center gap-2">
                         <ArrowLeft className="w-4 h-4" />
-                        Back to chart
+                        {t("pages.demographicsEdit.backToChart")}
                       </a>
                     </Link>
                   </Button>
                 </div>
                 <div className="space-y-1 mb-8">
-                  <h1 className="text-2xl font-bold tracking-tight">Demographics</h1>
-                  <p className="text-sm text-muted-foreground">
-                    Edit patient information. MRN is assigned by the system and cannot be changed here.
-                  </p>
+                  <h1 className="text-2xl font-bold tracking-tight">{t("pages.demographicsEdit.heading")}</h1>
+                  <p className="text-sm text-muted-foreground">{t("pages.demographicsEdit.subtext")}</p>
                   {patient && (
                     <p className="text-xs text-muted-foreground font-mono">
-                      MRN {patient.mrn}
+                      {t("pages.demographicsEdit.mrnLine", { mrn: patient.mrn })}
                     </p>
                   )}
                 </div>

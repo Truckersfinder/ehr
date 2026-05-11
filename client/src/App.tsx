@@ -16,6 +16,8 @@ import { LanguageSwitcher } from "@/components/language-switcher";
 import { useOrganizationSettings } from "@/lib/organization-settings";
 import { ImaniMark } from "@/components/imani-mark";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { OfflineSyncRoot } from "@/lib/offline/offline-sync-root";
+import { OfflineStatusStrip } from "@/components/offline-status-strip";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -53,6 +55,7 @@ import PatientPortalConfigurationPage from "@/pages/patient-portal-configuration
 import PatientPortalLoginPage from "@/pages/patient-portal-login";
 import PatientPortalInvitePage from "@/pages/patient-portal-invite";
 import PatientPortalRecordPage from "@/pages/patient-portal-record";
+import SyncConflictsPage from "@/pages/sync-conflicts";
 
 function LandingByRole() {
   const { user } = useAuth();
@@ -99,6 +102,7 @@ function AuthenticatedRoutes() {
       <Route path="/admin/forms/new" component={AdminFormNewPage} />
       <Route path="/admin/forms/:formId/edit" component={AdminFormEditPage} />
       <Route path="/admin" component={AdminPage} />
+      <Route path="/sync-conflicts" component={SyncConflictsPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -450,6 +454,7 @@ function AuthenticatedApp() {
             <ThemeToggle />
           </div>
         </header>
+        <OfflineStatusStrip />
         <div className="flex min-h-0 min-w-0 flex-1">
           {showPatientStoryboard && storyboardPatientId ? (
             <>
@@ -562,9 +567,11 @@ function App() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <AuthProvider>
-            <WouterRouter>
-              <AppContent />
-            </WouterRouter>
+            <OfflineSyncRoot>
+              <WouterRouter>
+                <AppContent />
+              </WouterRouter>
+            </OfflineSyncRoot>
           </AuthProvider>
           <Toaster />
         </TooltipProvider>

@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { apiGetJson } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,10 +13,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Link, useLocation } from "wouter";
 import { Search, Plus, Users, Phone, Heart, AlertTriangle, CalendarDays } from "lucide-react";
 import { format } from "date-fns";
+import { enUS } from "date-fns/locale/en-US";
+import { fr as frDateLocale } from "date-fns/locale/fr";
+import { es as esDateLocale } from "date-fns/locale/es";
 import type { Patient } from "@shared/schema";
 
 export default function PatientsPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { user, token } = useAuth();
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");
@@ -34,6 +37,13 @@ export default function PatientsPage() {
     const diff = Date.now() - d.getTime();
     return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
   };
+
+  const dateLocale = useMemo(() => {
+    const base = (i18n.language || "en").split("-")[0];
+    if (base === "fr") return frDateLocale;
+    if (base === "es") return esDateLocale;
+    return enUS;
+  }, [i18n.language]);
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto" data-testid="patients-page">
@@ -61,7 +71,7 @@ export default function PatientsPage() {
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
           data-testid="input-search-patients"
-          placeholder="Search by name, MRN, ID, or phone..."
+          placeholder={t("pages.patients.searchPlaceholder")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-10"
@@ -78,9 +88,9 @@ export default function PatientsPage() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16">
             <Users className="w-12 h-12 text-muted-foreground/30 mb-4" />
-            <p className="text-lg font-medium text-muted-foreground">No patients found</p>
+            <p className="text-lg font-medium text-muted-foreground">{t("pages.patients.noPatientsTitle")}</p>
             <p className="text-sm text-muted-foreground/70 mt-1">
-              {search ? "Try a different search term" : "Register your first patient to get started"}
+              {search ? t("pages.patients.noPatientsHintSearch") : t("pages.patients.noPatientsHintEmpty")}
             </p>
           </CardContent>
         </Card>
@@ -106,7 +116,10 @@ export default function PatientsPage() {
                 <div className="space-y-1.5 text-xs text-muted-foreground">
                   <div className="flex items-center gap-2">
                     <CalendarDays className="w-3 h-3 flex-shrink-0" />
-                    <span>{format(new Date(patient.dateOfBirth), "MMM d, yyyy")} ({getAge(patient.dateOfBirth)} yrs)</span>
+                    <span>
+                      {format(new Date(patient.dateOfBirth), "d MMM yyyy", { locale: dateLocale })} (
+                      {t("pages.patients.ageYears", { years: getAge(patient.dateOfBirth) })})
+                    </span>
                   </div>
                   {patient.phone && (
                     <div className="flex items-center gap-2">
@@ -117,7 +130,7 @@ export default function PatientsPage() {
                   {patient.bloodGroup && (
                     <div className="flex items-center gap-2">
                       <Heart className="w-3 h-3 flex-shrink-0" />
-                      <span>Blood Group: {patient.bloodGroup}</span>
+                      <span>{t("pages.patients.bloodGroup", { value: patient.bloodGroup })}</span>
                     </div>
                   )}
                   {patient.allergies && (

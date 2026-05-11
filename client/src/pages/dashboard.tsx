@@ -5,8 +5,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { apiGetJson } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
-import { appointmentStatusBadgeClass, formatAppointmentStatusLabel } from "@/lib/appointment-status";
-import { ADMITTED_PATIENT_STATUS_BADGE_CLASS, ADMITTED_PATIENT_STATUS_LABEL } from "@/lib/appointment-status";
+import {
+  appointmentStatusBadgeClass,
+  formatAppointmentStatusLabel,
+  ADMITTED_PATIENT_STATUS_BADGE_CLASS,
+} from "@/lib/appointment-status";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { SectionTitleWithHint } from "@/components/section-title-with-hint";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +41,9 @@ import {
 } from "lucide-react";
 import { MutedIconBox } from "@/components/muted-icon-box";
 import { format, parse, startOfDay, endOfDay, subDays } from "date-fns";
+import { enUS } from "date-fns/locale/en-US";
+import { fr as frDateLocale } from "date-fns/locale/fr";
+import { es as esDateLocale } from "date-fns/locale/es";
 import type { Appointment, Encounter, Patient, User as UserType } from "@shared/schema";
 import { useOrgTimeZone } from "@/hooks/use-org-timezone";
 import { formatInOrgTimeZone } from "@/lib/org-timezone";
@@ -102,11 +108,18 @@ function StatCard({
 }
 
 export default function DashboardPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { token } = useAuth();
   const orgTz = useOrgTimeZone();
   const [overdueStart, setOverdueStart] = useState(() => format(subDays(new Date(), 30), "yyyy-MM-dd"));
   const [overdueEnd, setOverdueEnd] = useState(() => format(subDays(new Date(), 3), "yyyy-MM-dd"));
+
+  const dateLocale = useMemo(() => {
+    const base = (i18n.language || "en").split("-")[0];
+    if (base === "fr") return frDateLocale;
+    if (base === "es") return esDateLocale;
+    return enUS;
+  }, [i18n.language]);
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: queryKeys.dashboard.stats,
@@ -210,7 +223,7 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-bold tracking-tight" data-testid="text-welcome">
           <SectionTitleWithHint
             hint={t("pages.dashboard.welcomeHint", {
-              date: formatInOrgTimeZone(Date.now(), "EEEE, MMMM d, yyyy", orgTz),
+              date: formatInOrgTimeZone(Date.now(), "EEEE, d MMMM yyyy", orgTz, { locale: dateLocale }),
             })}
           >
             {t("pages.dashboard.title")}
@@ -279,21 +292,27 @@ export default function DashboardPage() {
               ) : todayAppts.length === 0 ? (
                 <div className="text-center py-8">
                   <Clock className="w-8 h-8 mx-auto text-muted-foreground/40 mb-2" />
-                  <p className="text-sm text-muted-foreground">No appointments scheduled for today</p>
+                  <p className="text-sm text-muted-foreground">{t("pages.dashboard.noAppointmentsToday")}</p>
                 </div>
               ) : (
                 todayAppts.slice(0, 5).map((apt) => (
                   <div key={apt.id} className="flex items-center gap-3 p-3 rounded-md bg-accent/30" data-testid={`appointment-item-${apt.id}`}>
                     <div className="text-center min-w-[50px]">
                       <p className="text-sm font-semibold">{formatInOrgTimeZone(apt.scheduledDate, "HH:mm", orgTz)}</p>
-                      <p className="text-[10px] text-muted-foreground">{apt.duration}min</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {t("pages.dashboard.durationMinutesShort", { minutes: apt.duration ?? 30 })}
+                      </p>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{apt.reason || "General visit"}</p>
-                      <p className="text-xs text-muted-foreground">Patient ID: {apt.patientId.slice(0, 8)}...</p>
+                      <p className="text-sm font-medium truncate">
+                        {apt.reason?.trim() ? apt.reason : t("pages.dashboard.defaultVisitReason")}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {t("pages.dashboard.patientRecordPreview", { id: apt.patientId.slice(0, 8) })}
+                      </p>
                     </div>
                     <Badge variant="secondary" className={`text-[10px] ${appointmentStatusBadgeClass(apt.status)}`}>
-                      {formatAppointmentStatusLabel(apt.status)}
+                      {t(`appointmentStatus.${apt.status}`, { defaultValue: formatAppointmentStatusLabel(apt.status) })}
                     </Badge>
                   </div>
                 ))
@@ -304,9 +323,11 @@ export default function DashboardPage() {
           <Card data-testid="dashboard-current-admissions">
             <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
               <div>
-                <h3 className="font-semibold">Current admissions</h3>
+                <h3 className="font-semibold">{t("pages.dashboard.currentAdmissionsTitle")}</h3>
                 <p className="text-xs text-muted-foreground">
-                  {admissionsLoading ? "Loading…" : `${admissions.length} Admission(s)`}
+                  {admissionsLoading
+                    ? t("pages.dashboard.loading")
+                    : t("pages.dashboard.admissionsCount", { count: admissions.length })}
                 </p>
               </div>
               <Bed className="w-4 h-4 text-muted-foreground" />
@@ -317,7 +338,7 @@ export default function DashboardPage() {
               ) : admissions.length === 0 ? (
                 <div className="text-center py-8">
                   <Bed className="w-8 h-8 mx-auto text-muted-foreground/40 mb-2" />
-                  <p className="text-sm text-muted-foreground">No active admissions</p>
+                  <p className="text-sm text-muted-foreground">{t("pages.dashboard.noActiveAdmissions")}</p>
                 </div>
               ) : (
                 <div className="rounded-md border overflow-x-auto">
@@ -325,22 +346,22 @@ export default function DashboardPage() {
                     <TableHeader>
                       <TableRow>
                         <SortableTableHead active={false} sortDir={"asc"} onSort={() => {}}>
-                          Patient
+                          {t("pages.dashboard.admitTablePatient")}
                         </SortableTableHead>
                         <SortableTableHead className="w-[7rem]" active={false} sortDir={"asc"} onSort={() => {}}>
-                          MRN
+                          {t("pages.dashboard.admitTableMrn")}
                         </SortableTableHead>
                         <SortableTableHead active={false} sortDir={"asc"} onSort={() => {}}>
-                          Clinician
+                          {t("pages.dashboard.admitTableClinician")}
                         </SortableTableHead>
                         <SortableTableHead className="w-[10rem]" active={false} sortDir={"asc"} onSort={() => {}}>
-                          Bed / Room
+                          {t("pages.dashboard.admitTableBed")}
                         </SortableTableHead>
                         <SortableTableHead className="w-[10rem]" active={false} sortDir={"asc"} onSort={() => {}}>
-                          Admitted
+                          {t("pages.dashboard.admitTableAdmitted")}
                         </SortableTableHead>
                         <SortableTableHead className="w-[9rem]" active={false} sortDir={"asc"} onSort={() => {}}>
-                          Status
+                          {t("pages.dashboard.admitTableStatus")}
                         </SortableTableHead>
                       </TableRow>
                     </TableHeader>
@@ -361,14 +382,14 @@ export default function DashboardPage() {
                             </TableCell>
                             <TableCell className="truncate max-w-0 whitespace-nowrap">{a.bedName}</TableCell>
                             <TableCell className="text-muted-foreground whitespace-nowrap">
-                              {formatInOrgTimeZone(a.admittedAt, "MMM d, yyyy", orgTz)}
+                              {formatInOrgTimeZone(a.admittedAt, "d MMM yyyy", orgTz, { locale: dateLocale })}
                             </TableCell>
                             <TableCell className="whitespace-nowrap">
                               <Badge
                                 variant="outline"
                                 className={`text-[10px] font-medium border ${ADMITTED_PATIENT_STATUS_BADGE_CLASS}`}
                               >
-                                {ADMITTED_PATIENT_STATUS_LABEL}
+                                {t("appointmentStatus.admitted")}
                               </Badge>
                             </TableCell>
                           </TableRow>
@@ -385,9 +406,11 @@ export default function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
             <div>
-              <h3 className="font-semibold">Overdue open visits</h3>
+              <h3 className="font-semibold">{t("pages.dashboard.overdueVisitsTitle")}</h3>
               <p className="text-xs text-muted-foreground">
-                {overdueLoading ? "Loading…" : `${activeEncounters.length} open visit(s)`}
+                {overdueLoading
+                  ? t("pages.dashboard.loading")
+                  : t("pages.dashboard.openVisitsCount", { count: activeEncounters.length })}
               </p>
             </div>
             <Activity className="w-4 h-4 text-muted-foreground" />
@@ -395,11 +418,11 @@ export default function DashboardPage() {
           <CardContent className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs">Start</Label>
+                <Label className="text-xs">{t("pages.dashboard.dateRangeStart")}</Label>
                 <Input type="date" value={overdueStart} onChange={(e) => setOverdueStart(e.target.value)} />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">End</Label>
+                <Label className="text-xs">{t("pages.dashboard.dateRangeEnd")}</Label>
                 <Input type="date" value={overdueEnd} onChange={(e) => setOverdueEnd(e.target.value)} />
               </div>
             </div>
@@ -409,7 +432,7 @@ export default function DashboardPage() {
             ) : activeEncounters.length === 0 ? (
               <div className="text-center py-8">
                 <Stethoscope className="w-8 h-8 mx-auto text-muted-foreground/40 mb-2" />
-                <p className="text-sm text-muted-foreground">No overdue open visits in this range</p>
+                <p className="text-sm text-muted-foreground">{t("pages.dashboard.noOverdueInRange")}</p>
               </div>
             ) : (
               <div className="rounded-md border overflow-x-auto">
@@ -421,21 +444,21 @@ export default function DashboardPage() {
                         sortDir={overdueSortDir}
                         onSort={() => toggleOverdueSort("patient")}
                       >
-                        Patient name
+                        {t("pages.dashboard.overdueColPatient")}
                       </SortableTableHead>
                       <SortableTableHead
                         active={overdueSortKey === "appointmentDate"}
                         sortDir={overdueSortDir}
                         onSort={() => toggleOverdueSort("appointmentDate")}
                       >
-                        Appointment date
+                        {t("pages.dashboard.overdueColAppointmentDate")}
                       </SortableTableHead>
                       <SortableTableHead
                         active={overdueSortKey === "clinician"}
                         sortDir={overdueSortDir}
                         onSort={() => toggleOverdueSort("clinician")}
                       >
-                        Clinician
+                        {t("pages.dashboard.overdueColClinician")}
                       </SortableTableHead>
                       <SortableTableHead
                         align="right"
@@ -443,7 +466,7 @@ export default function DashboardPage() {
                         sortDir={overdueSortDir}
                         onSort={() => toggleOverdueSort("type")}
                       >
-                        Type
+                        {t("pages.dashboard.overdueColType")}
                       </SortableTableHead>
                     </TableRow>
                   </TableHeader>
@@ -452,7 +475,7 @@ export default function DashboardPage() {
                       <TableRow key={row.encounter.id} data-testid={`encounter-item-${row.encounter.id}`}>
                         <TableCell className="font-medium">{row.patientName || "—"}</TableCell>
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                          {formatInOrgTimeZone(row.appointmentDate, "MMM d, yyyy HH:mm", orgTz)}
+                          {formatInOrgTimeZone(row.appointmentDate, "d MMM yyyy HH:mm", orgTz, { locale: dateLocale })}
                         </TableCell>
                         <TableCell className="text-sm">{row.clinicianName || "—"}</TableCell>
                         <TableCell className="text-right">

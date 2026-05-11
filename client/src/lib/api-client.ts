@@ -1,6 +1,10 @@
 /**
  * Central HTTP helpers for the EHR client: consistent auth headers and JSON handling.
  * Prefer these over ad-hoc `fetch("/api/...")` + manual Authorization strings.
+ *
+ * Offline: staff `fetch` is wrapped globally (see `offline-fetch-overlay.ts`) to mirror JSON GETs
+ * into encrypted IndexedDB, replay writes from a queue when online, and return optimistic responses
+ * when offline — this module stays unchanged so all callers share the same behavior.
  */
 import { readApiJsonOrThrow } from "@/lib/api-response";
 

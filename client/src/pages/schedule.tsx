@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { useQuery } from "@tanstack/react-query";
@@ -6,11 +6,11 @@ import { useLocation, Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { apiGetJson } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
-import {
-  ADMITTED_PATIENT_STATUS_BADGE_CLASS,
-  ADMITTED_PATIENT_STATUS_LABEL,
-} from "@/lib/appointment-status";
+import { ADMITTED_PATIENT_STATUS_BADGE_CLASS } from "@/lib/appointment-status";
 import { differenceInYears, format, startOfDay, endOfDay, addDays, subDays } from "date-fns";
+import { enUS } from "date-fns/locale/en-US";
+import { fr as frDateLocale } from "date-fns/locale/fr";
+import { es as esDateLocale } from "date-fns/locale/es";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,7 +50,6 @@ import {
   Bed,
 } from "lucide-react";
 import type { Appointment, Patient, User as UserType } from "@shared/schema";
-import { APPOINTMENT_REASON_FOR_VISIT_LABEL } from "@shared/appointment-labels";
 import { excludeAppointmentsWithActiveAdmission } from "@/lib/exclude-admitted-appointments";
 import { formatInOrgTimeZone, normalizeOrgTimeZone } from "@/lib/org-timezone";
 import { cn } from "@/lib/utils";
@@ -113,19 +112,42 @@ function formatGenderLabel(g: string): string {
   return g ? g.charAt(0).toUpperCase() + g.slice(1).toLowerCase() : "";
 }
 
-function patientDemographicLine(patient: Patient | undefined): string {
-  if (!patient) return "";
-  const years = differenceInYears(new Date(), new Date(patient.dateOfBirth));
-  const g = formatGenderLabel(patient.gender ?? "");
-  return `${g} • ${years} years`;
+function translatedTableColumnLabel(
+  t: (key: string, opts?: { defaultValue?: string }) => string,
+  i18nKeySuffix: string,
+  fallback: string,
+): string {
+  return t(`pages.schedule.col.${i18nKeySuffix}`, { defaultValue: fallback });
+}
+
+/** Admitted table uses a longer header for the reason column (`reason` id). */
+function admittedColumnI18nKey(columnId: string): string {
+  return columnId === "reason" ? "reasonForVisit" : columnId;
 }
 
 export default function SchedulePage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { user, token } = useAuth();
   const [, navigate] = useLocation();
   const orgTz = normalizeOrgTimeZone(user?.organization?.timeZone);
   const today = new Date();
+
+  const dateLocale = useMemo(() => {
+    const base = (i18n.language || "en").split("-")[0];
+    if (base === "fr") return frDateLocale;
+    if (base === "es") return esDateLocale;
+    return enUS;
+  }, [i18n.language]);
+
+  const formatPatientDemographicLine = useCallback(
+    (patient: Patient | undefined) => {
+      if (!patient) return "";
+      const years = differenceInYears(new Date(), new Date(patient.dateOfBirth));
+      const g = formatGenderLabel(patient.gender ?? "");
+      return t("pages.schedule.demographicsLine", { gender: g, years });
+    },
+    [t],
+  );
 
   useEffect(() => {
     if (user?.role === "reception") {
@@ -258,18 +280,23 @@ export default function SchedulePage() {
 
   const scheduleColumns = useMemo(() => {
     const cols = effectiveScheduleColsRes?.columns;
-    if (cols?.length) return cols;
+    if (cols?.length) {
+      return cols.map((c) => ({
+        ...c,
+        label: translatedTableColumnLabel(t, c.id, c.label),
+      }));
+    }
     return [
-      { id: "time", label: "Time" },
-      { id: "patient", label: "Patient name" },
-      { id: "mrn", label: "MRN" },
-      { id: "clinician", label: "Clinician" },
-      { id: "duration", label: "Duration" },
-      { id: "status", label: "Status" },
-      { id: "reason", label: "Reason" },
-      { id: "meds_admin", label: "Meds Admin" },
+      { id: "time", label: translatedTableColumnLabel(t, "time", "Time") },
+      { id: "patient", label: translatedTableColumnLabel(t, "patient", "Patient name") },
+      { id: "mrn", label: translatedTableColumnLabel(t, "mrn", "MRN") },
+      { id: "clinician", label: translatedTableColumnLabel(t, "clinician", "Clinician") },
+      { id: "duration", label: translatedTableColumnLabel(t, "duration", "Duration") },
+      { id: "status", label: translatedTableColumnLabel(t, "status", "Status") },
+      { id: "reason", label: translatedTableColumnLabel(t, "reason", "Reason") },
+      { id: "meds_admin", label: translatedTableColumnLabel(t, "meds_admin", "Meds Admin") },
     ];
-  }, [effectiveScheduleColsRes]);
+  }, [effectiveScheduleColsRes, t]);
 
   const scheduleSortableIds = useMemo(
     () => new Set(["time", "patient", "mrn", "clinician", "duration", "status", "reason"]),
@@ -311,18 +338,23 @@ export default function SchedulePage() {
 
   const admittedColumns = useMemo(() => {
     const cols = effectiveAdmittedColsRes?.columns;
-    if (cols?.length) return cols;
+    if (cols?.length) {
+      return cols.map((c) => ({
+        ...c,
+        label: translatedTableColumnLabel(t, admittedColumnI18nKey(c.id), c.label),
+      }));
+    }
     return [
-      { id: "patient", label: "Patient name" },
-      { id: "mrn", label: "MRN" },
-      { id: "clinician", label: "Clinician" },
-      { id: "status", label: "Status" },
-      { id: "reason", label: APPOINTMENT_REASON_FOR_VISIT_LABEL },
-      { id: "bed", label: "Bed / Room" },
-      { id: "admittedAt", label: "Admission Date" },
-      { id: "meds_admin", label: "Meds Admin" },
+      { id: "patient", label: translatedTableColumnLabel(t, "patient", "Patient name") },
+      { id: "mrn", label: translatedTableColumnLabel(t, "mrn", "MRN") },
+      { id: "clinician", label: translatedTableColumnLabel(t, "clinician", "Clinician") },
+      { id: "status", label: translatedTableColumnLabel(t, "status", "Status") },
+      { id: "reason", label: translatedTableColumnLabel(t, "reasonForVisit", "Reason for Visit") },
+      { id: "bed", label: translatedTableColumnLabel(t, "bed", "Bed / Room") },
+      { id: "admittedAt", label: translatedTableColumnLabel(t, "admittedAt", "Admission Date") },
+      { id: "meds_admin", label: translatedTableColumnLabel(t, "meds_admin", "Meds Admin") },
     ];
-  }, [effectiveAdmittedColsRes]);
+  }, [effectiveAdmittedColsRes, t]);
 
   const admittedSortableIds = useMemo(
     () => new Set(["patient", "mrn", "clinician", "status", "reason", "bed", "admittedAt"]),
@@ -402,7 +434,7 @@ export default function SchedulePage() {
   if (user?.role === "reception") {
     return (
       <div className="p-6 text-muted-foreground text-sm" data-testid="schedule-redirect-reception">
-        Redirecting to Appointments…
+        {t("pages.schedule.redirectingReception")}
       </div>
     );
   }
@@ -429,7 +461,7 @@ export default function SchedulePage() {
               onClick={jumpToday}
               data-testid="schedule-btn-today"
             >
-              Today
+              {t("pages.schedule.today")}
             </Button>
             <Button
               type="button"
@@ -437,7 +469,7 @@ export default function SchedulePage() {
               size="icon"
               className="h-9 w-9 rounded-lg shrink-0"
               onClick={() => setViewingDate((d) => subDays(d, 1))}
-              aria-label="Previous day"
+              aria-label={t("pages.schedule.ariaPrevDay")}
             >
               <ChevronLeft className="w-4 h-4" />
             </Button>
@@ -447,11 +479,11 @@ export default function SchedulePage() {
                   type="button"
                   variant="outline"
                   className="h-9 min-w-[220px] rounded-lg font-medium text-sm"
-                  aria-label="Open date picker"
+                  aria-label={t("pages.schedule.ariaOpenDatePicker")}
                 >
-                  {format(viewingDate, "EEEE, MMM d, yyyy")}
+                  {format(viewingDate, "EEEE, d MMMM yyyy", { locale: dateLocale })}
                   {isToday && (
-                    <span className="text-muted-foreground font-normal ml-1">(today)</span>
+                    <span className="text-muted-foreground font-normal ml-1">{t("pages.schedule.dateTodaySuffix")}</span>
                   )}
                 </Button>
               </PopoverTrigger>
@@ -474,7 +506,7 @@ export default function SchedulePage() {
               size="icon"
               className="h-9 w-9 rounded-lg shrink-0"
               onClick={() => setViewingDate((d) => addDays(d, 1))}
-              aria-label="Next day"
+              aria-label={t("pages.schedule.ariaNextDay")}
             >
               <ChevronRight className="w-4 h-4" />
             </Button>
@@ -484,23 +516,23 @@ export default function SchedulePage() {
             <div className="relative flex-1 min-w-[160px] max-w-xs">
               <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
               <Input
-                placeholder="Search patient…"
+                placeholder={t("pages.schedule.searchPlaceholder")}
                 value={appointmentSearch}
                 onChange={(e) => setAppointmentSearch(e.target.value)}
                 className="h-9 pl-9 rounded-lg border-border bg-white"
-                aria-label="Search appointments"
+                aria-label={t("pages.schedule.searchAria")}
                 data-testid="schedule-appt-search"
               />
             </div>
             <Popover open={statusFilterOpen} onOpenChange={setStatusFilterOpen}>
               <PopoverTrigger asChild>
                 <Button type="button" variant="outline" size="sm" className="h-9 rounded-lg gap-1.5 shrink-0">
-                  <span>Filter</span>
+                  <span>{t("pages.schedule.filter")}</span>
                   <ChevronDown className="h-4 w-4 opacity-70" />
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-56 p-3" align="end">
-                <p className="text-xs font-medium text-muted-foreground mb-2">Status</p>
+                <p className="text-xs font-medium text-muted-foreground mb-2">{t("pages.schedule.statusFilterHeading")}</p>
                 <div className="space-y-2 max-h-[220px] overflow-y-auto">
                   {APPOINTMENT_FILTER_STATUSES.map((s) => (
                     <label key={s} className="flex items-center gap-2 text-sm cursor-pointer">
@@ -508,16 +540,16 @@ export default function SchedulePage() {
                         checked={allowedStatuses.has(s)}
                         onCheckedChange={() => toggleStatusFilter(s)}
                       />
-                      <span className="capitalize">{s.replace(/_/g, " ")}</span>
+                      <span>{t(`appointmentStatus.${s}`)}</span>
                     </label>
                   ))}
                 </div>
                 <div className="flex gap-2 mt-3 pt-2 border-t border-border">
                   <Button type="button" variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={selectAllStatuses}>
-                    All
+                    {t("pages.schedule.filterAll")}
                   </Button>
                   <Button type="button" variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={clearAllStatuses}>
-                    Clear
+                    {t("pages.schedule.filterClear")}
                   </Button>
                 </div>
               </PopoverContent>
@@ -529,7 +561,7 @@ export default function SchedulePage() {
               data-testid="schedule-new-appointment"
             >
               <Plus className="w-4 h-4 mr-1.5" />
-              New Appointment
+              {t("pages.schedule.newAppointment")}
             </Button>
           </div>
         </div>
@@ -542,13 +574,11 @@ export default function SchedulePage() {
               <CardHeader className="space-y-0 border-b bg-white px-4 py-4 sm:px-5">
                 <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-foreground">Same Day Visits</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Scheduled visits for the day you are viewing (excludes overnight admissions below).
-                    </p>
+                    <p className="text-sm font-semibold text-foreground">{t("pages.schedule.sameDayTitle")}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{t("pages.schedule.sameDaySubtitle")}</p>
                   </div>
                   <Badge variant="secondary" className="text-[10px] shrink-0 rounded-full px-3 py-1 w-fit">
-                    {filteredAppointments.length} appointment{filteredAppointments.length !== 1 ? "s" : ""}
+                    {t("pages.schedule.sameDayBadge", { count: filteredAppointments.length })}
                   </Badge>
                 </div>
               </CardHeader>
@@ -573,7 +603,7 @@ export default function SchedulePage() {
                     {scheduleColumns.filter((c) => scheduleSortableIds.has(c.id as ScheduleSortKey)).length ? (
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 pb-1">
                         <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mr-1">
-                          Sort by
+                          {t("pages.schedule.sortBy")}
                         </span>
                         {scheduleColumns
                           .filter((c) => scheduleSortableIds.has(c.id as ScheduleSortKey))
@@ -602,15 +632,15 @@ export default function SchedulePage() {
                     {displayAppointments.length > 0 && filteredAppointments.length === 0 ? (
                       <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-white py-16 text-center px-4">
                         <Clock className="w-10 h-10 text-muted-foreground/35 mb-2" />
-                        <p className="text-sm font-medium text-muted-foreground">No appointments match your filters.</p>
+                        <p className="text-sm font-medium text-muted-foreground">{t("pages.schedule.noAppointmentsFiltered")}</p>
                         <Button type="button" variant="outline" size="sm" className="mt-3" onClick={selectAllStatuses}>
-                          Reset filters
+                          {t("pages.schedule.resetFilters")}
                         </Button>
                       </div>
                     ) : filteredAppointments.length === 0 ? (
                       <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-white py-16 text-center px-4">
                         <Clock className="w-10 h-10 text-muted-foreground/35 mb-2" />
-                        <p className="text-sm font-medium text-muted-foreground">No appointments on this day</p>
+                        <p className="text-sm font-medium text-muted-foreground">{t("pages.schedule.noAppointmentsDay")}</p>
                       </div>
                     ) : (
                       <ul className="space-y-3 list-none">
@@ -630,7 +660,9 @@ export default function SchedulePage() {
                                       {formatInOrgTimeZone(apt.scheduledDate, "HH:mm", orgTz)}
                                     </p>
                                     {colIds.has("duration") && (
-                                      <p className="text-[10px] text-muted-foreground mt-0.5">{apt.duration ?? 30}m</p>
+                                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                                        {t("pages.schedule.durationMinutes", { minutes: apt.duration ?? 30 })}
+                                      </p>
                                     )}
                                   </div>
                                 )}
@@ -652,9 +684,12 @@ export default function SchedulePage() {
                                           </a>
                                         </Link>
                                         <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                                          {patientDemographicLine(patient)}
+                                          {formatPatientDemographicLine(patient)}
                                           {colIds.has("mrn") && patient?.mrn ? (
-                                            <span className="text-muted-foreground/80">{` • MRN ${patient.mrn}`}</span>
+                                            <span className="text-muted-foreground/80">
+                                              {" "}
+                                              • {t("pages.schedule.mrnInline", { mrn: patient.mrn })}
+                                            </span>
                                           ) : null}
                                         </p>
                                       </div>
@@ -667,7 +702,7 @@ export default function SchedulePage() {
                                         {colIds.has("reason") && (
                                           <div className="min-w-0 flex-1">
                                             <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
-                                              Reason
+                                              {t("pages.schedule.reasonFieldLabel")}
                                             </p>
                                             <p className="text-sm truncate" title={apt.reason ?? ""}>
                                               {apt.reason ?? "—"}
@@ -684,7 +719,7 @@ export default function SchedulePage() {
                                             </div>
                                             <div className="min-w-0">
                                               <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
-                                                Provider
+                                                {t("pages.schedule.providerFieldLabel")}
                                               </p>
                                               <p className="text-sm font-medium truncate">
                                                 {clinician?.fullName ? `${clinician.fullName}` : "—"}
@@ -700,7 +735,7 @@ export default function SchedulePage() {
                                         <ScheduleAppointmentStatusBadge status={apt.status} />
                                       )}
                                       {colIds.has("meds_admin") && (
-                                        <div className="text-xs text-muted-foreground min-w-[4rem]" title="Meds administered">
+                                        <div className="text-xs text-muted-foreground min-w-[4rem]" title={t("pages.schedule.medsAdminTooltip")}>
                                           {medCount > 0 ? (
                                             <span className="inline-flex items-center gap-1 font-medium text-foreground">
                                               <Pill className="h-3.5 w-3.5 text-[#0E3B2E]" />
@@ -718,7 +753,7 @@ export default function SchedulePage() {
                                             variant="ghost"
                                             size="icon"
                                             className="h-8 w-8 shrink-0 text-muted-foreground"
-                                            aria-label="Actions"
+                                            aria-label={t("pages.schedule.actionsAria")}
                                           >
                                             <MoreHorizontal className="h-4 w-4" />
                                           </Button>
@@ -730,7 +765,7 @@ export default function SchedulePage() {
                                               navigate(href);
                                             }}
                                           >
-                                            Open patient chart
+                                            {t("pages.schedule.openPatientChart")}
                                           </DropdownMenuItem>
                                           <DropdownMenuSeparator />
                                           <DropdownMenuItem
@@ -739,7 +774,7 @@ export default function SchedulePage() {
                                               navigate("/appointments");
                                             }}
                                           >
-                                            Schedule appointment
+                                            {t("pages.schedule.scheduleAppointment")}
                                           </DropdownMenuItem>
                                         </DropdownMenuContent>
                                       </DropdownMenu>
@@ -764,8 +799,8 @@ export default function SchedulePage() {
               <CardHeader className="space-y-0 border-b border-border bg-white px-4 py-4 sm:px-5">
                 <div className="flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0 text-left">
-                    <p className="text-sm font-semibold text-foreground">Admitted Patients</p>
-                    <p className="text-xs text-muted-foreground">Overnight visits remain here until discharged.</p>
+                    <p className="text-sm font-semibold text-foreground">{t("pages.schedule.admittedTitle")}</p>
+                    <p className="text-xs text-muted-foreground">{t("pages.schedule.admittedSubtitle")}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <Button
@@ -776,10 +811,10 @@ export default function SchedulePage() {
                       onClick={() => navigate("/admissions/recently-discharged")}
                       data-testid="button-recently-discharged"
                     >
-                      Recently discharged
+                      {t("pages.schedule.recentlyDischarged")}
                     </Button>
                     <Badge variant="secondary" className="text-[10px] shrink-0 rounded-full px-3 py-1">
-                      {admissions.length} Admissions
+                      {t("pages.schedule.admissionsBadge", { count: admissions.length })}
                     </Badge>
                     <Button
                       type="button"
@@ -789,7 +824,7 @@ export default function SchedulePage() {
                       data-testid="schedule-admit-patient"
                     >
                       <Bed className="h-4 w-4 mr-1.5 shrink-0" />
-                      Admit Patient
+                      {t("pages.schedule.admitPatient")}
                     </Button>
                   </div>
                 </div>
@@ -803,10 +838,8 @@ export default function SchedulePage() {
                 ) : admissions.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-border bg-white px-8 py-16 text-center shadow-sm">
                     <Bed className="w-11 h-11 mx-auto text-muted-foreground/35 mb-3" />
-                    <p className="text-sm font-medium text-muted-foreground">No admitted patients</p>
-                    <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">
-                      Admitted patients will appear here. Overnight walk-ins are managed from appointments.
-                    </p>
+                    <p className="text-sm font-medium text-muted-foreground">{t("pages.schedule.noAdmittedTitle")}</p>
+                    <p className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{t("pages.schedule.noAdmittedHint")}</p>
                   </div>
                 ) : (
                   <div className="overflow-x-auto rounded-xl border border-border bg-white shadow-sm">
@@ -893,7 +926,7 @@ export default function SchedulePage() {
                                           variant="outline"
                                           className={`text-[10px] font-medium border ${ADMITTED_PATIENT_STATUS_BADGE_CLASS}`}
                                         >
-                                          {ADMITTED_PATIENT_STATUS_LABEL}
+                                          {t("appointmentStatus.admitted")}
                                         </Badge>
                                       </TableCell>
                                     );
@@ -912,7 +945,7 @@ export default function SchedulePage() {
                                   case "admittedAt":
                                     return (
                                       <TableCell key={c.id} className="text-muted-foreground whitespace-nowrap">
-                                        {formatInOrgTimeZone(a.admittedAt, "MMMM d, yyyy", orgTz)}
+                                        {formatInOrgTimeZone(a.admittedAt, "MMMM d, yyyy", orgTz, { locale: dateLocale })}
                                       </TableCell>
                                     );
                                   case "meds_admin": {
